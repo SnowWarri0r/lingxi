@@ -53,3 +53,46 @@ class TestPromptBuilder:
         builder = PromptBuilder(sample_persona)
         prompt = builder.build_system_prompt(current_mood="excited")
         assert "excited" in prompt
+
+
+from lingxi.persona.models import PersonaConfig, Identity, StyleConfig, SamplingConfig
+
+
+class TestStyleConfig:
+    def test_defaults(self):
+        cfg = StyleConfig()
+        assert cfg.speech_max_chars == 40
+        assert cfg.prefill_openers == ["嗯", "欸", "哦", ""]
+        assert cfg.blacklist_phrases == []
+
+    def test_custom_values(self):
+        cfg = StyleConfig(
+            speech_max_chars=80,
+            prefill_openers=["哈"],
+            blacklist_phrases=["据说"],
+        )
+        assert cfg.speech_max_chars == 80
+        assert cfg.prefill_openers == ["哈"]
+
+
+class TestSamplingConfig:
+    def test_defaults(self):
+        cfg = SamplingConfig()
+        assert cfg.temperature == 1.0
+        assert cfg.top_p == 0.95
+
+    def test_bounds(self):
+        # temperature should be clamped to non-negative
+        import pytest
+        with pytest.raises(Exception):
+            SamplingConfig(temperature=-0.1)
+
+
+class TestPersonaConfigNewFields:
+    def test_style_and_sampling_attached(self):
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+        )
+        assert persona.style.speech_max_chars == 40
+        assert persona.sampling.temperature == 1.0

@@ -167,6 +167,27 @@ class EmotionState(BaseModel):
         return "".join(parts)
 
 
+class StyleConfig(BaseModel):
+    """Output style controls for the single-call combo."""
+
+    speech_max_chars: int = Field(default=40, ge=1, le=500)
+    prefill_openers: list[str] = Field(
+        default_factory=lambda: ["嗯", "欸", "哦", ""],
+        description="Random-pick prefill for assistant message; empty string = no prefill.",
+    )
+    blacklist_phrases: list[str] = Field(
+        default_factory=list,
+        description="Extra phrases to ban, on top of the code-default list.",
+    )
+
+
+class SamplingConfig(BaseModel):
+    """LLM sampling parameters."""
+
+    temperature: float = Field(default=1.0, ge=0.0, le=2.0)
+    top_p: float = Field(default=0.95, ge=0.0, le=1.0)
+
+
 class GoalDefinition(BaseModel):
     description: str
     priority: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -195,3 +216,5 @@ class PersonaConfig(BaseModel):
     emotional_baseline: EmotionalBaseline = Field(default_factory=EmotionalBaseline)
     goals: list[GoalDefinition] = Field(default_factory=list)
     relationship: Relationship = Field(default_factory=Relationship)
+    style: StyleConfig = Field(default_factory=StyleConfig)
+    sampling: SamplingConfig = Field(default_factory=SamplingConfig)
