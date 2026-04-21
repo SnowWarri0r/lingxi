@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from lingxi.persona.loader import load_persona
-from lingxi.persona.models import PersonaConfig, Identity, Trait
+from lingxi.persona.models import PersonaConfig, Identity, Trait, StyleConfig, SamplingConfig
 from lingxi.persona.prompt_builder import PromptBuilder
 
 
@@ -55,9 +55,6 @@ class TestPromptBuilder:
         assert "excited" in prompt
 
 
-from lingxi.persona.models import PersonaConfig, Identity, StyleConfig, SamplingConfig
-
-
 class TestStyleConfig:
     def test_defaults(self):
         cfg = StyleConfig()
@@ -74,6 +71,12 @@ class TestStyleConfig:
         assert cfg.speech_max_chars == 80
         assert cfg.prefill_openers == ["哈"]
 
+    def test_speech_max_chars_bounds(self):
+        with pytest.raises(Exception):
+            StyleConfig(speech_max_chars=0)
+        with pytest.raises(Exception):
+            StyleConfig(speech_max_chars=501)
+
 
 class TestSamplingConfig:
     def test_defaults(self):
@@ -83,9 +86,14 @@ class TestSamplingConfig:
 
     def test_bounds(self):
         # temperature should be clamped to non-negative
-        import pytest
         with pytest.raises(Exception):
             SamplingConfig(temperature=-0.1)
+
+    def test_top_p_bounds(self):
+        with pytest.raises(Exception):
+            SamplingConfig(top_p=-0.01)
+        with pytest.raises(Exception):
+            SamplingConfig(top_p=1.1)
 
 
 class TestPersonaConfigNewFields:
