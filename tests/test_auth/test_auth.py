@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from persona_agent.auth.manager import AuthManager, AuthError
-from persona_agent.auth.models import (
+from lingxi.auth.manager import AuthManager, AuthError
+from lingxi.auth.models import (
     AuthConfig,
     AuthMethod,
     AuthProfile,
@@ -20,9 +20,9 @@ from persona_agent.auth.models import (
     SecretRefSource,
     TokenInfo,
 )
-from persona_agent.auth.profile_store import ProfileStore
-from persona_agent.auth.external_sync import ExternalCredentialSync
-from persona_agent.auth.token_store import TokenStore
+from lingxi.auth.profile_store import ProfileStore
+from lingxi.auth.external_sync import ExternalCredentialSync
+from lingxi.auth.token_store import TokenStore
 
 
 # ---------------------------------------------------------------------------

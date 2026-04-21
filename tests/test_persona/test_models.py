@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from persona_agent.persona.loader import load_persona
-from persona_agent.persona.models import PersonaConfig, Identity, Trait
-from persona_agent.persona.prompt_builder import PromptBuilder
+from lingxi.persona.loader import load_persona
+from lingxi.persona.models import PersonaConfig, Identity, Trait
+from lingxi.persona.prompt_builder import PromptBuilder
 
 
 class TestPersonaModels:

@@ -2,9 +2,9 @@
 
 import pytest
 
-from persona_agent.providers.registry import ProviderRegistry
-from persona_agent.providers.claude import ClaudeProvider
-from persona_agent.providers.openai_provider import OpenAIProvider
+from lingxi.providers.registry import ProviderRegistry
+from lingxi.providers.claude import ClaudeProvider
+from lingxi.providers.openai_provider import OpenAIProvider
 
 
 class TestProviderRegistry:

@@ -2,8 +2,8 @@
 
 import pytest
 
-from persona_agent.planning.models import Action, ActionType, Goal, GoalStatus, Plan, PlanStatus
-from persona_agent.planning.scheduler import Scheduler
+from lingxi.planning.models import Action, ActionType, Goal, GoalStatus, Plan, PlanStatus
+from lingxi.planning.scheduler import Scheduler
 
 
 class TestPlanModels:

@@ -1,6 +1,8 @@
-# persona-agent
+# 灵犀 / Lingxi
 
 一个可定制人设的虚拟人格代理。目标是做出**真实对话体验** —— 不是一个应答机器人，而是一个有自己生活、记忆、情绪和主观理解的"人"。
+
+> 名字取自"心有灵犀"——无需言明，自然相通。
 
 ## 特性
 
@@ -51,19 +53,19 @@ cat config/personas/example_persona.yaml
 
 # 4. 启动
 # CLI 交互
-persona-agent
+lingxi
 
 # Web API
-persona-agent-server
+lingxi-server
 
 # 飞书机器人（需要 FEISHU_APP_ID / FEISHU_APP_SECRET）
-persona-agent-feishu
+lingxi-feishu
 ```
 
 ## 架构
 
 ```
-src/persona_agent/
+src/lingxi/
 ├── persona/         # 人设定义 + Pydantic 模型 + prompt builder
 ├── memory/          # 三层记忆 (short/long/episodic) + ChromaDB + 实体图
 ├── inner_life/      # LifeSimulator + Agenda + SubjectiveLayer（内在生命）
@@ -78,4 +80,6 @@ src/persona_agent/
 
 ## 许可
 
-见 LICENSE
+[AGPL-3.0-or-later](LICENSE)
+
+简单说：你可以自由使用、修改。如果把 Lingxi（包括修改版）作为网络服务提供给他人（SaaS/托管），也必须以 AGPL 开源你的整个服务端源码。商业用途如需闭源授权请联系作者。
