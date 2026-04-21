@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "persona-agent"
+version = "0.1.0"
+description = "Virtual persona agent with memory, planning, and customizable personality"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "numpy>=1.26.0",
+    "python-dotenv>=1.0.0",
+    "structlog>=24.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+vector-db = [
+    "chromadb>=0.5.0",
+]
+api = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.32.0",
+    "websockets>=13.0",
+]
+feishu = [
+    "lark-oapi>=1.3.0",
+]
+embeddings = [
+    "sentence-transformers>=3.0.0",
+]
+
+[project.scripts]
+persona-agent = "persona_agent.app:main"
+persona-agent-server = "persona_agent.web.server:main"
+persona-agent-feishu = "persona_agent.channels.feishu_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/persona_agent"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100

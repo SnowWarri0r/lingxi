@@ -1,0 +1,89 @@
+llm:
+  provider: "claude"
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  temperature: 0.7
+  # 认证方式: oauth_pkce (浏览器登录)、oauth_device_flow (设备码)、api_key (传统方式)
+  auth_method: "oauth_pkce"
+
+# OAuth 提供商配置
+# OpenAI 已内置，无需配置。Anthropic 暂未开放第三方 OAuth。
+# 你可以在这里添加自定义提供商:
+auth:
+  providers:
+    # 示例: 自定义 OAuth 提供商
+    # my_provider:
+    #   client_id: "your-app-client-id"
+    #   auth_url: "https://auth.example.com/authorize"
+    #   token_url: "https://auth.example.com/token"
+    #   device_auth_url: "https://auth.example.com/device/code"  # 可选，用于 --device-auth
+    #   scopes: ["openid", "offline_access"]
+    #   callback_port: 1455  # PKCE 本地回调端口
+
+    # Anthropic (需要注册 OAuth 应用后填入):
+    # anthropic:
+    #   client_id: "your-anthropic-oauth-client-id"
+    #   auth_url: "https://console.anthropic.com/oauth/authorize"
+    #   token_url: "https://console.anthropic.com/oauth/token"
+    #   scopes: ["user:read", "messages:write"]
+
+# 嵌入向量（语义记忆检索）
+# provider:
+#   "doubao"  - 火山方舟豆包 (推荐, 2048维, 需要 ARK_API_KEY)
+#   "local"   - 本地模型 (sentence-transformers, 无需API, 需要 pip install persona-agent[embeddings])
+#   "openai"  - OpenAI text-embedding (需要 OPENAI_API_KEY)
+#   "none"    - 关闭语义检索，使用关键词匹配
+embedding:
+  provider: "doubao"
+  # model 填你在火山方舟控制台创建的接入点 ID (ep-xxxxx) 或直接用模型名
+  model: "doubao-embedding-large-text-240915"
+  # base_url: "https://ark.cn-beijing.volces.com/api/v3"
+  # api_key 优先从环境变量 ARK_API_KEY 读取
+
+memory:
+  short_term:
+    max_turns: 30
+  long_term:
+    backend: "chroma"   # "chroma" (向量数据库，HNSW索引) 或 "json" (内存+JSON)
+    max_entries: 100000
+    retrieval_top_k: 10
+    importance_threshold: 0.3
+    decay_rate: 0.01
+  episodic:
+    max_episodes: 500
+    summary_max_tokens: 500
+  consolidation:
+    enabled: true
+    min_turns_before_consolidation: 5
+
+planning:
+  enabled: true
+  max_active_goals: 5
+  proactive_check_interval: 3  # check every N turns
+
+# 主动消息：在用户沉默一段时间后，角色主动发起对话
+proactive:
+  enabled: true
+  check_interval_minutes: 5     # 后台检查频率
+  silence_thresholds:           # 沉默多久后可以主动（按关系等级，单位小时）
+    1: 6     # 初识：6小时（测试期调低）
+    2: 4     # 熟悉：4小时
+    3: 2     # 信任：2小时
+    4: 1     # 亲密：1小时
+  cooldown_hours: 3             # 两次主动消息之间的最小间隔
+  quiet_hours_start: 23         # 静默时段开始（23点）
+  quiet_hours_end: 8            # 静默时段结束（8点）
+
+conversation:
+  max_context_tokens: 8000
+  persona_token_budget: 2000
+  memory_token_budget: 3000
+  history_token_budget: 3000
+
+extensions:
+  tts:
+    enabled: false
+  stt:
+    enabled: false
+  avatar:
+    enabled: false
