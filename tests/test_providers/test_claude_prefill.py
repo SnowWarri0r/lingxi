@@ -16,6 +16,18 @@ def test_body_contains_top_p():
     assert body["temperature"] == 0.9
 
 
+def test_body_omits_top_p_when_none():
+    """When top_p is None (default), body should NOT contain the key — preserves API hygiene."""
+    provider = ClaudeProvider(api_key="sk-ant-api-test", model="claude-sonnet-4-20250514")
+    body = provider._build_body(
+        messages=[{"role": "user", "content": "hi"}],
+        system=None,
+        max_tokens=100,
+        temperature=0.9,
+    )
+    assert "top_p" not in body
+
+
 def test_prefill_appends_assistant_message():
     provider = ClaudeProvider(api_key="sk-ant-api-test", model="claude-sonnet-4-20250514")
     messages = [{"role": "user", "content": "hi"}]
