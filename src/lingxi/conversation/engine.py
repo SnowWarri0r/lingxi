@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import random
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from typing import AsyncIterator
@@ -10,6 +12,12 @@ from typing import AsyncIterator
 from lingxi.conversation.adapters import TextAdapter
 from lingxi.conversation.context import ContextAssembler
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
+from lingxi.conversation.prompt_assembly import (
+    build_style_preamble,
+    pick_prefill,
+    render_fewshots_as_messages,
+)
+from lingxi.fewshot.models import FewShotSample
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.persona.prompt_builder import PromptBuilder
@@ -225,7 +233,76 @@ class ConversationEngine:
             else:
                 messages.append({"role": "user", "content": blocks})
 
-        return system_prompt, messages
+        # --- Single-call combo (Phase 0) ---
+        # Prepend hardcoded seed few-shots before history.
+        # Task 16 will swap these out for retriever results.
+        seed_fewshots = self._phase0_seed_fewshots()
+        few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
+
+        # Attach style preamble to the last user message
+        style_preamble = build_style_preamble(self.persona.style)
+        self._apply_style_preamble(messages, style_preamble)
+
+        # Final message list = few-shot pairs + history (which already includes the user turn)
+        final_messages = few_shot_msgs + messages
+        return system_prompt, final_messages
+
+    def _phase0_seed_fewshots(self) -> list[FewShotSample]:
+        """Hardcoded baseline seeds before Task 16's retriever lands.
+
+        Covers three common AI-tone failure modes: over-eager agreement,
+        cliché punchlines, and help-desk sign-offs.
+        """
+        return [
+            FewShotSample(
+                id="p0-1",
+                inner_thought="",
+                corrected_speech="哦？啥机械？",
+                context_summary="用户提到他朋友的朋友也在做工业机械",
+                tags=["好奇", "追问"],
+                source="seed",
+            ),
+            FewShotSample(
+                id="p0-2",
+                inner_thought="",
+                corrected_speech="也是，折腾完还要复盘 累。",
+                context_summary="用户说刚开完一个长会",
+                tags=["共鸣", "吐槽"],
+                source="seed",
+            ),
+            FewShotSample(
+                id="p0-3",
+                inner_thought="",
+                corrected_speech="嗯 早点睡。",
+                context_summary="用户说困了要睡了",
+                tags=["日常", "短"],
+                source="seed",
+            ),
+        ]
+
+    def _apply_style_preamble(self, messages: list[dict], preamble: str) -> None:
+        """Prepend the preamble to the last user message's text.
+
+        Handles both string content and multimodal block lists.
+        """
+        if not messages:
+            return
+        for msg in reversed(messages):
+            if msg.get("role") != "user":
+                continue
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                msg["content"] = preamble + content
+                return
+            if isinstance(content, list):
+                # Find last text block; prepend preamble to it
+                for block in reversed(content):
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        block["text"] = preamble + block.get("text", "")
+                        return
+                # No text block? Add one
+                content.append({"type": "text", "text": preamble})
+                return
 
     def _persist_state(self, channel: str | None, recipient_id: str | None) -> None:
         """Save current emotion state back to the InteractionRecord.
@@ -307,12 +384,18 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
+        prefill = pick_prefill(self.persona.style)
+
         result = await self.llm.complete(
             messages=messages,
             system=system_prompt,
+            temperature=self.persona.sampling.temperature,
+            top_p=self.persona.sampling.top_p,
+            prefill=prefill,
         )
 
         output = self._process_response(result.content)
+        output.turn_id = str(uuid.uuid4())
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
@@ -330,16 +413,22 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
+        prefill = pick_prefill(self.persona.style)
+
         full_response = ""
         async for chunk in self.llm.complete_stream(
             messages=messages,
             system=system_prompt,
+            temperature=self.persona.sampling.temperature,
+            top_p=self.persona.sampling.top_p,
+            prefill=prefill,
         ):
             if chunk.content:
                 full_response += chunk.content
                 yield chunk.content
 
         output = self._process_response(full_response)
+        output.turn_id = str(uuid.uuid4())
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
@@ -371,6 +460,8 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
+        prefill = pick_prefill(self.persona.style)
+
         full_response = ""
         delimiter_seen = False
         # Carry a small tail between chunks so we can detect the delimiter
@@ -381,6 +472,9 @@ class ConversationEngine:
         async for chunk in self.llm.complete_stream(
             messages=messages,
             system=system_prompt,
+            temperature=self.persona.sampling.temperature,
+            top_p=self.persona.sampling.top_p,
+            prefill=prefill,
         ):
             if not chunk.content:
                 continue
@@ -416,6 +510,7 @@ class ConversationEngine:
 
         # Parse full response, apply state changes
         output = self._process_response(full_response)
+        output.turn_id = str(uuid.uuid4())
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
