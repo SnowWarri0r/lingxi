@@ -139,12 +139,20 @@ class ClaudeProvider(LLMProvider):
         system: str | None,
         max_tokens: int,
         temperature: float,
+        top_p: float = 1.0,
+        prefill: str = "",
     ) -> dict:
+        # If prefill is set, append as trailing assistant message (Anthropic pattern)
+        outgoing_messages = list(messages)
+        if prefill:
+            outgoing_messages.append({"role": "assistant", "content": prefill})
+
         body: dict = {
             "model": self.model,
-            "messages": messages,
+            "messages": outgoing_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
+            "top_p": top_p,
         }
 
         # Build system with prompt caching:
@@ -184,9 +192,11 @@ class ClaudeProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        top_p: float = 1.0,
+        prefill: str = "",
         **kwargs,
     ) -> CompletionResult:
-        body = self._build_body(messages, system, max_tokens, temperature)
+        body = self._build_body(messages, system, max_tokens, temperature, top_p, prefill)
         url = f"{API_BASE}?beta=true" if self._is_oauth else API_BASE
 
         response = await self._request_with_auto_refresh(url, body)
@@ -197,6 +207,10 @@ class ClaudeProvider(LLMProvider):
         for block in data.get("content", []):
             if block.get("type") == "text":
                 content += block.get("text", "")
+
+        # Prepend prefill to content so caller sees full text
+        if prefill:
+            content = prefill + content
 
         return CompletionResult(
             content=content,
@@ -278,11 +292,17 @@ class ClaudeProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        top_p: float = 1.0,
+        prefill: str = "",
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
-        body = self._build_body(messages, system, max_tokens, temperature)
+        body = self._build_body(messages, system, max_tokens, temperature, top_p, prefill)
         body["stream"] = True
         url = f"{API_BASE}?beta=true" if self._is_oauth else API_BASE
+
+        # Emit prefill as the first chunk so downstream sees complete text
+        if prefill:
+            yield StreamChunk(content=prefill)
 
         # Pre-flight: check token validity (refresh on 401 before streaming)
         client = self._get_http_client()
