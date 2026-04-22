@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel as _BaseModel
 
 from lingxi.web.models import (
     ChatRequest,
@@ -124,6 +125,55 @@ async def end_session(
         facts_stored=result.get("facts_stored", 0),
         episode_id=result.get("episode_id"),
     )
+
+
+# --- Annotation endpoints ---
+
+
+class AnnotateRequest(_BaseModel):
+    kind: str  # "positive" | "negative"
+    correction: str | None = None
+
+
+@router.post("/turns/{turn_id}/annotate")
+async def annotate_turn(turn_id: str, body: AnnotateRequest, request: Request):
+    e = request.app.state.engine
+    if e is None or getattr(e, "annotation_store", None) is None or getattr(e, "fewshot_store", None) is None:
+        raise HTTPException(503, "annotation pool not enabled")
+
+    from lingxi.fewshot.collector import AnnotationCollector
+    from lingxi.fewshot.summarizer import AnnotationSummarizer
+
+    collector = AnnotationCollector(
+        annotation_store=e.annotation_store,
+        fewshot_store=e.fewshot_store,
+        embedder=e.llm,
+        summarizer=AnnotationSummarizer(e.llm),
+    )
+    try:
+        if body.kind == "positive":
+            await collector.record_positive(turn_id)
+        elif body.kind == "negative":
+            if body.correction:
+                await collector.record_correction(turn_id, body.correction)
+            else:
+                await collector.record_negative(turn_id)
+        else:
+            raise HTTPException(400, f"unknown kind: {body.kind}")
+    except KeyError:
+        raise HTTPException(404, f"turn {turn_id} not found")
+    return {"ok": True, "turn_id": turn_id}
+
+
+@router.get("/turns/{turn_id}/inner_thought")
+async def get_inner_thought(turn_id: str, request: Request):
+    e = request.app.state.engine
+    if e is None or getattr(e, "annotation_store", None) is None:
+        raise HTTPException(503, "annotation store not enabled")
+    turn = await e.annotation_store.get_turn(turn_id)
+    if turn is None:
+        raise HTTPException(404, f"turn {turn_id} not found")
+    return {"turn_id": turn_id, "inner_thought": turn.inner_thought}
 
 
 # --- WebSocket ---

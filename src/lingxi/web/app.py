@@ -12,8 +12,13 @@ from lingxi.web.routes import router
 from lingxi.web.session import SessionManager
 
 
-def create_app() -> FastAPI:
-    """Create and configure the FastAPI application."""
+def create_app(engine=None) -> FastAPI:
+    """Create and configure the FastAPI application.
+
+    Args:
+        engine: Optional engine instance to store on app.state.engine.
+                When provided, annotation endpoints become functional.
+    """
     app = FastAPI(
         title="Persona Agent API",
         version="0.1.0",
@@ -34,6 +39,9 @@ def create_app() -> FastAPI:
     timeout = int(os.environ.get("SESSION_TIMEOUT", "1800"))
     session_manager = SessionManager(session_timeout=timeout)
     app.state.session_manager = session_manager
+
+    # Optional engine (for annotation endpoints)
+    app.state.engine = engine
 
     app.include_router(router)
 
