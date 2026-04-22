@@ -75,3 +75,43 @@ async def test_engine_uses_retriever_when_available(tmp_path: Path):
     flat = str(llm.last_messages)
     assert "UNIQUE-SCENE" in flat
     assert "UNIQUE-SPEECH" in flat
+
+
+async def test_seeds_always_present_when_retriever_populated(tmp_path: Path):
+    """Spec §6.3: seeds must appear as baseline even when retriever has many samples.
+
+    Populates the store with 10 high-similarity user_correction samples so that
+    a naive k=6 retrieve-only approach would displace seeds.  The fixed engine
+    must always inject seeds first, then retrieved samples.
+    """
+    store = FewShotStore(data_dir=tmp_path, embedding_dim=16)
+    await store.init()
+
+    # Add 10 user_correction samples all very similar to each other
+    for i in range(10):
+        s = FewShotSample(
+            id=f"user-correction-{i}",
+            inner_thought=f"USER-INNER-{i}",
+            corrected_speech=f"USER-SPEECH-{i}",
+            context_summary=f"USER-SCENE-{i}",
+            source="user_correction",
+        )
+        await store.add(s, embedding=_embed(f"USER-INNER-{i}"))
+
+    llm = FakeLLM()
+    retriever = FewShotRetriever(store=store, embedder=llm)
+    engine = ConversationEngine(
+        persona=PersonaConfig(name="T", identity=Identity(full_name="T")),
+        llm_provider=llm,
+        memory_manager=MemoryManager(data_dir=str(tmp_path / "mem"), long_term_backend="json"),
+        fewshot_store=store,
+        fewshot_retriever=retriever,
+    )
+
+    await engine.chat("USER-INNER-0", channel="cli", recipient_id="tester")
+
+    flat = str(llm.last_messages)
+
+    # Baseline seeds from _phase0_seed_fewshots must always appear
+    # (these are the hardcoded corrected_speech strings from Phase 0 seeds)
+    assert "哦？啥机械？" in flat, "Phase-0 seed must be present as baseline anchor"
