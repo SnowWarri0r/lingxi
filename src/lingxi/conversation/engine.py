@@ -6,6 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncIterator
 
 from lingxi.conversation.adapters import TextAdapter
@@ -17,6 +18,8 @@ from lingxi.conversation.prompt_assembly import (
     render_fewshots_as_messages,
 )
 from lingxi.fewshot.models import FewShotSample
+from lingxi.fewshot.seeds_loader import load_seeds
+from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.persona.prompt_builder import PromptBuilder
@@ -73,6 +76,8 @@ class ConversationEngine:
         inner_life_store=None,
         agenda_engine=None,
         subjective_layer=None,
+        fewshot_store: FewShotStore | None = None,
+        annotation_store: AnnotationStore | None = None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -97,6 +102,9 @@ class ConversationEngine:
         self._relationship_level: int = 1
         self._current_recipient_key: str | None = None
         self._last_response_text: str = ""
+
+        self.fewshot_store = fewshot_store
+        self.annotation_store = annotation_store
 
         # Initialize
         self.memory.set_llm_provider(llm_provider)
@@ -624,3 +632,44 @@ class ConversationEngine:
             )
         if self.interaction_tracker:
             await self.interaction_tracker.load()
+
+    async def bootstrap_fewshot_seeds(
+        self,
+        seeds_path: str | Path = "config/fewshot/seeds.yaml",
+    ) -> int:
+        """Populate the fewshot pool from seeds.yaml if not already present.
+
+        Returns the number of samples added (0 if all already existed).
+        """
+        if self.fewshot_store is None:
+            return 0
+
+        p = Path(seeds_path)
+        if not p.is_absolute():
+            # Resolve relative to CWD
+            p = Path.cwd() / p
+
+        samples = load_seeds(p)
+
+        # Deduplicate by id — Chroma will raise on duplicate ids
+        added = 0
+        for s in samples:
+            try:
+                embedding = await self._embed_for_fewshot(s)
+                await self.fewshot_store.add(s, embedding=embedding)
+                added += 1
+            except Exception:
+                # Already exists or chroma error; silently skip
+                continue
+        return added
+
+    async def _embed_for_fewshot(self, sample: FewShotSample) -> list[float]:
+        """Embed the inner_thought (or fall back to context_summary) via the LLM provider."""
+        text = sample.inner_thought or sample.context_summary
+        try:
+            return await self.llm.embed(text)
+        except NotImplementedError:
+            # Provider doesn't support embeddings — use the MemoryManager's one
+            if self.memory.embedding_provider is not None:
+                return await self.memory.embedding_provider.embed(text)
+            raise
