@@ -34,23 +34,19 @@ FEISHU_BASE = "https://open.feishu.cn/open-apis"
 
 
 def build_annotation_footer_elements(turn_id: str) -> list[dict]:
-    """Annotation footer for a reply card.
+    """Three annotation buttons to append at the bottom of the reply card.
 
-    Layout:
-      ──────────────────────
-      [👍 像]   [👎 不像]
-      [应该说输入框…]  [✏️ 提交修正]
-
-    Quick buttons (👍/👎) fire plain callback events. The correction row
-    lives inside a `form` container so the submit button carries the
-    input's value in `event.action.form_value`.
+    CardKit v2 `column_set` + `button` elements. Click fires
+    p2.card.action.trigger carrying {action, turn_id} in value.
+    ✏️ prompts the user to reply with /bad <correction> in-chat since
+    CardKit v2's form/input schema hasn't been stable across our tests.
     """
 
-    def _callback_button(text: str, action_kind: str) -> dict:
+    def _button(text: str, action_kind: str, button_type: str = "default") -> dict:
         return {
             "tag": "button",
             "text": {"tag": "plain_text", "content": text},
-            "type": "default",
+            "type": button_type,
             "width": "default",
             "behaviors": [
                 {
@@ -60,84 +56,32 @@ def build_annotation_footer_elements(turn_id: str) -> list[dict]:
             ],
         }
 
-    quick_actions = {
-        "tag": "column_set",
-        "horizontal_spacing": "small",
-        "columns": [
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 1,
-                "elements": [_callback_button("👍 像", "annotate_positive")],
-            },
-            {
-                "tag": "column",
-                "width": "weighted",
-                "weight": 1,
-                "elements": [_callback_button("👎 不像", "annotate_negative")],
-            },
-        ],
-    }
-
-    correction_form = {
-        "tag": "form",
-        "name": f"correction_form_{turn_id[:8]}",
-        "elements": [
-            {
-                "tag": "column_set",
-                "horizontal_spacing": "small",
-                "columns": [
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 3,
-                        "elements": [
-                            {
-                                "tag": "input",
-                                "name": "correction_text",
-                                "placeholder": {
-                                    "tag": "plain_text",
-                                    "content": "应该说的话…",
-                                },
-                                "max_length": 200,
-                            }
-                        ],
-                    },
-                    {
-                        "tag": "column",
-                        "width": "weighted",
-                        "weight": 1,
-                        "elements": [
-                            {
-                                "tag": "button",
-                                "text": {
-                                    "tag": "plain_text",
-                                    "content": "✏️ 提交修正",
-                                },
-                                "type": "primary",
-                                "width": "default",
-                                "form_action_type": "submit",
-                                "behaviors": [
-                                    {
-                                        "type": "callback",
-                                        "value": {
-                                            "action": "annotate_correction",
-                                            "turn_id": turn_id,
-                                        },
-                                    }
-                                ],
-                            }
-                        ],
-                    },
-                ],
-            }
-        ],
-    }
-
     return [
         {"tag": "hr"},
-        quick_actions,
-        correction_form,
+        {
+            "tag": "column_set",
+            "horizontal_spacing": "small",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("👍 像", "annotate_positive")],
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("👎 不像", "annotate_negative")],
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("✏️ 应该说", "annotate_correction", "primary")],
+                },
+            ],
+        },
     ]
 
 
@@ -416,7 +360,7 @@ class FeishuBot(OutboundChannel):
             app_id=self.app_id,
             app_secret=self.app_secret,
             event_handler=handler,
-            log_level=lark.LogLevel.INFO,
+            log_level=lark.LogLevel.DEBUG,
         )
 
         proactive_hint = "开启" if self._proactive_config.enabled else "关闭"
@@ -519,40 +463,41 @@ class FeishuBot(OutboundChannel):
             P2CardActionTriggerResponse,
         )
 
+        print(f"[feishu] _on_card_action fired", flush=True)
         try:
             action_obj = event.event.action if event.event else None
             value = (action_obj.value or {}) if action_obj else {}
             form_value = (action_obj.form_value or {}) if action_obj else {}
             action = value.get("action", "")
             turn_id = value.get("turn_id", "")
+            print(f"[feishu] action={action!r} turn_id={turn_id!r} form_value={form_value!r}", flush=True)
 
             if not turn_id or not action.startswith("annotate_"):
                 return P2CardActionTriggerResponse({})
 
-            correction: str | None = None
+            # ✏️ 应该说 — no form yet, direct the user to use /bad slash command
             if action == "annotate_correction":
-                correction = (form_value.get("correction_text") or "").strip()
-                if not correction:
-                    return P2CardActionTriggerResponse({
-                        "toast": {
-                            "type": "warning",
-                            "content": "先在输入框里写点东西再提交吧",
-                            "i18n": {"zh_cn": "先在输入框里写点东西再提交吧"},
-                        },
-                    })
+                tip = f"在下方回复 `/bad {turn_id[:8]} 应该说的话` 来提交修正"
+                return P2CardActionTriggerResponse({
+                    "toast": {
+                        "type": "info",
+                        "content": tip,
+                        "i18n": {"zh_cn": tip},
+                    },
+                })
 
             # Dispatch to annotation in background (handler returns synchronously)
             asyncio.run_coroutine_threadsafe(
-                self._handle_card_annotation(action, turn_id, correction), self._loop,
+                self._handle_card_annotation(action, turn_id, None), self._loop,
             )
 
             # Show a lightweight toast back to the user
             toast_content = {
                 "annotate_positive": "👍 记下了",
                 "annotate_negative": "👎 记下了",
-                "annotate_correction": f"✏️ 记下「{correction}」了" if correction else "✏️ 记下了",
             }.get(action, "已记录")
 
+            print(f"[feishu] returning toast: {toast_content}", flush=True)
             return P2CardActionTriggerResponse({
                 "toast": {
                     "type": "info",
@@ -561,14 +506,17 @@ class FeishuBot(OutboundChannel):
                 },
             })
         except Exception as e:
-            print(f"[feishu] card action handler failed: {e}")
+            import traceback
+            print(f"[feishu] card action handler failed: {e}\n{traceback.format_exc()}", flush=True)
             return P2CardActionTriggerResponse({})
 
     async def _handle_card_annotation(
         self, action: str, turn_id: str, correction: str | None = None
     ) -> None:
         """Dispatch the annotation action to AnnotationCollector."""
+        print(f"[feishu] _handle_card_annotation start: action={action}, turn={turn_id[:8]}, correction={correction!r}", flush=True)
         if self.engine.annotation_store is None or self.engine.fewshot_store is None:
+            print(f"[feishu] skip: annotation_store or fewshot_store is None", flush=True)
             return
 
         from lingxi.fewshot.collector import AnnotationCollector
@@ -579,6 +527,7 @@ class FeishuBot(OutboundChannel):
             if self.engine.fewshot_retriever else None
         )
         if embedder is None:
+            print(f"[feishu] skip: no embedder available (need ARK_API_KEY for fewshot pool)", flush=True)
             return
 
         collector = AnnotationCollector(
@@ -595,8 +544,10 @@ class FeishuBot(OutboundChannel):
                 await collector.record_negative(turn_id)
             elif action == "annotate_correction" and correction:
                 await collector.record_correction(turn_id, correction)
+            print(f"[feishu] annotation recorded: {action}", flush=True)
         except Exception as e:
-            print(f"[feishu] annotation dispatch failed: {e}")
+            import traceback
+            print(f"[feishu] annotation dispatch failed: {e}\n{traceback.format_exc()}", flush=True)
 
     async def _handle_reply_safe(
         self,
@@ -706,6 +657,8 @@ class FeishuBot(OutboundChannel):
                 "/entities - 实体图谱\n"
                 "/episodes - 最近session摘要\n"
                 "/reveal <turn_id> - 查看 Aria 当时的内心独白\n"
+                "/good [turn_id] - 标记某轮回复像 (默认最后一轮)\n"
+                "/bad <turn_id> <应该说的话> - 提交修正\n"
                 "/forget - 清空我的记忆（慎用）"
             )
 
@@ -790,13 +743,104 @@ class FeishuBot(OutboundChannel):
                 return "用法: /reveal <turn_id>"
             if self.engine.annotation_store is None:
                 return "未启用标注存储"
-            turn = await self.engine.annotation_store.get_turn(turn_id)
+            # Resolve short id (8-char prefix) to a full turn_id
+            turn = await self._resolve_turn(turn_id)
             if turn is None:
-                return f"未找到 {turn_id}"
-            return f"💭 Aria 当时想的：\n{turn.inner_thought or '(无)'}"
+                return f"未找到 turn {turn_id}"
+            return f"💭 Aria 当时想的（{turn.turn_id[:8]}）：\n{turn.inner_thought or '(无)'}"
+
+        if cmd == "/bad":
+            return await self._cmd_correction(arg.strip())
+
+        if cmd == "/good":
+            return await self._cmd_good(arg.strip())
 
         # Unknown command - let LLM handle it
         return None
+
+    async def _resolve_turn(self, ref: str):
+        """Accept either a full turn_id or an 8-char prefix; returns AnnotationTurn or None."""
+        if self.engine.annotation_store is None or not ref:
+            return None
+        turn = await self.engine.annotation_store.get_turn(ref)
+        if turn is not None:
+            return turn
+        # Try prefix resolution
+        from pathlib import Path
+        turns_dir = Path(self.engine.annotation_store.turns_dir)
+        if not turns_dir.exists():
+            return None
+        for p in turns_dir.glob(f"{ref}*.json"):
+            return await self.engine.annotation_store.get_turn(p.stem)
+        return None
+
+    async def _cmd_correction(self, arg: str) -> str:
+        """`/bad <turn_id_or_prefix> <correction>` — record a user_correction sample."""
+        if self.engine.annotation_store is None or self.engine.fewshot_store is None:
+            return "未启用标注闭环"
+        parts = arg.split(maxsplit=1)
+        if len(parts) < 2:
+            return "用法: /bad <turn_id 前 8 位> <应该说的话>"
+        ref, correction = parts[0], parts[1].strip()
+        turn = await self._resolve_turn(ref)
+        if turn is None:
+            return f"未找到 turn {ref}"
+
+        from lingxi.fewshot.collector import AnnotationCollector
+        from lingxi.fewshot.summarizer import AnnotationSummarizer
+
+        embedder = self.engine.memory.embedding_provider or (
+            self.engine.fewshot_retriever.embedder
+            if self.engine.fewshot_retriever else None
+        )
+        if embedder is None:
+            return "没有可用的 embedding provider"
+
+        collector = AnnotationCollector(
+            annotation_store=self.engine.annotation_store,
+            fewshot_store=self.engine.fewshot_store,
+            embedder=embedder,
+            summarizer=AnnotationSummarizer(self.engine.llm),
+        )
+        try:
+            await collector.record_correction(turn.turn_id, correction)
+            return f"✏️ 记下「{correction}」了（turn {turn.turn_id[:8]}）"
+        except Exception as e:
+            return f"失败: {e}"
+
+    async def _cmd_good(self, arg: str) -> str:
+        """`/good [turn_id_or_prefix]` — record as positive (defaults to last turn)."""
+        if self.engine.annotation_store is None or self.engine.fewshot_store is None:
+            return "未启用标注闭环"
+        ref = arg.strip()
+        if not ref:
+            last = getattr(self.engine, "_last_output", None)
+            ref = last.turn_id if last else ""
+        turn = await self._resolve_turn(ref) if ref else None
+        if turn is None:
+            return "未找到 turn（用 /good <前 8 位>）"
+
+        from lingxi.fewshot.collector import AnnotationCollector
+        from lingxi.fewshot.summarizer import AnnotationSummarizer
+
+        embedder = self.engine.memory.embedding_provider or (
+            self.engine.fewshot_retriever.embedder
+            if self.engine.fewshot_retriever else None
+        )
+        if embedder is None:
+            return "没有可用的 embedding provider"
+
+        collector = AnnotationCollector(
+            annotation_store=self.engine.annotation_store,
+            fewshot_store=self.engine.fewshot_store,
+            embedder=embedder,
+            summarizer=AnnotationSummarizer(self.engine.llm),
+        )
+        try:
+            await collector.record_positive(turn.turn_id)
+            return f"👍 记下了（turn {turn.turn_id[:8]}）"
+        except Exception as e:
+            return f"失败: {e}"
 
     async def _stream_reply(
         self,
