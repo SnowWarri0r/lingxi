@@ -265,7 +265,10 @@ class ConversationEngine:
         few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
 
         # Attach style preamble to the last user message
-        style_preamble = build_style_preamble(self.persona.style)
+        style_preamble = build_style_preamble(
+            self.persona.style,
+            voice_hint=self._persona_voice_hint(),
+        )
         self._apply_style_preamble(messages, style_preamble)
 
         # Final message list = few-shot pairs + history (which already includes the user turn)
@@ -314,6 +317,29 @@ class ConversationEngine:
         if recipient_key is None:
             return None
         return self._recent_inner_thoughts.get(recipient_key)
+
+    def _persona_voice_hint(self) -> str:
+        """Derive a one-line voice descriptor from the persona YAML.
+
+        Pulls tone + top personality traits (+ 1 verbal habit if short)
+        so the style preamble can keep Aria's voice from being flattened
+        into generic WeChat register.
+        """
+        p = self.persona
+        parts: list[str] = []
+        tone = p.speaking_style.tone.strip()
+        if tone and tone != "neutral":
+            parts.append(tone)
+        # Top 2 traits (above baseline intensity)
+        top_traits = sorted(
+            p.personality.traits, key=lambda t: t.intensity, reverse=True
+        )[:2]
+        if top_traits:
+            parts.append("/".join(t.trait for t in top_traits))
+        # One verbal habit for flavor (optional)
+        if p.speaking_style.verbal_habits:
+            parts.append(p.speaking_style.verbal_habits[0])
+        return "，".join(parts)
 
     def _apply_style_preamble(self, messages: list[dict], preamble: str) -> None:
         """Prepend the preamble to the last user message's text.

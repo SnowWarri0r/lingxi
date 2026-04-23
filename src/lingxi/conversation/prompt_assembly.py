@@ -41,20 +41,29 @@ def render_fewshots_as_messages(samples: list[FewShotSample]) -> list[dict]:
     return messages
 
 
-def build_style_preamble(style: StyleConfig) -> str:
+def build_style_preamble(style: StyleConfig, voice_hint: str = "") -> str:
     """Author's Note style block to prepend to the user's final message.
 
     Returns a multi-line string ending with a trailing newline so the caller
     can concatenate with the real message.
+
+    voice_hint is a persona-specific one-liner (e.g. "温暖而富有思考性，
+    偶尔带点诗意/天文隐喻") that keeps the character's voice from being
+    flattened into generic WeChat register.
     """
     phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
     joined = "、".join(phrases)
-    return (
-        f"[style: 微信聊天。≤{style.speech_max_chars}字。\n"
-        f"禁用词：{joined}\n"
-        f"禁止总结、禁止给建议框架（1/2/3 点）\n"
-        f"允许：省略、倒装、感叹词（嗯/欸/哦）、破折号、半句话]\n\n"
-    )
+    parts = [
+        f"[style: 微信聊天口语。≤{style.speech_max_chars}字。",
+    ]
+    if voice_hint:
+        parts.append(f"语感：{voice_hint} — 保持这个人设的声音，别拉平成通用小市民口吻。")
+    parts.extend([
+        f"禁用词：{joined}",
+        f"禁止总结、禁止给建议框架（1/2/3 点）",
+        f"允许：省略、倒装、感叹词（嗯/欸/哦）、破折号、半句话]",
+    ])
+    return "\n".join(parts) + "\n\n"
 
 
 def pick_prefill(style: StyleConfig, rng: random.Random | None = None) -> str:

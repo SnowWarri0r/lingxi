@@ -30,7 +30,7 @@ def test_load_seeds_returns_samples():
 def test_load_seeds_preserves_tags():
     samples = load_seeds(SEEDS_PATH)
     by_id = {s.id: s for s in samples}
-    assert by_id["seed-resonance-01"].tags == ["共鸣", "轻度感性"]
+    assert by_id["seed-resonance-01"].tags == ["共鸣", "温暖"]
 
 
 def test_load_missing_file_raises():
