@@ -80,6 +80,7 @@ class MemoryManager:
 
         self._consolidator: MemoryConsolidator | None = None
         self._embed_fn = None
+        self.embedding_provider: EmbeddingProvider | None = None
 
         # Entity graph (sidecar)
         self.entity_graph = EntityGraph(self.data_dir)
@@ -101,9 +102,13 @@ class MemoryManager:
     def set_embedding_provider(self, provider: EmbeddingProvider | None) -> None:
         """Set a typed EmbeddingProvider for semantic retrieval.
 
+        Exposes the provider as self.embedding_provider so callers like
+        the annotation pipeline can reuse it without duplicating probe/init.
+
         NOTE: for Chroma backend, pass embedding_dim to MemoryManager
         constructor so the collection name is correct BEFORE load.
         """
+        self.embedding_provider: EmbeddingProvider | None = provider
         if provider is None:
             self._embed_fn = None
             return
