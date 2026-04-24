@@ -305,73 +305,70 @@ class ClaudeProvider(LLMProvider):
         if prefill:
             yield StreamChunk(content=prefill)
 
-        # Pre-flight: check token validity (refresh on 401 before streaming)
-        client = self._get_http_client()
-        headers = self._get_headers()
+        # One loop handles both 401-refresh and transient transport-error retry.
+        # Transport retry is only safe BEFORE any content chunk has been yielded
+        # (otherwise the consumer would see duplicate content after restart).
+        MAX_ATTEMPTS = 3
+        need_refresh = False
+        attempts = 0
 
-        async with client.stream("POST", url, headers=headers, json=body) as response:
-            if response.status_code == 401 and self._is_oauth:
-                pass  # Fall through to retry below
-            elif response.status_code != 200:
-                text = await response.aread()
-                raise RuntimeError(
-                    f"Anthropic API error {response.status_code}: {text.decode()}"
-                )
-            else:
-                # Success: stream normally
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-                    event_type = event.get("type", "")
-                    if event_type == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            yield StreamChunk(content=delta.get("text", ""))
-                    elif event_type == "message_stop":
-                        break
-                yield StreamChunk(content="", is_final=True)
-                return
+        while attempts < MAX_ATTEMPTS:
+            attempts += 1
 
-        # 401 retry path: refresh token and stream again
-        new_token = self._refresh_from_keychain()
-        if new_token and new_token != self._api_key:
-            print("[claude] stream token expired, refreshed from keychain")
-            self.update_credentials(new_token)
-            headers = self._get_headers()
-            client = self._get_http_client()
-
-            async with client.stream("POST", url, headers=headers, json=body) as response:
-                if response.status_code != 200:
-                    text = await response.aread()
+            if need_refresh:
+                new_token = self._refresh_from_keychain()
+                if not new_token or new_token == self._api_key:
                     raise RuntimeError(
-                        f"Anthropic API error {response.status_code}: {text.decode()}"
+                        "Anthropic API error 401: Token expired and could not refresh from keychain"
                     )
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
+                print("[claude] stream token expired, refreshed from keychain")
+                self.update_credentials(new_token)
+                need_refresh = False
+
+            client = self._get_http_client()
+            headers = self._get_headers()
+            content_yielded_this_attempt = False
+
+            try:
+                async with client.stream("POST", url, headers=headers, json=body) as response:
+                    if response.status_code == 401 and self._is_oauth:
+                        need_refresh = True
                         continue
-                    payload = line[6:]
-                    if payload.strip() == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-                    event_type = event.get("type", "")
-                    if event_type == "content_block_delta":
-                        delta = event.get("delta", {})
-                        if delta.get("type") == "text_delta":
-                            yield StreamChunk(content=delta.get("text", ""))
-                    elif event_type == "message_stop":
-                        break
-            yield StreamChunk(content="", is_final=True)
-        else:
-            raise RuntimeError(
-                "Anthropic API error 401: Token expired and could not refresh from keychain"
-            )
+                    if response.status_code != 200:
+                        text = await response.aread()
+                        raise RuntimeError(
+                            f"Anthropic API error {response.status_code}: {text.decode()}"
+                        )
+                    async for line in response.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:]
+                        if payload.strip() == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(payload)
+                        except json.JSONDecodeError:
+                            continue
+                        event_type = event.get("type", "")
+                        if event_type == "content_block_delta":
+                            delta = event.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                content_yielded_this_attempt = True
+                                yield StreamChunk(content=delta.get("text", ""))
+                        elif event_type == "message_stop":
+                            break
+                    yield StreamChunk(content="", is_final=True)
+                    return
+            except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
+                # Mid-stream transport failure: we've already yielded content,
+                # a retry would duplicate it. Raise so caller knows.
+                if content_yielded_this_attempt:
+                    raise
+                if attempts >= MAX_ATTEMPTS:
+                    print(f"[claude] stream transport error, gave up after {attempts}: {e}")
+                    raise
+                print(f"[claude] stream transport error, retry {attempts}/{MAX_ATTEMPTS}: {e}")
+                # Drop the pooled HTTP client so we don't reuse a half-dead conn
+                self._http_client = None
+                continue
+
