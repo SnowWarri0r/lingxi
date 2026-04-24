@@ -24,7 +24,7 @@ DEFAULT_BLACKLIST: tuple[str, ...] = (
     "很高兴为你",
     "希望对你有帮助",
     "如有任何",
-    # AI排版特征：长破折号抒情停顿（真人微信极少用）
+    # AI排版特征：长破折号抒情停顿（真人 IM 里极少用）
     "——",
     "——",  # 中英混用，两种都禁
 )
@@ -65,7 +65,7 @@ def build_style_preamble(
     phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
     joined = "、".join(phrases)
     parts = [
-        f"[style: 微信聊天口语。≤{style.speech_max_chars}字。",
+        f"[style: IM 聊天口语（跟朋友日常发消息那种）。≤{style.speech_max_chars}字。",
     ]
     if voice_hint:
         parts.append(f"语感：{voice_hint} — 保持这个人设的声音，别拉平成通用小市民口吻。")
