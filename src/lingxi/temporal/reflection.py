@@ -66,6 +66,30 @@ REFLECTION_PROMPT = """你是 {persona_name}。现在是你独处的时间，你
 {{"insights": []}}"""
 
 
+BIOGRAPHY_ADDITION_PROMPT = """你是 {persona_name}。你在独处时回想刚刚和 {recipient_desc} 的对话。
+
+## 对话片段
+{recent_turns}
+
+在这次聊天里，**你自己**有没有经历什么值得记进个人记忆库的小事？比如：
+- 因为对方说的某句话，你联想到自己过去的事（并说了出来）
+- 一个你不曾注意过的习惯、偏好、感受被唤醒了
+- 对方分享的经历让你对某事产生了新看法
+- 你突然意识到的自己的一个小特征/怪癖
+
+要求：
+- **只记属于你自己的事**，不是关于对方的观察
+- 不是必须有（多数时候没有就没有）
+- 最多 1 条，且必须是**新的**（跟已有记忆不重复）
+- 用第一人称短句（跟真人写日记一样，不要散文腔）
+
+请用 JSON 回复：
+{{"event": {{"content": "<一段你自己经历/想到/意识到的事，一两句话>", "tags": ["tag1", "tag2"]}}}}
+
+如果没有值得记的，回复：
+{{"event": null}}"""
+
+
 class ReflectionLoop:
     """Background task that periodically reflects on recent conversations."""
 
@@ -160,7 +184,73 @@ class ReflectionLoop:
                 print(f"[reflection] store insight failed: {e}")
 
         print(f"[reflection] {key}: stored {len(insights)} insights")
+
+        # Also: did Aria herself experience anything worth adding to biography?
+        try:
+            await self._maybe_add_biography_event(record)
+        except Exception as e:
+            print(f"[reflection] biography add failed: {e}")
+
         self._last_reflection[key] = now
+
+    async def _maybe_add_biography_event(self, record: InteractionRecord) -> None:
+        """Ask the LLM whether this session produced a biographical moment for Aria herself."""
+        if self.engine.biography_retriever is None:
+            return
+        turns = self.engine.memory.short_term.get_history(last_n=12)
+        if len(turns) < 4:
+            return  # too little substance to reflect on
+
+        lines = []
+        for t in turns:
+            role = "对方" if t.role == "user" else "我"
+            lines.append(f"{role}：{t.content[:200]}")
+        recent_turns = "\n".join(lines)
+
+        recipient_desc = f"{record.channel} 上的对方（已认识 {record.total_turns} 轮）"
+        prompt = BIOGRAPHY_ADDITION_PROMPT.format(
+            persona_name=self.engine.persona.name,
+            recipient_desc=recipient_desc,
+            recent_turns=recent_turns,
+        )
+
+        try:
+            result = await self.engine.llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                temperature=0.6,
+            )
+        except Exception as e:
+            print(f"[reflection] biography LLM failed: {e}")
+            return
+
+        text = result.content.strip()
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            return
+        try:
+            data = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return
+        event_dict = data.get("event")
+        if not event_dict or not isinstance(event_dict, dict):
+            return
+        content = (event_dict.get("content") or "").strip()
+        if not content:
+            return
+
+        from lingxi.persona.models import LifeEvent
+
+        # Age stamp: current persona age (biographies lean on age as a signal)
+        age = self.engine.persona.identity.age or 28
+        tags = event_dict.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        event = LifeEvent(age=age, content=content, tags=[str(t) for t in tags][:5])
+
+        rec_key = f"{record.channel}:{record.recipient_id}"
+        await self.engine.add_biography_event(event, recipient_key=rec_key, source="reflection")
+        print(f"[biography] grew: {age}岁·{content[:40]}")
 
     async def _generate_insights(self, record: InteractionRecord) -> list[dict]:
         # Temporarily switch short-term to this recipient's context
