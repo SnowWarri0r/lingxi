@@ -41,7 +41,11 @@ def render_fewshots_as_messages(samples: list[FewShotSample]) -> list[dict]:
     return messages
 
 
-def build_style_preamble(style: StyleConfig, voice_hint: str = "") -> str:
+def build_style_preamble(
+    style: StyleConfig,
+    voice_hint: str = "",
+    biography_hit: bool = False,
+) -> str:
     """Author's Note style block to prepend to the user's final message.
 
     Returns a multi-line string ending with a trailing newline so the caller
@@ -50,6 +54,10 @@ def build_style_preamble(style: StyleConfig, voice_hint: str = "") -> str:
     voice_hint is a persona-specific one-liner (e.g. "温暖而富有思考性，
     偶尔带点诗意/天文隐喻") that keeps the character's voice from being
     flattened into generic WeChat register.
+
+    biography_hit=True means the retriever surfaced a relevant past event;
+    the preamble then encourages the persona to volunteer personal memory
+    ("我也有过……") instead of keeping responses 一问一答.
     """
     phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
     joined = "、".join(phrases)
@@ -58,6 +66,11 @@ def build_style_preamble(style: StyleConfig, voice_hint: str = "") -> str:
     ]
     if voice_hint:
         parts.append(f"语感：{voice_hint} — 保持这个人设的声音，别拉平成通用小市民口吻。")
+    if biography_hit:
+        parts.append(
+            "这轮你有相关的过去经历（见 system prompt 里的 📖 部分）。"
+            "可以自然地'我也……'起一句分享，可以比平常多说一两句。别憋成一问一答。"
+        )
     parts.extend([
         f"禁用词：{joined}",
         f"禁止总结、禁止给建议框架（1/2/3 点）",

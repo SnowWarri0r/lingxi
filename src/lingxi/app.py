@@ -235,6 +235,14 @@ async def create_engine(
         if added:
             print(f"[fewshot] bootstrapped {added} seeds")
 
+    # Bootstrap biography retriever (embeds all life_events in memory)
+    try:
+        embedded = await engine.bootstrap_biography()
+        if embedded:
+            print(f"[biography] embedded {embedded} life events")
+    except Exception as e:
+        print(f"[biography] bootstrap failed (non-fatal): {e}")
+
     # Task 18: startup cleanup of stale annotation turns
     if annotation_store is not None:
         deleted = await annotation_store.cleanup(
