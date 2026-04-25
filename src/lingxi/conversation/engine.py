@@ -217,10 +217,16 @@ class ConversationEngine:
         if self.biography_retriever is not None and user_input.strip():
             try:
                 biography_hits = await self.biography_retriever.retrieve(
-                    query=user_input, k=3, threshold=0.55,
+                    query=user_input, k=2, threshold=0.25,
                 )
-            except Exception:
+            except Exception as e:
+                print(f"[biography] retrieve failed: {e}", flush=True)
                 biography_hits = []
+            if biography_hits:
+                summary = "; ".join(f"{e.age}岁·{e.content[:18]}..." for e in biography_hits)
+                print(f"[biography] hit {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
+            else:
+                print(f"[biography] no hit for {user_input[:20]!r}", flush=True)
         self._last_biography_hit = bool(biography_hits)
 
         system_prompt = self.prompt_builder.build_system_prompt(

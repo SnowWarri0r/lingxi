@@ -124,18 +124,18 @@ class PromptBuilder:
     def _build_biography_section(self, events: list) -> str:
         """Inject retrieved past events so responses can draw on personal history."""
         lines = [
-            "## 📖 你过去经历过的事（和当前话题有关，可以自然提起）",
+            "## 📖 你记忆里浮现的事（对方刚说的话让你想到这些，真实发生过）",
         ]
         for e in events:
-            # LifeEvent has .age, .content, .tags
             age = getattr(e, "age", None)
             content = getattr(e, "content", str(e))
             prefix = f"{age}岁时：" if age is not None else "你记得："
             lines.append(f"- {prefix}{content}")
         lines.append(
-            "\n如果对方说的让你想起这里面某件事，**可以自然地"
-            "'我也有过……'/'我以前……'聊聊自己**，不用憋成一问一答。"
-            "分享时像朋友讲自己的事，短句+细节就行，别写成散文。"
+            "\n**重要**：真人朋友聊天不是一问一答，会自然分享自己经历过的类似事。"
+            "这轮请**主动挑一条上面的记忆聊聊自己**，用'我以前……'/'我也有过……'/"
+            "'让我想起那年……'开头。短句口语，带一两个具体细节，不用写长，"
+            "但一定要聊到你自己，不要只回答对方。"
         )
         return "\n".join(lines)
 
@@ -333,6 +333,19 @@ class PromptBuilder:
             lines.append(f"职业：{p.identity.occupation}。")
         if p.identity.background:
             lines.append(f"\n## 背景故事\n{p.identity.background.strip()}")
+
+        # Recurring people + motifs: always-on flavor, not retrieval-gated.
+        # Gives Aria a set of "things/people she thinks about" regardless of topic.
+        bio = p.biography
+        if bio.recurring_people:
+            lines.append("\n## 你生命里的人（聊到时自然提到，不用介绍）")
+            for rp in bio.recurring_people:
+                lines.append(f"- {rp.name}：{rp.relation}")
+        if bio.motifs:
+            lines.append(
+                "\n## 你脑海里反复出现的意象（聊到相关的，会自然联想到）\n"
+                + "、".join(bio.motifs)
+            )
         return "\n".join(lines)
 
     def _build_personality_section(self) -> str:
