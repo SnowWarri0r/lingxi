@@ -3,9 +3,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "persona-agent"
+name = "lingxi"
 version = "0.1.0"
-description = "Virtual persona agent with memory, planning, and customizable personality"
+description = "Lingxi — a virtual persona agent with an inner life: memory, emotions, planning, and subjective relationships"
+license = "AGPL-3.0-or-later"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.40.0",
@@ -40,12 +41,12 @@ embeddings = [
 ]
 
 [project.scripts]
-persona-agent = "persona_agent.app:main"
-persona-agent-server = "persona_agent.web.server:main"
-persona-agent-feishu = "persona_agent.channels.feishu_cli:main"
+lingxi = "lingxi.app:main"
+lingxi-server = "lingxi.web.server:main"
+lingxi-feishu = "lingxi.channels.feishu_cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/persona_agent"]
+packages = ["src/lingxi"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

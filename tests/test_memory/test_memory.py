@@ -2,11 +2,11 @@
 
 import pytest
 
-from persona_agent.memory.base import MemoryEntry, MemoryType
-from persona_agent.memory.short_term import ShortTermMemory
-from persona_agent.memory.long_term import LongTermMemory
-from persona_agent.memory.episodic import EpisodicMemory
-from persona_agent.memory.base import EpisodeEntry
+from lingxi.memory.base import MemoryEntry, MemoryType
+from lingxi.memory.short_term import ShortTermMemory
+from lingxi.memory.long_term import LongTermMemory
+from lingxi.memory.episodic import EpisodicMemory
+from lingxi.memory.base import EpisodeEntry
 
 
 class TestShortTermMemory:

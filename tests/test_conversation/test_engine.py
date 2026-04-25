@@ -2,8 +2,8 @@
 
 import pytest
 
-from persona_agent.conversation.engine import ConversationEngine
-from persona_agent.memory.manager import MemoryManager
+from lingxi.conversation.engine import ConversationEngine
+from lingxi.memory.manager import MemoryManager
 
 
 class TestConversationEngine:

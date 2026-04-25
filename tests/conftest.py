@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from persona_agent.memory.manager import MemoryManager
-from persona_agent.persona.models import (
+from lingxi.memory.manager import MemoryManager
+from lingxi.persona.models import (
     EmotionalBaseline,
     GoalDefinition,
     Identity,
@@ -14,7 +14,7 @@ from persona_agent.persona.models import (
     SpeakingStyle,
     Trait,
 )
-from persona_agent.providers.base import CompletionResult, LLMProvider
+from lingxi.providers.base import CompletionResult, LLMProvider
 
 
 class MockLLMProvider(LLMProvider):
