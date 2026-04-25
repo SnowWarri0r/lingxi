@@ -191,6 +191,38 @@ class StreamingCardSender:
             },
         )
 
+    async def append_elements(self, elements: list[dict]) -> None:
+        """Insert elements after the streaming element.
+
+        Uses POST /cardkit/v1/cards/{id}/elements with type=insert_after,
+        target_element_id=md_stream. Must be called after finish() has
+        disabled streaming_mode.
+        """
+        if not self._card_id or not elements:
+            return
+
+        self._seq += 1
+        headers = self._token_mgr.headers()
+        try:
+            resp = await self._http.post(
+                f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/elements",
+                headers=headers,
+                json={
+                    "type": "insert_after",
+                    "target_element_id": "md_stream",
+                    "sequence": self._seq,
+                    "elements": json.dumps(elements, ensure_ascii=False),
+                },
+            )
+            if resp.status_code != 200:
+                print(f"[feishu] append_elements HTTP {resp.status_code}: {resp.text[:300]}")
+                return
+            data = resp.json()
+            if data.get("code") != 0:
+                print(f"[feishu] append_elements API error: {data}")
+        except Exception as e:
+            print(f"[feishu] append_elements exception: {e}")
+
 
 class FeishuBot(OutboundChannel):
     """Feishu bot using WebSocket long connection (no public IP needed).
@@ -724,77 +756,17 @@ class FeishuBot(OutboundChannel):
                     except Exception:
                         pass
 
-            # Finish the streaming card without footer buttons (unreliable)
+            # Finish streaming, then append annotation buttons inline
             try:
                 await card.finish()
             except Exception:
                 pass
 
-        # Send a separate followup card carrying the annotation buttons
-        if turn_id:
-            await self._send_annotation_followup(chat_id, turn_id)
+            if turn_id:
+                try:
+                    await card.append_elements(
+                        build_annotation_footer_elements(turn_id)
+                    )
+                except Exception as e:
+                    print(f"[feishu] append buttons failed: {e}")
 
-    async def _send_annotation_followup(self, chat_id: str, turn_id: str) -> None:
-        """After a reply, send a small interactive card with 👍/👎/✏️ buttons.
-
-        Uses the legacy Feishu card format (no schema:"2.0") because it's
-        widely supported and the `action` element tag is rock-solid there.
-        """
-        # Legacy (v1) interactive card — well-supported with tag:"action"
-        card_body = {
-            "config": {"wide_screen_mode": True},
-            "elements": [
-                {
-                    "tag": "div",
-                    "text": {
-                        "tag": "lark_md",
-                        "content": f"📝 turn `{turn_id[:8]}`",
-                    },
-                },
-                {
-                    "tag": "action",
-                    "actions": [
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "👍 像"},
-                            "type": "default",
-                            "value": {"action": "annotate_positive", "turn_id": turn_id},
-                        },
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "👎 不像"},
-                            "type": "default",
-                            "value": {"action": "annotate_negative", "turn_id": turn_id},
-                        },
-                        {
-                            "tag": "button",
-                            "text": {"tag": "plain_text", "content": "✏️ 应该说"},
-                            "type": "primary",
-                            "value": {"action": "annotate_correction", "turn_id": turn_id},
-                        },
-                    ],
-                },
-            ],
-        }
-
-        headers = self.token_mgr.headers()
-        try:
-            async with httpx.AsyncClient(timeout=30) as http:
-                resp = await http.post(
-                    f"{FEISHU_BASE}/im/v1/messages",
-                    params={"receive_id_type": "chat_id"},
-                    headers=headers,
-                    json={
-                        "receive_id": chat_id,
-                        "msg_type": "interactive",
-                        "content": json.dumps(card_body, ensure_ascii=False),
-                    },
-                )
-                if resp.status_code != 200:
-                    print(f"[feishu] annotation followup HTTP {resp.status_code}: {resp.text[:300]}")
-                    return
-                data = resp.json()
-                if data.get("code") != 0:
-                    print(f"[feishu] annotation followup API error: {data}")
-        except Exception as e:
-            print(f"[feishu] annotation followup exception: {e}")
