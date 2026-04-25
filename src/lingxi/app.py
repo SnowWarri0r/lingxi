@@ -20,6 +20,69 @@ from lingxi.utils.config import load_config, get_nested
 from lingxi.utils.logging import setup_logging, get_logger
 
 
+def parse_annotation_command(line: str) -> dict | None:
+    """Recognize :good / :bad [correction] / :reveal. Returns None if not a command."""
+    stripped = line.strip()
+    if not stripped.startswith(":"):
+        return None
+    parts = stripped.split(maxsplit=1)
+    cmd = parts[0][1:]  # drop leading ':'
+    if cmd == "good":
+        return {"kind": "positive", "correction": None}
+    if cmd == "bad":
+        correction = parts[1].strip() if len(parts) > 1 else None
+        return {"kind": "negative", "correction": correction}
+    if cmd == "reveal":
+        return {"kind": "reveal", "correction": None}
+    return None
+
+
+async def _handle_annotation_command(engine, cmd: dict) -> None:
+    from lingxi.fewshot.collector import AnnotationCollector
+    from lingxi.fewshot.summarizer import AnnotationSummarizer
+
+    last_output = getattr(engine, "_last_output", None)
+    last_turn_id = last_output.turn_id if last_output else None
+    if not last_turn_id:
+        print("[annotate] 还没有轮次可标注")
+        return
+
+    if cmd["kind"] == "reveal":
+        if engine.annotation_store is None:
+            print("[reveal] 未启用标注存储")
+            return
+        turn = await engine.annotation_store.get_turn(last_turn_id)
+        if turn is None:
+            print(f"[reveal] {last_turn_id} 未找到")
+            return
+        print(f"\n[Aria 当时想的]\n{turn.inner_thought or '(无)'}\n")
+        return
+
+    if engine.annotation_store is None or engine.fewshot_store is None:
+        print("[annotate] 未启用标注闭环")
+        return
+
+    collector = AnnotationCollector(
+        annotation_store=engine.annotation_store,
+        fewshot_store=engine.fewshot_store,
+        embedder=engine.llm,
+        summarizer=AnnotationSummarizer(engine.llm),
+    )
+    try:
+        if cmd["kind"] == "positive":
+            await collector.record_positive(last_turn_id)
+            print(f"[annotate] 👍 记下了 ({last_turn_id[:8]})")
+        elif cmd["kind"] == "negative":
+            if cmd["correction"]:
+                await collector.record_correction(last_turn_id, cmd["correction"])
+                print(f"[annotate] ✏️ 记下修正 ({last_turn_id[:8]})")
+            else:
+                await collector.record_negative(last_turn_id)
+                print(f"[annotate] 👎 记下了（欢迎补 :bad <应该说>）")
+    except Exception as e:
+        print(f"[annotate] 失败: {e}")
+
+
 def _build_auth_manager(config: dict) -> AuthManager:
     """Build AuthManager with ProfileStore, ExternalSync, and OAuth configs from YAML."""
     oauth_configs = get_nested(config, "auth", "providers", default=None)
@@ -388,6 +451,11 @@ async def run_cli() -> None:
                     print(f"  • [{ep.timestamp.strftime('%Y-%m-%d %H:%M')}] "
                           f"({ep.emotional_tone}) {ep.summary[:100]}")
                 print()
+                continue
+
+            cmd = parse_annotation_command(user_input)
+            if cmd is not None:
+                await _handle_annotation_command(engine, cmd)
                 continue
 
             try:
