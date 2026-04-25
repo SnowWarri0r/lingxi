@@ -36,32 +36,47 @@ FEISHU_BASE = "https://open.feishu.cn/open-apis"
 def build_annotation_footer_elements(turn_id: str) -> list[dict]:
     """Three annotation buttons to append at the bottom of the reply card.
 
-    👍 像 → positive
-    👎 不像 → negative
-    ✏️ 应该说 → opens a form for correction (stub — user can use /bad in CLI or POST API)
+    CardKit v2 dropped `tag: "action"`; buttons live inside a column_set.
+    Each button carries its annotation kind + turn_id as `behaviors.callback.value`.
     """
+
+    def _button(text: str, action_kind: str, button_type: str = "default") -> dict:
+        return {
+            "tag": "button",
+            "text": {"tag": "plain_text", "content": text},
+            "type": button_type,
+            "width": "default",
+            "behaviors": [
+                {
+                    "type": "callback",
+                    "value": {"action": action_kind, "turn_id": turn_id},
+                }
+            ],
+        }
+
     return [
         {"tag": "hr"},
         {
-            "tag": "action",
-            "actions": [
+            "tag": "column_set",
+            "horizontal_spacing": "small",
+            "columns": [
                 {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "👍 像"},
-                    "type": "default",
-                    "value": {"action": "annotate_positive", "turn_id": turn_id},
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("👍 像", "annotate_positive")],
                 },
                 {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "👎 不像"},
-                    "type": "default",
-                    "value": {"action": "annotate_negative", "turn_id": turn_id},
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("👎 不像", "annotate_negative")],
                 },
                 {
-                    "tag": "button",
-                    "text": {"tag": "plain_text", "content": "✏️ 应该说"},
-                    "type": "primary",
-                    "value": {"action": "annotate_correction", "turn_id": turn_id},
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": [_button("✏️ 应该说", "annotate_correction", "primary")],
                 },
             ],
         },
@@ -199,29 +214,27 @@ class StreamingCardSender:
         disabled streaming_mode.
         """
         if not self._card_id or not elements:
+            print(f"[feishu] append_elements skipped: card_id={self._card_id}, elements={len(elements) if elements else 0}")
             return
 
         self._seq += 1
         headers = self._token_mgr.headers()
+        body = {
+            "type": "insert_after",
+            "target_element_id": "md_stream",
+            "sequence": self._seq,
+            "elements": json.dumps(elements, ensure_ascii=False),
+        }
+        print(f"[feishu] append_elements → card={self._card_id} seq={self._seq} body_preview={body['elements'][:120]}", flush=True)
         try:
             resp = await self._http.post(
                 f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/elements",
                 headers=headers,
-                json={
-                    "type": "insert_after",
-                    "target_element_id": "md_stream",
-                    "sequence": self._seq,
-                    "elements": json.dumps(elements, ensure_ascii=False),
-                },
+                json=body,
             )
-            if resp.status_code != 200:
-                print(f"[feishu] append_elements HTTP {resp.status_code}: {resp.text[:300]}")
-                return
-            data = resp.json()
-            if data.get("code") != 0:
-                print(f"[feishu] append_elements API error: {data}")
+            print(f"[feishu] append_elements ← HTTP {resp.status_code}: {resp.text[:500]}", flush=True)
         except Exception as e:
-            print(f"[feishu] append_elements exception: {e}")
+            print(f"[feishu] append_elements exception: {e}", flush=True)
 
 
 class FeishuBot(OutboundChannel):
@@ -759,14 +772,15 @@ class FeishuBot(OutboundChannel):
             # Finish streaming, then append annotation buttons inline
             try:
                 await card.finish()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[feishu] finish() failed: {e}", flush=True)
 
+            print(f"[feishu] stream done, turn_id={turn_id!r}", flush=True)
             if turn_id:
                 try:
                     await card.append_elements(
                         build_annotation_footer_elements(turn_id)
                     )
                 except Exception as e:
-                    print(f"[feishu] append buttons failed: {e}")
+                    print(f"[feishu] append buttons failed: {e}", flush=True)
 
