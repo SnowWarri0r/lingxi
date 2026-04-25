@@ -1,17 +1,18 @@
 """Persistence layer for fewshot: AnnotationStore (per-turn JSON).
 
-FewShotStore (ChromaDB pool) will be added in Task 7.
+FewShotStore (ChromaDB pool) added in Task 7.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from lingxi.fewshot.models import AnnotationKind, AnnotationTurn
+from lingxi.fewshot.models import AnnotationKind, AnnotationTurn, FewShotSample
 
 
 class AnnotationStore:
@@ -92,3 +93,146 @@ class AnnotationStore:
             return count
 
         return await asyncio.to_thread(_scan)
+
+
+@dataclass
+class FewShotQueryResult:
+    sample: FewShotSample
+    similarity: float
+
+
+class FewShotStore:
+    """ChromaDB-backed pool of FewShotSamples, with a JSONL backup for disaster recovery.
+
+    Collection name is dim-suffixed (fewshot_pool_d<N>) to avoid dim-mismatch
+    errors when embeddings change.
+    """
+
+    def __init__(self, data_dir: Path | str, embedding_dim: int):
+        self.data_dir = Path(data_dir)
+        self.chroma_dir = self.data_dir / "chroma"
+        self.backup_path = self.data_dir / "fewshot" / "samples.jsonl"
+        self.embedding_dim = embedding_dim
+        self.collection_name = f"fewshot_pool_d{embedding_dim}"
+        self._client: Any = None
+        self._collection: Any = None
+        self._lock = asyncio.Lock()
+
+    async def init(self) -> None:
+        async with self._lock:
+            if self._collection is not None:
+                return
+            await asyncio.to_thread(self._init_sync)
+
+    def _init_sync(self) -> None:
+        import chromadb
+        from chromadb.config import Settings
+
+        self.chroma_dir.mkdir(parents=True, exist_ok=True)
+        self.backup_path.parent.mkdir(parents=True, exist_ok=True)
+        self._client = chromadb.PersistentClient(
+            path=str(self.chroma_dir),
+            settings=Settings(anonymized_telemetry=False),
+        )
+        self._collection = self._client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
+    async def add(self, sample: FewShotSample, embedding: list[float]) -> None:
+        await self.init()
+        if len(embedding) != self.embedding_dim:
+            raise ValueError(
+                f"embedding dim {len(embedding)} != store dim {self.embedding_dim}"
+            )
+
+        meta = {
+            "source": sample.source,
+            # ChromaDB metadata disallows None; use "" as sentinel
+            "recipient_key": sample.recipient_key or "",
+            "context_summary": sample.context_summary,
+            "tags": ",".join(sample.tags),
+            "original_speech": sample.original_speech or "",
+            "corrected_speech": sample.corrected_speech,
+            "inner_thought": sample.inner_thought,
+            "created_at": sample.created_at.isoformat(),
+        }
+
+        def _add():
+            self._collection.add(
+                ids=[sample.id],
+                documents=[sample.inner_thought or sample.context_summary],
+                embeddings=[embedding],
+                metadatas=[meta],
+            )
+
+        await asyncio.to_thread(_add)
+        await self._append_backup(sample)
+
+    async def _append_backup(self, sample: FewShotSample) -> None:
+        def _append():
+            with self.backup_path.open("a", encoding="utf-8") as fh:
+                fh.write(sample.model_dump_json() + "\n")
+        await asyncio.to_thread(_append)
+
+    async def query(
+        self,
+        query_embedding: list[float],
+        k: int = 6,
+        recipient_key: str | None = None,
+    ) -> list[FewShotQueryResult]:
+        """Return the top-k samples by cosine similarity, filtered by recipient.
+
+        If recipient_key is given, returns samples where metadata.recipient_key
+        matches OR is empty (i.e. global seeds). Cross-user samples are excluded.
+        """
+        await self.init()
+
+        where_clause: dict[str, Any] | None = None
+        if recipient_key is not None:
+            where_clause = {
+                "$or": [
+                    {"recipient_key": recipient_key},
+                    {"recipient_key": ""},
+                ]
+            }
+
+        def _query() -> dict[str, Any]:
+            return self._collection.query(
+                query_embeddings=[query_embedding],
+                n_results=k,
+                where=where_clause,
+                include=["metadatas", "documents", "distances"],
+            )
+
+        result = await asyncio.to_thread(_query)
+        ids_list = (result.get("ids") or [[]])[0]
+        metas_list = (result.get("metadatas") or [[]])[0]
+        dists_list = (result.get("distances") or [[]])[0]
+
+        out: list[FewShotQueryResult] = []
+        for sample_id, meta, dist in zip(ids_list, metas_list, dists_list):
+            similarity = max(0.0, 1.0 - float(dist))
+            sample = FewShotSample(
+                id=sample_id,
+                inner_thought=meta.get("inner_thought", ""),
+                corrected_speech=meta.get("corrected_speech", ""),
+                context_summary=meta.get("context_summary", ""),
+                original_speech=meta.get("original_speech") or None,
+                tags=[t for t in meta.get("tags", "").split(",") if t],
+                recipient_key=(meta.get("recipient_key") or None),
+                source=meta.get("source", "seed"),
+                created_at=datetime.fromisoformat(
+                    meta.get("created_at") or datetime.now().isoformat()
+                ),
+            )
+            out.append(FewShotQueryResult(sample=sample, similarity=similarity))
+        return out
+
+    async def count(self) -> int:
+        await self.init()
+
+        def _count():
+            return self._collection.count()
+
+        return await asyncio.to_thread(_count)
