@@ -144,10 +144,15 @@ async def annotate_turn(turn_id: str, body: AnnotateRequest, request: Request):
     from lingxi.fewshot.collector import AnnotationCollector
     from lingxi.fewshot.summarizer import AnnotationSummarizer
 
+    embedder = getattr(getattr(e, "memory", None), "embedding_provider", None) or (
+        e.fewshot_retriever.embedder if getattr(e, "fewshot_retriever", None) else None
+    )
+    if embedder is None:
+        raise HTTPException(503, "no embedding provider available")
     collector = AnnotationCollector(
         annotation_store=e.annotation_store,
         fewshot_store=e.fewshot_store,
-        embedder=e.llm,
+        embedder=embedder,
         summarizer=AnnotationSummarizer(e.llm),
     )
     try:

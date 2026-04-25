@@ -62,10 +62,16 @@ async def _handle_annotation_command(engine, cmd: dict) -> None:
         print("[annotate] 未启用标注闭环")
         return
 
+    embedder = engine.memory.embedding_provider or (
+        engine.fewshot_retriever.embedder if engine.fewshot_retriever else None
+    )
+    if embedder is None:
+        print("[annotate] 没有可用的 embedding provider")
+        return
     collector = AnnotationCollector(
         annotation_store=engine.annotation_store,
         fewshot_store=engine.fewshot_store,
-        embedder=engine.llm,
+        embedder=embedder,
         summarizer=AnnotationSummarizer(engine.llm),
     )
     try:
@@ -496,6 +502,9 @@ async def run_cli() -> None:
                     user_input, channel="cli", recipient_id="local"
                 )
                 print(f"\n{persona_name}: {response}\n")
+                # After printing Aria's reply, append a small turn_id footer
+                if hasattr(engine, "_last_output") and engine._last_output and engine._last_output.turn_id:
+                    print(f"\033[2m[{engine._last_output.turn_id[:8]}]\033[0m")
             except Exception as e:
                 logger.error("chat_error", error=str(e))
                 print(f"\n[错误] {e}\n")
