@@ -737,29 +737,50 @@ class FeishuBot(OutboundChannel):
     async def _send_annotation_followup(self, chat_id: str, turn_id: str) -> None:
         """After a reply, send a small interactive card with 👍/👎/✏️ buttons.
 
-        This is a SEPARATE message, not an update to the reply card — much more
-        reliable than trying to append elements to the streaming card.
+        Uses the legacy Feishu card format (no schema:"2.0") because it's
+        widely supported and the `action` element tag is rock-solid there.
         """
+        # Legacy (v1) interactive card — well-supported with tag:"action"
         card_body = {
-            "schema": "2.0",
-            "body": {
-                "elements": [
-                    {
-                        "tag": "markdown",
+            "config": {"wide_screen_mode": True},
+            "elements": [
+                {
+                    "tag": "div",
+                    "text": {
+                        "tag": "lark_md",
                         "content": f"📝 turn `{turn_id[:8]}`",
                     },
-                    *build_annotation_footer_elements(turn_id),
-                ],
-            },
+                },
+                {
+                    "tag": "action",
+                    "actions": [
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "👍 像"},
+                            "type": "default",
+                            "value": {"action": "annotate_positive", "turn_id": turn_id},
+                        },
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "👎 不像"},
+                            "type": "default",
+                            "value": {"action": "annotate_negative", "turn_id": turn_id},
+                        },
+                        {
+                            "tag": "button",
+                            "text": {"tag": "plain_text", "content": "✏️ 应该说"},
+                            "type": "primary",
+                            "value": {"action": "annotate_correction", "turn_id": turn_id},
+                        },
+                    ],
+                },
+            ],
         }
-        # Strip the leading hr — ugly when it's the card's first decoration
-        elements = card_body["body"]["elements"]
-        card_body["body"]["elements"] = [e for e in elements if e.get("tag") != "hr"]
 
         headers = self.token_mgr.headers()
         try:
             async with httpx.AsyncClient(timeout=30) as http:
-                await http.post(
+                resp = await http.post(
                     f"{FEISHU_BASE}/im/v1/messages",
                     params={"receive_id_type": "chat_id"},
                     headers=headers,
@@ -769,5 +790,11 @@ class FeishuBot(OutboundChannel):
                         "content": json.dumps(card_body, ensure_ascii=False),
                     },
                 )
+                if resp.status_code != 200:
+                    print(f"[feishu] annotation followup HTTP {resp.status_code}: {resp.text[:300]}")
+                    return
+                data = resp.json()
+                if data.get("code") != 0:
+                    print(f"[feishu] annotation followup API error: {data}")
         except Exception as e:
-            print(f"[feishu] annotation followup failed (non-fatal): {e}")
+            print(f"[feishu] annotation followup exception: {e}")
