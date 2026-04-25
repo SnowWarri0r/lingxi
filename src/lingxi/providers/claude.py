@@ -364,11 +364,19 @@ class ClaudeProvider(LLMProvider):
                 # a retry would duplicate it. Raise so caller knows.
                 if content_yielded_this_attempt:
                     raise
+                err_label = f"{type(e).__name__}: {e}".rstrip(": ")
                 if attempts >= MAX_ATTEMPTS:
-                    print(f"[claude] stream transport error, gave up after {attempts}: {e}")
-                    raise
-                print(f"[claude] stream transport error, retry {attempts}/{MAX_ATTEMPTS}: {e}")
+                    print(f"[claude] stream transport error, gave up after {attempts}: {err_label}")
+                    raise RuntimeError(
+                        f"网络/代理异常 ({err_label})，请稍后再试"
+                    ) from e
+                # Backoff so we don't hammer a dead proxy; also gives the
+                # proxy a moment to come back before the next attempt.
+                backoff = 1.0 * attempts  # 1s, 2s
+                print(f"[claude] stream transport error, retry {attempts}/{MAX_ATTEMPTS} in {backoff}s: {err_label}")
                 # Drop the pooled HTTP client so we don't reuse a half-dead conn
                 self._http_client = None
+                import asyncio as _asyncio
+                await _asyncio.sleep(backoff)
                 continue
 
