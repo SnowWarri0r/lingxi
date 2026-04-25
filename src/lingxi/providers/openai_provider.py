@@ -42,7 +42,7 @@ class OpenAIProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         prefill: str = "",
         **kwargs,
     ) -> CompletionResult:
@@ -51,14 +51,17 @@ class OpenAIProvider(LLMProvider):
             msgs.append({"role": "system", "content": system})
         msgs.extend(messages)
 
-        # top_p forwarded if supported; prefill not natively supported by OpenAI chat API
-        response = await self._get_client().chat.completions.create(
+        # top_p forwarded to OpenAI chat.completions.create as a native parameter
+        # prefill not natively supported by OpenAI chat API
+        create_kwargs: dict = dict(
             model=self.model,
             messages=msgs,
             max_tokens=max_tokens,
             temperature=temperature,
-            top_p=top_p,
         )
+        if top_p is not None:
+            create_kwargs["top_p"] = top_p
+        response = await self._get_client().chat.completions.create(**create_kwargs)
 
         choice = response.choices[0]
         return CompletionResult(
@@ -77,7 +80,7 @@ class OpenAIProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         prefill: str = "",
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
@@ -86,15 +89,18 @@ class OpenAIProvider(LLMProvider):
             msgs.append({"role": "system", "content": system})
         msgs.extend(messages)
 
-        # top_p forwarded if supported; prefill not natively supported by OpenAI chat API
-        stream = await self._get_client().chat.completions.create(
+        # top_p forwarded to OpenAI chat.completions.create as a native parameter
+        # prefill not natively supported by OpenAI chat API
+        create_kwargs: dict = dict(
             model=self.model,
             messages=msgs,
             max_tokens=max_tokens,
             temperature=temperature,
-            top_p=top_p,
             stream=True,
         )
+        if top_p is not None:
+            create_kwargs["top_p"] = top_p
+        stream = await self._get_client().chat.completions.create(**create_kwargs)
 
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:

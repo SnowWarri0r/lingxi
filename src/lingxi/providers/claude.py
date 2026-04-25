@@ -139,7 +139,7 @@ class ClaudeProvider(LLMProvider):
         system: str | None,
         max_tokens: int,
         temperature: float,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         prefill: str = "",
     ) -> dict:
         # If prefill is set, append as trailing assistant message (Anthropic pattern)
@@ -152,8 +152,9 @@ class ClaudeProvider(LLMProvider):
             "messages": outgoing_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            "top_p": top_p,
         }
+        if top_p is not None:
+            body["top_p"] = top_p
 
         # Build system with prompt caching:
         # - Long stable prefix (identity + persona) gets cache_control
@@ -192,7 +193,7 @@ class ClaudeProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         prefill: str = "",
         **kwargs,
     ) -> CompletionResult:
@@ -292,7 +293,7 @@ class ClaudeProvider(LLMProvider):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        top_p: float = 1.0,
+        top_p: float | None = None,
         prefill: str = "",
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
