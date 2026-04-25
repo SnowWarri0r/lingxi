@@ -34,17 +34,23 @@ FEISHU_BASE = "https://open.feishu.cn/open-apis"
 
 
 def build_annotation_footer_elements(turn_id: str) -> list[dict]:
-    """Three annotation buttons to append at the bottom of the reply card.
+    """Annotation footer for a reply card.
 
-    CardKit v2 dropped `tag: "action"`; buttons live inside a column_set.
-    Each button carries its annotation kind + turn_id as `behaviors.callback.value`.
+    Layout:
+      ──────────────────────
+      [👍 像]   [👎 不像]
+      [应该说输入框…]  [✏️ 提交修正]
+
+    Quick buttons (👍/👎) fire plain callback events. The correction row
+    lives inside a `form` container so the submit button carries the
+    input's value in `event.action.form_value`.
     """
 
-    def _button(text: str, action_kind: str, button_type: str = "default") -> dict:
+    def _callback_button(text: str, action_kind: str) -> dict:
         return {
             "tag": "button",
             "text": {"tag": "plain_text", "content": text},
-            "type": button_type,
+            "type": "default",
             "width": "default",
             "behaviors": [
                 {
@@ -54,32 +60,84 @@ def build_annotation_footer_elements(turn_id: str) -> list[dict]:
             ],
         }
 
+    quick_actions = {
+        "tag": "column_set",
+        "horizontal_spacing": "small",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [_callback_button("👍 像", "annotate_positive")],
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [_callback_button("👎 不像", "annotate_negative")],
+            },
+        ],
+    }
+
+    correction_form = {
+        "tag": "form",
+        "name": f"correction_form_{turn_id[:8]}",
+        "elements": [
+            {
+                "tag": "column_set",
+                "horizontal_spacing": "small",
+                "columns": [
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 3,
+                        "elements": [
+                            {
+                                "tag": "input",
+                                "name": "correction_text",
+                                "placeholder": {
+                                    "tag": "plain_text",
+                                    "content": "应该说的话…",
+                                },
+                                "max_length": 200,
+                            }
+                        ],
+                    },
+                    {
+                        "tag": "column",
+                        "width": "weighted",
+                        "weight": 1,
+                        "elements": [
+                            {
+                                "tag": "button",
+                                "text": {
+                                    "tag": "plain_text",
+                                    "content": "✏️ 提交修正",
+                                },
+                                "type": "primary",
+                                "width": "default",
+                                "form_action_type": "submit",
+                                "behaviors": [
+                                    {
+                                        "type": "callback",
+                                        "value": {
+                                            "action": "annotate_correction",
+                                            "turn_id": turn_id,
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+
     return [
         {"tag": "hr"},
-        {
-            "tag": "column_set",
-            "horizontal_spacing": "small",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("👍 像", "annotate_positive")],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("👎 不像", "annotate_negative")],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("✏️ 应该说", "annotate_correction", "primary")],
-                },
-            ],
-        },
+        quick_actions,
+        correction_form,
     ]
 
 
@@ -462,23 +520,37 @@ class FeishuBot(OutboundChannel):
         )
 
         try:
-            value = (event.event.action.value or {}) if event.event and event.event.action else {}
+            action_obj = event.event.action if event.event else None
+            value = (action_obj.value or {}) if action_obj else {}
+            form_value = (action_obj.form_value or {}) if action_obj else {}
             action = value.get("action", "")
             turn_id = value.get("turn_id", "")
 
             if not turn_id or not action.startswith("annotate_"):
                 return P2CardActionTriggerResponse({})
 
+            correction: str | None = None
+            if action == "annotate_correction":
+                correction = (form_value.get("correction_text") or "").strip()
+                if not correction:
+                    return P2CardActionTriggerResponse({
+                        "toast": {
+                            "type": "warning",
+                            "content": "先在输入框里写点东西再提交吧",
+                            "i18n": {"zh_cn": "先在输入框里写点东西再提交吧"},
+                        },
+                    })
+
             # Dispatch to annotation in background (handler returns synchronously)
             asyncio.run_coroutine_threadsafe(
-                self._handle_card_annotation(action, turn_id), self._loop,
+                self._handle_card_annotation(action, turn_id, correction), self._loop,
             )
 
             # Show a lightweight toast back to the user
             toast_content = {
                 "annotate_positive": "👍 记下了",
-                "annotate_negative": "👎 记下了，欢迎补充应该说的话",
-                "annotate_correction": "✏️ 收到，稍后请发 `/bad <turn_id> <correction>` 补正（按钮表单尚未接通）",
+                "annotate_negative": "👎 记下了",
+                "annotate_correction": f"✏️ 记下「{correction}」了" if correction else "✏️ 记下了",
             }.get(action, "已记录")
 
             return P2CardActionTriggerResponse({
@@ -492,7 +564,9 @@ class FeishuBot(OutboundChannel):
             print(f"[feishu] card action handler failed: {e}")
             return P2CardActionTriggerResponse({})
 
-    async def _handle_card_annotation(self, action: str, turn_id: str) -> None:
+    async def _handle_card_annotation(
+        self, action: str, turn_id: str, correction: str | None = None
+    ) -> None:
         """Dispatch the annotation action to AnnotationCollector."""
         if self.engine.annotation_store is None or self.engine.fewshot_store is None:
             return
@@ -519,10 +593,8 @@ class FeishuBot(OutboundChannel):
                 await collector.record_positive(turn_id)
             elif action == "annotate_negative":
                 await collector.record_negative(turn_id)
-            elif action == "annotate_correction":
-                # For now just mark negative; correction text needs the form approach
-                # (Feishu card form input is a future enhancement)
-                await collector.record_negative(turn_id)
+            elif action == "annotate_correction" and correction:
+                await collector.record_correction(turn_id, correction)
         except Exception as e:
             print(f"[feishu] annotation dispatch failed: {e}")
 
