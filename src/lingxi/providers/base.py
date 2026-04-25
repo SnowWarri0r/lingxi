@@ -53,6 +53,8 @@ class LLMProvider(ABC):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        top_p: float = 1.0,
+        prefill: str = "",
         **kwargs,
     ) -> CompletionResult:
         """Generate a completion from messages."""
@@ -63,10 +65,14 @@ class LLMProvider(ABC):
         system: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        top_p: float = 1.0,
+        prefill: str = "",
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         """Stream a completion. Default implementation wraps complete()."""
-        result = await self.complete(messages, system, max_tokens, temperature, **kwargs)
+        result = await self.complete(
+            messages, system, max_tokens, temperature, top_p, prefill, **kwargs,
+        )
         yield StreamChunk(content=result.content, is_final=True)
 
     async def embed(self, text: str) -> list[float]:
