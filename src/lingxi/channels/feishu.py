@@ -34,19 +34,20 @@ FEISHU_BASE = "https://open.feishu.cn/open-apis"
 
 
 def build_annotation_footer_elements(turn_id: str) -> list[dict]:
-    """Three annotation buttons to append at the bottom of the reply card.
+    """Annotation footer: 👍/👎 quick callback buttons + ✏️ correction form.
 
-    CardKit v2 `column_set` + `button` elements. Click fires
-    p2.card.action.trigger carrying {action, turn_id} in value.
-    ✏️ prompts the user to reply with /bad <correction> in-chat since
-    CardKit v2's form/input schema hasn't been stable across our tests.
+    Layout (CardKit v2):
+      ──────────────────────
+      [👍 像]   [👎 不像]
+      [应该说输入框…]
+      [✏️ 提交修正]
     """
 
-    def _button(text: str, action_kind: str, button_type: str = "default") -> dict:
+    def _callback_button(text: str, action_kind: str) -> dict:
         return {
             "tag": "button",
             "text": {"tag": "plain_text", "content": text},
-            "type": button_type,
+            "type": "default",
             "width": "default",
             "behaviors": [
                 {
@@ -56,32 +57,63 @@ def build_annotation_footer_elements(turn_id: str) -> list[dict]:
             ],
         }
 
+    quick_row = {
+        "tag": "column_set",
+        "horizontal_spacing": "small",
+        "columns": [
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [_callback_button("👍 像", "annotate_positive")],
+            },
+            {
+                "tag": "column",
+                "width": "weighted",
+                "weight": 1,
+                "elements": [_callback_button("👎 不像", "annotate_negative")],
+            },
+        ],
+    }
+
+    correction_form = {
+        "tag": "form",
+        "name": f"correction_{turn_id[:8]}",
+        "elements": [
+            {
+                "tag": "input",
+                "name": "correction_text",
+                "placeholder": {
+                    "tag": "plain_text",
+                    "content": "应该说的话…",
+                },
+                "max_length": 200,
+                "width": "fill",
+            },
+            {
+                "tag": "button",
+                "name": f"submit_correction_{turn_id[:8]}",
+                "text": {"tag": "plain_text", "content": "✏️ 提交修正"},
+                "type": "primary",
+                "width": "default",
+                "form_action_type": "submit",
+                "behaviors": [
+                    {
+                        "type": "callback",
+                        "value": {
+                            "action": "annotate_correction",
+                            "turn_id": turn_id,
+                        },
+                    }
+                ],
+            },
+        ],
+    }
+
     return [
         {"tag": "hr"},
-        {
-            "tag": "column_set",
-            "horizontal_spacing": "small",
-            "columns": [
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("👍 像", "annotate_positive")],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("👎 不像", "annotate_negative")],
-                },
-                {
-                    "tag": "column",
-                    "width": "weighted",
-                    "weight": 1,
-                    "elements": [_button("✏️ 应该说", "annotate_correction", "primary")],
-                },
-            ],
-        },
+        quick_row,
+        correction_form,
     ]
 
 
@@ -475,26 +507,29 @@ class FeishuBot(OutboundChannel):
             if not turn_id or not action.startswith("annotate_"):
                 return P2CardActionTriggerResponse({})
 
-            # ✏️ 应该说 — no form yet, direct the user to use /bad slash command
+            correction: str | None = None
             if action == "annotate_correction":
-                tip = f"在下方回复 `/bad {turn_id[:8]} 应该说的话` 来提交修正"
-                return P2CardActionTriggerResponse({
-                    "toast": {
-                        "type": "info",
-                        "content": tip,
-                        "i18n": {"zh_cn": tip},
-                    },
-                })
+                correction = (form_value.get("correction_text") or "").strip()
+                if not correction:
+                    tip = "先在输入框里写点东西再提交吧"
+                    return P2CardActionTriggerResponse({
+                        "toast": {
+                            "type": "warning",
+                            "content": tip,
+                            "i18n": {"zh_cn": tip},
+                        },
+                    })
 
             # Dispatch to annotation in background (handler returns synchronously)
             asyncio.run_coroutine_threadsafe(
-                self._handle_card_annotation(action, turn_id, None), self._loop,
+                self._handle_card_annotation(action, turn_id, correction), self._loop,
             )
 
             # Show a lightweight toast back to the user
             toast_content = {
                 "annotate_positive": "👍 记下了",
                 "annotate_negative": "👎 记下了",
+                "annotate_correction": f"✏️ 记下「{correction}」了" if correction else "✏️ 记下了",
             }.get(action, "已记录")
 
             print(f"[feishu] returning toast: {toast_content}", flush=True)
@@ -530,6 +565,7 @@ class FeishuBot(OutboundChannel):
             print(f"[feishu] skip: no embedder available (need ARK_API_KEY for fewshot pool)", flush=True)
             return
 
+        print(f"[feishu] collector ready, embedder={type(embedder).__name__}", flush=True)
         collector = AnnotationCollector(
             annotation_store=self.engine.annotation_store,
             fewshot_store=self.engine.fewshot_store,
@@ -539,10 +575,13 @@ class FeishuBot(OutboundChannel):
 
         try:
             if action == "annotate_positive":
+                print(f"[feishu] calling record_positive", flush=True)
                 await collector.record_positive(turn_id)
             elif action == "annotate_negative":
+                print(f"[feishu] calling record_negative", flush=True)
                 await collector.record_negative(turn_id)
             elif action == "annotate_correction" and correction:
+                print(f"[feishu] calling record_correction", flush=True)
                 await collector.record_correction(turn_id, correction)
             print(f"[feishu] annotation recorded: {action}", flush=True)
         except Exception as e:
