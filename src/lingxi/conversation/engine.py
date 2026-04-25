@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import re
 import uuid
 from dataclasses import dataclass
@@ -514,6 +513,10 @@ class ConversationEngine:
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
+
+        # Surface turn_id so annotation UIs can reference this turn
+        if output.turn_id:
+            yield StreamEvent("turn_id", output.turn_id)
 
         # Emit structured events from parsed metadata
         if output.expression:

@@ -113,3 +113,23 @@ async def test_turn_id_populated(persona, memory):
     engine = ConversationEngine(persona=persona, llm_provider=llm, memory_manager=memory)
     output = await engine.chat_full("hi", channel="cli", recipient_id="tester")
     assert output.turn_id and len(output.turn_id) > 0
+
+
+async def test_stream_events_surfaces_turn_id(persona, memory):
+    llm = FakeLLM()
+    engine = ConversationEngine(persona=persona, llm_provider=llm, memory_manager=memory)
+
+    events = []
+    async for event in engine.chat_stream_events("hi", channel="cli", recipient_id="tester"):
+        events.append((event.type, event.content))
+
+    turn_id_events = [e for e in events if e[0] == "turn_id"]
+    assert len(turn_id_events) == 1
+    tid = turn_id_events[0][1]
+    # Validate UUID format
+    import uuid as _uuid
+    _uuid.UUID(tid)  # raises ValueError if not a valid UUID
+
+    # turn_id event must come before done event
+    type_order = [e[0] for e in events]
+    assert type_order.index("turn_id") < type_order.index("done")
