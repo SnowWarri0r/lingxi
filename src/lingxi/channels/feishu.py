@@ -176,33 +176,9 @@ class StreamingCardSender:
             json={"content": text, "sequence": self._seq},
         )
 
-    async def finish(self, footer_elements: list[dict] | None = None) -> None:
+    async def finish(self) -> None:
         if not self._card_id:
             return
-
-        if footer_elements:
-            # Append footer elements (hr + action buttons) before disabling streaming.
-            # Use the CardKit batch-update element endpoint to add each element.
-            # We send a full-card update to append footer to the body elements.
-            self._seq += 1
-            headers = self._token_mgr.headers()
-            try:
-                await self._http.put(
-                    f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/elements/batch_update",
-                    headers=headers,
-                    json={
-                        "sequence": self._seq,
-                        "operations": [
-                            {
-                                "action": "append",
-                                "element": json.dumps(el, ensure_ascii=False),
-                            }
-                            for el in footer_elements
-                        ],
-                    },
-                )
-            except Exception as e:
-                print(f"[feishu] footer append failed (non-fatal): {e}")
 
         self._seq += 1
         headers = self._token_mgr.headers()
@@ -328,17 +304,9 @@ class FeishuBot(OutboundChannel):
         handler = (
             lark.EventDispatcherHandler.builder("", "")
             .register_p2_im_message_receive_v1(self._on_message)
+            .register_p2_card_action_trigger(self._on_card_action)
             .build()
         )
-        # TODO(task-14-follow-up): Wire card action callback (button clicks → annotation)
-        # Feishu sends card.action.trigger events as HTTP POST to a configured callback URL,
-        # NOT via the WebSocket connection.  To handle 👍/👎/✏️ button clicks:
-        #   1. Expose a FastAPI endpoint POST /feishu/card_action (or reuse the Web API app)
-        #   2. Use lark.CardActionHandler.builder("", "").register(self._on_card_action).build()
-        #   3. Route incoming HTTP requests to that handler
-        #   4. In _on_card_action, read card.action.value["action"] and card.action.value["turn_id"]
-        #      then dispatch to engine.annotation_store / AnnotationCollector
-        # Until then, users can annotate via CLI :good/:bad or POST /turns/{id}/annotate.
 
         # Build WebSocket client
         ws_client = lark.ws.Client(
@@ -441,6 +409,77 @@ class FeishuBot(OutboundChannel):
             self._handle_reply_safe(chat_id, text, image_keys, msg_id),
             self._loop,
         )
+
+    def _on_card_action(self, event) -> None:
+        """Handle 👍/👎/✏️ button clicks from annotation cards."""
+        from lark_oapi.event.callback.model.p2_card_action_trigger import (
+            P2CardActionTriggerResponse,
+        )
+
+        try:
+            value = (event.event.action.value or {}) if event.event and event.event.action else {}
+            action = value.get("action", "")
+            turn_id = value.get("turn_id", "")
+
+            if not turn_id or not action.startswith("annotate_"):
+                return P2CardActionTriggerResponse({})
+
+            # Dispatch to annotation in background (handler returns synchronously)
+            asyncio.run_coroutine_threadsafe(
+                self._handle_card_annotation(action, turn_id), self._loop,
+            )
+
+            # Show a lightweight toast back to the user
+            toast_content = {
+                "annotate_positive": "👍 记下了",
+                "annotate_negative": "👎 记下了，欢迎补充应该说的话",
+                "annotate_correction": "✏️ 收到，稍后请发 `/bad <turn_id> <correction>` 补正（按钮表单尚未接通）",
+            }.get(action, "已记录")
+
+            return P2CardActionTriggerResponse({
+                "toast": {
+                    "type": "info",
+                    "content": toast_content,
+                    "i18n": {"zh_cn": toast_content},
+                },
+            })
+        except Exception as e:
+            print(f"[feishu] card action handler failed: {e}")
+            return P2CardActionTriggerResponse({})
+
+    async def _handle_card_annotation(self, action: str, turn_id: str) -> None:
+        """Dispatch the annotation action to AnnotationCollector."""
+        if self.engine.annotation_store is None or self.engine.fewshot_store is None:
+            return
+
+        from lingxi.fewshot.collector import AnnotationCollector
+        from lingxi.fewshot.summarizer import AnnotationSummarizer
+
+        embedder = self.engine.memory.embedding_provider or (
+            self.engine.fewshot_retriever.embedder
+            if self.engine.fewshot_retriever else None
+        )
+        if embedder is None:
+            return
+
+        collector = AnnotationCollector(
+            annotation_store=self.engine.annotation_store,
+            fewshot_store=self.engine.fewshot_store,
+            embedder=embedder,
+            summarizer=AnnotationSummarizer(self.engine.llm),
+        )
+
+        try:
+            if action == "annotate_positive":
+                await collector.record_positive(turn_id)
+            elif action == "annotate_negative":
+                await collector.record_negative(turn_id)
+            elif action == "annotate_correction":
+                # For now just mark negative; correction text needs the form approach
+                # (Feishu card form input is a future enhancement)
+                await collector.record_negative(turn_id)
+        except Exception as e:
+            print(f"[feishu] annotation dispatch failed: {e}")
 
     async def _handle_reply_safe(
         self,
@@ -685,9 +724,50 @@ class FeishuBot(OutboundChannel):
                     except Exception:
                         pass
 
-            # Append annotation footer buttons when turn_id is available
-            footer = build_annotation_footer_elements(turn_id) if turn_id else None
+            # Finish the streaming card without footer buttons (unreliable)
             try:
-                await card.finish(footer_elements=footer)
+                await card.finish()
             except Exception:
                 pass
+
+        # Send a separate followup card carrying the annotation buttons
+        if turn_id:
+            await self._send_annotation_followup(chat_id, turn_id)
+
+    async def _send_annotation_followup(self, chat_id: str, turn_id: str) -> None:
+        """After a reply, send a small interactive card with 👍/👎/✏️ buttons.
+
+        This is a SEPARATE message, not an update to the reply card — much more
+        reliable than trying to append elements to the streaming card.
+        """
+        card_body = {
+            "schema": "2.0",
+            "body": {
+                "elements": [
+                    {
+                        "tag": "markdown",
+                        "content": f"📝 turn `{turn_id[:8]}`",
+                    },
+                    *build_annotation_footer_elements(turn_id),
+                ],
+            },
+        }
+        # Strip the leading hr — ugly when it's the card's first decoration
+        elements = card_body["body"]["elements"]
+        card_body["body"]["elements"] = [e for e in elements if e.get("tag") != "hr"]
+
+        headers = self.token_mgr.headers()
+        try:
+            async with httpx.AsyncClient(timeout=30) as http:
+                await http.post(
+                    f"{FEISHU_BASE}/im/v1/messages",
+                    params={"receive_id_type": "chat_id"},
+                    headers=headers,
+                    json={
+                        "receive_id": chat_id,
+                        "msg_type": "interactive",
+                        "content": json.dumps(card_body, ensure_ascii=False),
+                    },
+                )
+        except Exception as e:
+            print(f"[feishu] annotation followup failed (non-fatal): {e}")
