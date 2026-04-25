@@ -36,8 +36,13 @@ class PromptBuilder:
         inner_state: InnerState | None = None,
         subjective_view: SubjectiveView | None = None,
         pending_agenda: list[AgendaItem] | None = None,
+        biography_hits: list | None = None,
     ) -> str:
-        """Build a complete system prompt combining persona, memory, and plan state."""
+        """Build a complete system prompt combining persona, memory, and plan state.
+
+        biography_hits: LifeEvents retrieved for the current turn, injected as
+        "你过去经历过的事" so the persona can naturally share personal history.
+        """
         sections = [
             self._build_format_preamble(),
             self._build_identity_section(),
@@ -58,6 +63,9 @@ class PromptBuilder:
             self._build_emotional_section(current_mood, emotion_state),
             self._build_relationship_section(relationship_level),
         ])
+
+        if biography_hits:
+            sections.append(self._build_biography_section(biography_hits))
 
         if subjective_view is not None:
             from lingxi.inner_life.subjective import SubjectiveLayer
@@ -111,6 +119,24 @@ class PromptBuilder:
             "'你在做什么'。"
         )
 
+        return "\n".join(lines)
+
+    def _build_biography_section(self, events: list) -> str:
+        """Inject retrieved past events so responses can draw on personal history."""
+        lines = [
+            "## 📖 你过去经历过的事（和当前话题有关，可以自然提起）",
+        ]
+        for e in events:
+            # LifeEvent has .age, .content, .tags
+            age = getattr(e, "age", None)
+            content = getattr(e, "content", str(e))
+            prefix = f"{age}岁时：" if age is not None else "你记得："
+            lines.append(f"- {prefix}{content}")
+        lines.append(
+            "\n如果对方说的让你想起这里面某件事，**可以自然地"
+            "'我也有过……'/'我以前……'聊聊自己**，不用憋成一问一答。"
+            "分享时像朋友讲自己的事，短句+细节就行，别写成散文。"
+        )
         return "\n".join(lines)
 
     def _build_agenda_section(self, items: list[AgendaItem]) -> str:

@@ -110,6 +110,11 @@ class ConversationEngine:
         self.fewshot_retriever = fewshot_retriever
         self._recent_inner_thoughts: dict[str, str] = {}
 
+        # Biography retriever is set up after construction via bootstrap_biography()
+        # because embedding the events requires an embedder to be available first.
+        self.biography_retriever: "BiographyRetriever | None" = None
+        self._last_biography_hit: bool = False
+
         # Initialize
         self.memory.set_llm_provider(llm_provider)
         self.planner.initialize_goals()
@@ -205,6 +210,19 @@ class ConversationEngine:
                 except Exception:
                     pass
 
+        # Retrieve biographical events relevant to the current turn.
+        # Query: user input (most directly topical); later we could also
+        # fold in the previous inner_thought for continuity.
+        biography_hits: list = []
+        if self.biography_retriever is not None and user_input.strip():
+            try:
+                biography_hits = await self.biography_retriever.retrieve(
+                    query=user_input, k=3, threshold=0.55,
+                )
+            except Exception:
+                biography_hits = []
+        self._last_biography_hit = bool(biography_hits)
+
         system_prompt = self.prompt_builder.build_system_prompt(
             memory_context=memory_context,
             active_plans=self.planner.active_plans if self.planner else None,
@@ -216,6 +234,7 @@ class ConversationEngine:
             inner_state=inner_state,
             subjective_view=subjective_view,
             pending_agenda=pending_agenda,
+            biography_hits=biography_hits,
         )
         if proactive_nudge:
             system_prompt += f"\n\n## 当前内心活动{proactive_nudge}"
@@ -265,9 +284,18 @@ class ConversationEngine:
         few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
 
         # Attach style preamble to the last user message
+        # When biography hit: relax the length cap so Aria can actually
+        # share a personal anecdote ("我也有过xxx...") instead of being
+        # forced back into one-liner mode.
+        effective_style = self.persona.style
+        if self._last_biography_hit:
+            effective_style = effective_style.model_copy(
+                update={"speech_max_chars": max(120, effective_style.speech_max_chars)},
+            )
         style_preamble = build_style_preamble(
-            self.persona.style,
+            effective_style,
             voice_hint=self._persona_voice_hint(),
+            biography_hit=self._last_biography_hit,
         )
         self._apply_style_preamble(messages, style_preamble)
 
@@ -735,6 +763,26 @@ class ConversationEngine:
             )
         if self.interaction_tracker:
             await self.interaction_tracker.load()
+
+    async def bootstrap_biography(self) -> int:
+        """Initialize the biography retriever by embedding all life_events.
+
+        Returns the number of events embedded (0 if biography empty or
+        no embedder available).
+        """
+        events = self.persona.biography.life_events
+        if not events:
+            return 0
+        embedder = self.memory.embedding_provider or (
+            self.fewshot_retriever.embedder if self.fewshot_retriever else None
+        )
+        if embedder is None:
+            return 0
+        from lingxi.persona.biography_retriever import BiographyRetriever
+
+        self.biography_retriever = BiographyRetriever(events=list(events), embedder=embedder)
+        await self.biography_retriever.bootstrap()
+        return len(events)
 
     async def bootstrap_fewshot_seeds(
         self,

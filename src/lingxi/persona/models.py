@@ -205,6 +205,29 @@ class Relationship(BaseModel):
     intimacy_levels: list[IntimacyLevel] = Field(default_factory=list)
 
 
+class LifeEvent(BaseModel):
+    """A single past event/memory from the persona's life."""
+
+    age: int = Field(ge=0, le=150)
+    content: str
+    tags: list[str] = Field(default_factory=list)
+
+
+class RecurringPerson(BaseModel):
+    """A person who recurs in the persona's life (family, close friend, mentor)."""
+
+    name: str
+    relation: str  # one-liner: "教我认星座的人，去年因癌症离世"
+
+
+class Biography(BaseModel):
+    """Past life material — referenced by retrieval, not always injected."""
+
+    life_events: list[LifeEvent] = Field(default_factory=list)
+    recurring_people: list[RecurringPerson] = Field(default_factory=list)
+    motifs: list[str] = Field(default_factory=list)  # recurring images / objects
+
+
 class PersonaConfig(BaseModel):
     """Root configuration for a virtual persona."""
 
@@ -218,3 +241,4 @@ class PersonaConfig(BaseModel):
     relationship: Relationship = Field(default_factory=Relationship)
     style: StyleConfig = Field(default_factory=StyleConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
+    biography: Biography = Field(default_factory=Biography)
