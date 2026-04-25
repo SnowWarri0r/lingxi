@@ -10,10 +10,14 @@ def main() -> None:
     """Start the Feishu bot with WebSocket long connection."""
     import os
 
+    # Load .env before checking env vars so local dev doesn't need export
+    from dotenv import load_dotenv
+    load_dotenv()
+
     if not os.environ.get("FEISHU_APP_ID"):
-        print("需要设置环境变量:")
-        print("  export FEISHU_APP_ID=cli_xxxxx")
-        print("  export FEISHU_APP_SECRET=xxxxx")
+        print("需要设置环境变量（在 .env 文件里或 shell export）:")
+        print("  FEISHU_APP_ID=cli_xxxxx")
+        print("  FEISHU_APP_SECRET=xxxxx")
         sys.exit(1)
 
     from lingxi.utils.logging import setup_logging
