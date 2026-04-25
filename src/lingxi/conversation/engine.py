@@ -17,7 +17,7 @@ from lingxi.conversation.prompt_assembly import (
     pick_prefill,
     render_fewshots_as_messages,
 )
-from lingxi.fewshot.models import FewShotSample
+from lingxi.fewshot.models import AnnotationTurn, FewShotSample
 from lingxi.fewshot.seeds_loader import load_seeds
 from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
@@ -403,6 +403,21 @@ class ConversationEngine:
 
         output = self._process_response(result.content)
         output.turn_id = str(uuid.uuid4())
+
+        # Persist AnnotationTurn so the user can annotate later
+        if self.annotation_store is not None and channel and recipient_id:
+            try:
+                await self.annotation_store.record(AnnotationTurn(
+                    turn_id=output.turn_id,
+                    recipient_key=f"{channel}:{recipient_id}",
+                    user_message=user_input,
+                    inner_thought=output.inner_thought,
+                    speech=output.speech,
+                ))
+            except Exception:
+                # Don't let storage errors break the chat
+                pass
+
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
@@ -436,6 +451,21 @@ class ConversationEngine:
 
         output = self._process_response(full_response)
         output.turn_id = str(uuid.uuid4())
+
+        # Persist AnnotationTurn so the user can annotate later
+        if self.annotation_store is not None and channel and recipient_id:
+            try:
+                await self.annotation_store.record(AnnotationTurn(
+                    turn_id=output.turn_id,
+                    recipient_key=f"{channel}:{recipient_id}",
+                    user_message=user_input,
+                    inner_thought=output.inner_thought,
+                    speech=output.speech,
+                ))
+            except Exception:
+                # Don't let storage errors break the chat
+                pass
+
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
@@ -518,6 +548,21 @@ class ConversationEngine:
         # Parse full response, apply state changes
         output = self._process_response(full_response)
         output.turn_id = str(uuid.uuid4())
+
+        # Persist AnnotationTurn so the user can annotate later
+        if self.annotation_store is not None and channel and recipient_id:
+            try:
+                await self.annotation_store.record(AnnotationTurn(
+                    turn_id=output.turn_id,
+                    recipient_key=f"{channel}:{recipient_id}",
+                    user_message=user_input,
+                    inner_thought=output.inner_thought,
+                    speech=output.speech,
+                ))
+            except Exception:
+                # Don't let storage errors break the chat
+                pass
+
         self._last_response_text = output.speech
         self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
