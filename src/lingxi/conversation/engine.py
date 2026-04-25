@@ -18,6 +18,7 @@ from lingxi.conversation.prompt_assembly import (
     render_fewshots_as_messages,
 )
 from lingxi.fewshot.models import AnnotationTurn, FewShotSample
+from lingxi.fewshot.retriever import FewShotRetriever
 from lingxi.fewshot.seeds_loader import load_seeds
 from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
@@ -78,6 +79,7 @@ class ConversationEngine:
         subjective_layer=None,
         fewshot_store: FewShotStore | None = None,
         annotation_store: AnnotationStore | None = None,
+        fewshot_retriever: FewShotRetriever | None = None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -105,6 +107,8 @@ class ConversationEngine:
 
         self.fewshot_store = fewshot_store
         self.annotation_store = annotation_store
+        self.fewshot_retriever = fewshot_retriever
+        self._recent_inner_thoughts: dict[str, str] = {}
 
         # Initialize
         self.memory.set_llm_provider(llm_provider)
@@ -240,10 +244,22 @@ class ConversationEngine:
             else:
                 messages.append({"role": "user", "content": blocks})
 
-        # --- Single-call combo (Phase 0) ---
-        # Prepend hardcoded seed few-shots before history.
-        # Task 16 will swap these out for retriever results.
-        seed_fewshots = self._phase0_seed_fewshots()
+        # --- Dynamic few-shot (Task 16) ---
+        # If a retriever is wired, pull top-k samples. Fall back to hardcoded
+        # Phase 0 seeds if retrieval is unavailable or yields nothing.
+        seed_fewshots: list[FewShotSample] = []
+        if self.fewshot_retriever is not None:
+            try:
+                query_text = self._last_inner_thought_for(recipient_key) or user_input
+                seed_fewshots = await self.fewshot_retriever.retrieve(
+                    query_text=query_text,
+                    recipient_key=recipient_key,
+                    k=6,
+                )
+            except Exception:
+                seed_fewshots = []
+        if not seed_fewshots:
+            seed_fewshots = self._phase0_seed_fewshots()
         few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
 
         # Attach style preamble to the last user message
@@ -286,6 +302,16 @@ class ConversationEngine:
                 source="seed",
             ),
         ]
+
+    def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
+        """Cheapest signal for the retriever: the previous turn's inner_thought.
+
+        Kept in-memory on the engine — no persistence needed since it's only
+        used to build the next prompt.
+        """
+        if recipient_key is None:
+            return None
+        return self._recent_inner_thoughts.get(recipient_key)
 
     def _apply_style_preamble(self, messages: list[dict], preamble: str) -> None:
         """Prepend the preamble to the last user message's text.
@@ -594,6 +620,10 @@ class ConversationEngine:
         import asyncio
 
         output = parse_turn_output(raw)
+
+        # Cache inner_thought for next turn's retrieval query
+        if self._current_recipient_key and output.inner_thought:
+            self._recent_inner_thoughts[self._current_recipient_key] = output.inner_thought
 
         # Apply memory writes (scoped to current recipient)
         for content in output.memory_writes:
