@@ -61,10 +61,19 @@ class TestBuildStylePreamble:
         pre = build_style_preamble(cfg)
         assert "据说" in pre
 
-    def test_wraps_user_message(self):
+    def test_ends_with_double_newline(self):
+        """Preamble must end with \\n\\n so engine can concat with user message directly."""
         pre = build_style_preamble(StyleConfig())
-        wrapped = pre + "\n\n你今天吃啥"
-        assert "你今天吃啥" in wrapped
+        assert pre.endswith("\n\n")
+
+    def test_engine_concat_produces_clean_separation(self):
+        """Simulate engine concatenation (no extra newlines added by caller)."""
+        pre = build_style_preamble(StyleConfig())
+        wrapped = pre + "你今天吃啥"
+        # User message immediately follows preamble
+        assert wrapped.index("你今天吃啥") == len(pre)
+        # And the style block is still at the start
+        assert wrapped.startswith("[style:")
 
 
 class TestPickPrefill:
