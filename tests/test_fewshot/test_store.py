@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from lingxi.fewshot.models import AnnotationTurn
+from lingxi.fewshot.models import AnnotationKind, AnnotationTurn, FewShotSample
 from lingxi.fewshot.store import AnnotationStore
 
 
@@ -71,3 +71,75 @@ async def test_cleanup_unannotated_old_turns(tmp_store, tmp_path):
     assert deleted == 1
     assert await tmp_store.get_turn("new") is not None
     assert await tmp_store.get_turn("old") is None
+
+
+import numpy as np
+
+from lingxi.fewshot.store import FewShotStore
+
+
+def _fake_embed(text: str, dim: int = 16) -> list[float]:
+    rng = np.random.default_rng(abs(hash(text)) % (2**32))
+    v = rng.normal(size=dim)
+    v = v / np.linalg.norm(v)
+    return v.tolist()
+
+
+@pytest.fixture
+async def fewshot_store(tmp_path):
+    store = FewShotStore(data_dir=tmp_path, embedding_dim=16)
+    await store.init()
+    return store
+
+
+async def test_add_and_query(fewshot_store):
+    s = FewShotSample(
+        id="s1", inner_thought="想喝咖啡", corrected_speech="去买一杯",
+        context_summary="上午犯困", source="seed",
+    )
+    await fewshot_store.add(s, embedding=_fake_embed(s.inner_thought, 16))
+
+    results = await fewshot_store.query(
+        query_embedding=_fake_embed("想喝咖啡", 16),
+        k=3,
+    )
+    assert len(results) == 1
+    assert results[0].sample.id == "s1"
+
+
+async def test_backup_jsonl_written(fewshot_store, tmp_path):
+    s = FewShotSample(
+        id="s2", inner_thought="x", corrected_speech="y",
+        context_summary="z", source="seed",
+    )
+    await fewshot_store.add(s, embedding=_fake_embed(s.inner_thought, 16))
+    backup = tmp_path / "fewshot" / "samples.jsonl"
+    assert backup.exists()
+    assert "s2" in backup.read_text(encoding="utf-8")
+
+
+async def test_recipient_filter(fewshot_store):
+    alice = FewShotSample(
+        id="a", inner_thought="t", corrected_speech="a1",
+        context_summary="c", recipient_key="cli:alice", source="positive",
+    )
+    bob = FewShotSample(
+        id="b", inner_thought="t", corrected_speech="b1",
+        context_summary="c", recipient_key="cli:bob", source="positive",
+    )
+    glob = FewShotSample(
+        id="g", inner_thought="t", corrected_speech="g1",
+        context_summary="c", recipient_key=None, source="seed",
+    )
+    for s in (alice, bob, glob):
+        await fewshot_store.add(s, embedding=_fake_embed(s.id, 16))
+
+    results = await fewshot_store.query(
+        query_embedding=_fake_embed("t", 16),
+        k=10,
+        recipient_key="cli:alice",
+    )
+    ids = {r.sample.id for r in results}
+    assert "a" in ids
+    assert "g" in ids
+    assert "b" not in ids
