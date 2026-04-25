@@ -16,11 +16,18 @@ from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.web.server import create_app
 
 
+class FakeMemory:
+    def __init__(self, embedding_provider):
+        self.embedding_provider = embedding_provider
+
+
 class FakeEngine:
     def __init__(self, ann_store, few_store, llm):
         self.annotation_store = ann_store
         self.fewshot_store = few_store
         self.llm = llm
+        self.memory = FakeMemory(embedding_provider=llm)
+        self.fewshot_retriever = None
 
 
 class FakeLLM:

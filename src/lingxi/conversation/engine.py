@@ -245,21 +245,23 @@ class ConversationEngine:
                 messages.append({"role": "user", "content": blocks})
 
         # --- Dynamic few-shot (Task 16) ---
-        # If a retriever is wired, pull top-k samples. Fall back to hardcoded
-        # Phase 0 seeds if retrieval is unavailable or yields nothing.
-        seed_fewshots: list[FewShotSample] = []
+        # Spec §6.3: always anchor with seeds as baseline, then suffix with
+        # retrieved user_correction/positive samples in the "most recent"
+        # position for strongest LLM imitation.
+        baseline_seeds = self._phase0_seed_fewshots()[:3]  # anchor
+        retrieved: list[FewShotSample] = []
         if self.fewshot_retriever is not None:
             try:
                 query_text = self._last_inner_thought_for(recipient_key) or user_input
-                seed_fewshots = await self.fewshot_retriever.retrieve(
+                retrieved = await self.fewshot_retriever.retrieve(
                     query_text=query_text,
                     recipient_key=recipient_key,
-                    k=6,
+                    k=3,
                 )
             except Exception:
-                seed_fewshots = []
-        if not seed_fewshots:
-            seed_fewshots = self._phase0_seed_fewshots()
+                retrieved = []
+        # Seeds first (baseline), retrieved last (recency = strongest signal)
+        seed_fewshots = baseline_seeds + retrieved
         few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
 
         # Attach style preamble to the last user message
