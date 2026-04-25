@@ -190,6 +190,21 @@ async def create_engine(
     agenda_engine = AgendaEngine(inner_life_store)
     subjective_layer = SubjectiveLayer(inner_life_store)
 
+    # Fewshot pool: FewShotStore + AnnotationStore + FewShotRetriever
+    from lingxi.fewshot.retriever import FewShotRetriever
+    from lingxi.fewshot.store import AnnotationStore, FewShotStore
+
+    fewshot_store = None
+    annotation_store = None
+    fewshot_retriever = None
+    if embedding_dim is not None and embedding_dim > 0 and embedding_provider is not None:
+        fewshot_dir = Path(data_dir).parent / "fewshot"
+        fewshot_dir.mkdir(parents=True, exist_ok=True)
+        fewshot_store = FewShotStore(data_dir=fewshot_dir, embedding_dim=embedding_dim)
+        await fewshot_store.init()
+        annotation_store = AnnotationStore(data_dir=fewshot_dir)
+        fewshot_retriever = FewShotRetriever(store=fewshot_store, embedder=embedding_provider)
+
     # Create engine
     engine = ConversationEngine(
         persona=persona,
@@ -200,10 +215,28 @@ async def create_engine(
         agenda_engine=agenda_engine,
         subjective_layer=subjective_layer,
         interaction_tracker=interaction_tracker,
+        fewshot_store=fewshot_store,
+        annotation_store=annotation_store,
+        fewshot_retriever=fewshot_retriever,
     )
 
     # Load persisted state
     await engine.load_state()
+
+    # Bootstrap fewshot seeds (idempotent — skips already-stored samples)
+    if fewshot_store is not None:
+        added = await engine.bootstrap_fewshot_seeds()
+        if added:
+            print(f"[fewshot] bootstrapped {added} seeds")
+
+    # Task 18: startup cleanup of stale annotation turns
+    if annotation_store is not None:
+        deleted = await annotation_store.cleanup(
+            max_age_unannotated_days=30,
+            max_age_annotated_days=7,
+        )
+        if deleted:
+            print(f"[annotation] cleaned up {deleted} old turn files")
 
     return engine
 
