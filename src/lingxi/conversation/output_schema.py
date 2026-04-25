@@ -32,6 +32,8 @@ META_DELIMITER = "===META==="
 class TurnOutput(BaseModel):
     """All parallel outputs from a single conversation turn."""
 
+    turn_id: str = ""
+
     # Spoken content (what text channels render)
     speech: str = ""
 
