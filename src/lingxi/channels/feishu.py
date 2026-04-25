@@ -32,6 +32,42 @@ from lingxi.temporal.reflection import ReflectionConfig, ReflectionLoop
 
 FEISHU_BASE = "https://open.feishu.cn/open-apis"
 
+
+def build_annotation_footer_elements(turn_id: str) -> list[dict]:
+    """Three annotation buttons to append at the bottom of the reply card.
+
+    👍 像 → positive
+    👎 不像 → negative
+    ✏️ 应该说 → opens a form for correction (stub — user can use /bad in CLI or POST API)
+    """
+    return [
+        {"tag": "hr"},
+        {
+            "tag": "action",
+            "actions": [
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "👍 像"},
+                    "type": "default",
+                    "value": {"action": "annotate_positive", "turn_id": turn_id},
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "👎 不像"},
+                    "type": "default",
+                    "value": {"action": "annotate_negative", "turn_id": turn_id},
+                },
+                {
+                    "tag": "button",
+                    "text": {"tag": "plain_text", "content": "✏️ 应该说"},
+                    "type": "primary",
+                    "value": {"action": "annotate_correction", "turn_id": turn_id},
+                },
+            ],
+        },
+    ]
+
+
 _CARD_STREAMING_CONFIG = {
     "schema": "2.0",
     "config": {
@@ -140,9 +176,34 @@ class StreamingCardSender:
             json={"content": text, "sequence": self._seq},
         )
 
-    async def finish(self) -> None:
+    async def finish(self, footer_elements: list[dict] | None = None) -> None:
         if not self._card_id:
             return
+
+        if footer_elements:
+            # Append footer elements (hr + action buttons) before disabling streaming.
+            # Use the CardKit batch-update element endpoint to add each element.
+            # We send a full-card update to append footer to the body elements.
+            self._seq += 1
+            headers = self._token_mgr.headers()
+            try:
+                await self._http.put(
+                    f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/elements/batch_update",
+                    headers=headers,
+                    json={
+                        "sequence": self._seq,
+                        "operations": [
+                            {
+                                "action": "append",
+                                "element": json.dumps(el, ensure_ascii=False),
+                            }
+                            for el in footer_elements
+                        ],
+                    },
+                )
+            except Exception as e:
+                print(f"[feishu] footer append failed (non-fatal): {e}")
+
         self._seq += 1
         headers = self._token_mgr.headers()
         await self._http.patch(
@@ -269,6 +330,15 @@ class FeishuBot(OutboundChannel):
             .register_p2_im_message_receive_v1(self._on_message)
             .build()
         )
+        # TODO(task-14-follow-up): Wire card action callback (button clicks → annotation)
+        # Feishu sends card.action.trigger events as HTTP POST to a configured callback URL,
+        # NOT via the WebSocket connection.  To handle 👍/👎/✏️ button clicks:
+        #   1. Expose a FastAPI endpoint POST /feishu/card_action (or reuse the Web API app)
+        #   2. Use lark.CardActionHandler.builder("", "").register(self._on_card_action).build()
+        #   3. Route incoming HTTP requests to that handler
+        #   4. In _on_card_action, read card.action.value["action"] and card.action.value["turn_id"]
+        #      then dispatch to engine.annotation_store / AnnotationCollector
+        # Until then, users can annotate via CLI :good/:bad or POST /turns/{id}/annotate.
 
         # Build WebSocket client
         ws_client = lark.ws.Client(
@@ -479,6 +549,7 @@ class FeishuBot(OutboundChannel):
                 "/memories <关键词> - 搜索记忆\n"
                 "/entities - 实体图谱\n"
                 "/episodes - 最近session摘要\n"
+                "/reveal <turn_id> - 查看 Aria 当时的内心独白\n"
                 "/forget - 清空我的记忆（慎用）"
             )
 
@@ -557,6 +628,17 @@ class FeishuBot(OutboundChannel):
                 "（这会删除所有针对你的对话记忆和情绪状态，不可恢复）"
             )
 
+        if cmd == "/reveal":
+            turn_id = arg.strip()
+            if not turn_id:
+                return "用法: /reveal <turn_id>"
+            if self.engine.annotation_store is None:
+                return "未启用标注存储"
+            turn = await self.engine.annotation_store.get_turn(turn_id)
+            if turn is None:
+                return f"未找到 {turn_id}"
+            return f"💭 Aria 当时想的：\n{turn.inner_thought or '(无)'}"
+
         # Unknown command - let LLM handle it
         return None
 
@@ -574,6 +656,7 @@ class FeishuBot(OutboundChannel):
 
             accumulated = ""
             last_update = 0.0
+            turn_id: str | None = None
 
             async for event in self.engine.chat_stream_events(
                 user_text,
@@ -591,6 +674,9 @@ class FeishuBot(OutboundChannel):
                             pass
                         last_update = now
 
+                elif event.type == "turn_id":
+                    turn_id = event.content
+
                 elif event.type == "done":
                     # Final render: pure speech, no meta leaked to user
                     final = event.content
@@ -599,7 +685,9 @@ class FeishuBot(OutboundChannel):
                     except Exception:
                         pass
 
+            # Append annotation footer buttons when turn_id is available
+            footer = build_annotation_footer_elements(turn_id) if turn_id else None
             try:
-                await card.finish()
+                await card.finish(footer_elements=footer)
             except Exception:
                 pass
