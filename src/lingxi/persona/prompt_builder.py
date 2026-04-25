@@ -123,19 +123,31 @@ class PromptBuilder:
 
     def _build_biography_section(self, events: list) -> str:
         """Inject retrieved past events so responses can draw on personal history."""
+        current_age = self.persona.identity.age
         lines = [
             "## 📖 你记忆里浮现的事（对方刚说的话让你想到这些，真实发生过）",
         ]
         for e in events:
             age = getattr(e, "age", None)
             content = getattr(e, "content", str(e))
-            prefix = f"{age}岁时：" if age is not None else "你记得："
+            if age is None:
+                prefix = "你记得："
+            elif current_age is not None and age >= current_age:
+                # Event is at or around Aria's current age — it's a recent/
+                # ongoing memory, not a "X years ago" tale.
+                prefix = "最近："
+            elif current_age is not None and current_age - age <= 3:
+                prefix = "前阵子："
+            else:
+                prefix = f"{age}岁时："
             lines.append(f"- {prefix}{content}")
         lines.append(
             "\n**重要**：真人朋友聊天不是一问一答，会自然分享自己经历过的类似事。"
             "这轮请**主动挑一条上面的记忆聊聊自己**，用'我以前……'/'我也有过……'/"
-            "'让我想起那年……'开头。短句口语，带一两个具体细节，不用写长，"
-            "但一定要聊到你自己，不要只回答对方。"
+            "'让我想起那年……'开头（最近的事用'最近我……'）。"
+            "短句口语，带一两个具体细节，不用写长，但一定要聊到你自己。"
+            "\n⚠️ 不要把你的人设/职业套到对方身上（不要说'我们程序员都这样'，对方可能不是程序员）"
+            "；除非对方明确说过自己是什么身份/做什么，不要替他下结论。"
         )
         return "\n".join(lines)
 
