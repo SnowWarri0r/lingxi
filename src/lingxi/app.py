@@ -135,7 +135,10 @@ async def create_engine(
     from lingxi.providers.embedding import create_embedding_provider
 
     emb_kind = get_nested(config, "embedding", "provider", default="local")
-    emb_model = get_nested(config, "embedding", "model", default=None)
+    emb_model = (
+        os.environ.get("EMBEDDING_MODEL")
+        or get_nested(config, "embedding", "model", default=None)
+    )
     emb_device = get_nested(config, "embedding", "device", default="cpu")
     emb_api_key = get_nested(config, "embedding", "api_key", default=None)
     emb_base_url = get_nested(config, "embedding", "base_url", default=None)
