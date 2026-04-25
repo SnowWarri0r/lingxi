@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import sys
 
+from lingxi.web.app import create_app  # re-exported for tests and external use
+
+__all__ = ["create_app"]
+
 
 def main() -> None:
     """Start the uvicorn server."""
