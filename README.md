@@ -1,6 +1,6 @@
 # 灵犀 / Lingxi
 
-一个可定制人设的虚拟人格代理。目标是做出**真实对话体验** —— 不是一个应答机器人，而是一个有自己生活、记忆、情绪和主观理解的"人"。
+一个可定制人设的虚拟人格 agent。目标是做出**真实对话体验** —— 不是一个应答机器人，而是一个有自己生活、记忆、情绪和主观理解的"人"。
 
 > 名字取自"心有灵犀"——无需言明，自然相通。
 
@@ -25,7 +25,7 @@
 - 不同 channel 通过 adapter 提取所需维度（文本 / 语音 / 表情 / 动作）
 - 飞书取对白，未来 TTS 取 mood 调语调，未来 Live2D 取表情/动作
 
-**通道**
+**Channel**
 - **飞书机器人**（WebSocket 长连接，流式卡片，图片理解，/ 命令）
 - **Web API**（REST + WebSocket 流式）
 - **CLI**
@@ -73,7 +73,7 @@ src/lingxi/
 ├── planning/        # 目标 + 规划 + 主动行为
 ├── conversation/    # 对话引擎 + 结构化输出 + adapters
 ├── providers/       # LLM / Embedding 抽象（Claude / OpenAI / 豆包 / 本地）
-├── channels/        # 飞书 / Web / CLI 通道
+├── channels/        # 飞书 / Web / CLI channel
 ├── auth/            # OAuth + profile store + external sync
 └── web/             # FastAPI + WebSocket
 ```
