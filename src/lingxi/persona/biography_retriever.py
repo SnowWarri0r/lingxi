@@ -39,12 +39,24 @@ class BiographyRetriever:
         """Embed all events. Idempotent — no-op if already embedded."""
         if self._embeddings is not None or not self.events:
             return
-        texts = [e.content + " " + " ".join(e.tags) for e in self.events]
         vecs: list[list[float]] = []
-        for t in texts:
-            v = await self.embedder.embed(t)
-            vecs.append(v)
+        for e in self.events:
+            vecs.append(await self._embed_event(e))
         self._embeddings = np.array(vecs, dtype=np.float32)
+
+    async def _embed_event(self, event: LifeEvent) -> list[float]:
+        return await self.embedder.embed(event.content + " " + " ".join(event.tags))
+
+    async def append(self, event: LifeEvent) -> None:
+        """Append a newly-acquired LifeEvent and embed it incrementally."""
+        vec = await self._embed_event(event)
+        self.events.append(event)
+        if self._embeddings is None:
+            self._embeddings = np.array([vec], dtype=np.float32)
+        else:
+            self._embeddings = np.vstack(
+                [self._embeddings, np.array([vec], dtype=np.float32)]
+            )
 
     async def retrieve(
         self,

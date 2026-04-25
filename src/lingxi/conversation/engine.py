@@ -113,6 +113,7 @@ class ConversationEngine:
         # Biography retriever is set up after construction via bootstrap_biography()
         # because embedding the events requires an embedder to be available first.
         self.biography_retriever: "BiographyRetriever | None" = None
+        self.biography_addenda_store: "BiographyAddendaStore | None" = None
         self._last_biography_hit: bool = False
 
         # Initialize
@@ -771,24 +772,57 @@ class ConversationEngine:
             await self.interaction_tracker.load()
 
     async def bootstrap_biography(self) -> int:
-        """Initialize the biography retriever by embedding all life_events.
+        """Initialize the biography retriever.
 
-        Returns the number of events embedded (0 if biography empty or
-        no embedder available).
+        Merges seeded life_events from persona YAML with any addenda
+        accumulated at runtime (self-added via reflection loop).
+        Returns total number of events embedded.
         """
-        events = self.persona.biography.life_events
-        if not events:
-            return 0
+        from lingxi.persona.biography_addenda import BiographyAddendaStore
+        from lingxi.persona.biography_retriever import BiographyRetriever
+
         embedder = self.memory.embedding_provider or (
             self.fewshot_retriever.embedder if self.fewshot_retriever else None
         )
         if embedder is None:
             return 0
-        from lingxi.persona.biography_retriever import BiographyRetriever
 
-        self.biography_retriever = BiographyRetriever(events=list(events), embedder=embedder)
+        seeded = list(self.persona.biography.life_events)
+
+        # Load runtime addenda from disk
+        addenda_dir = Path(self.memory.data_dir) / "inner_life"
+        self.biography_addenda_store = BiographyAddendaStore(data_dir=addenda_dir)
+        addenda_entries = await self.biography_addenda_store.load()
+        added_events = [entry.event for entry in addenda_entries]
+
+        all_events = seeded + added_events
+        if not all_events:
+            return 0
+
+        self.biography_retriever = BiographyRetriever(events=all_events, embedder=embedder)
         await self.biography_retriever.bootstrap()
-        return len(events)
+        return len(all_events)
+
+    async def add_biography_event(
+        self,
+        event,
+        recipient_key: str | None = None,
+        source: str = "reflection",
+    ) -> None:
+        """Append a self-accumulated LifeEvent: persist to addenda + index in retriever."""
+        from lingxi.persona.biography_addenda import BiographyAddendaEntry
+
+        if self.biography_retriever is None or self.biography_addenda_store is None:
+            return
+
+        await self.biography_addenda_store.append(
+            BiographyAddendaEntry(
+                event=event,
+                source=source,
+                recipient_key=recipient_key,
+            )
+        )
+        await self.biography_retriever.append(event)
 
     async def bootstrap_fewshot_seeds(
         self,
