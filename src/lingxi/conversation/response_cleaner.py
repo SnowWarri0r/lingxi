@@ -118,7 +118,16 @@ def clean_speech(text: str) -> str:
     # 4. Strip leftover *stage-direction* markers
     text = re.sub(r"\*[^*\n]{1,60}\*\s*", "", text)
 
-    # 5. Collapse excess blank lines
+    # 5. Replace AI-style em-dash pauses with comma + space
+    #    Catches: "——" (double), "—" (single), " -- " (spaced double).
+    #    Keeps inline hyphens like "4-6 月" untouched.
+    text = re.sub(r"\s*——+\s*", "，", text)
+    text = re.sub(r"\s+—\s+", "，", text)
+    text = re.sub(r"\s+--\s+", "，", text)
+
+    # 6. Collapse excess blank lines AND blank-line paragraph breaks
+    #    (multi-paragraph chat is an AI layout tell; merge to inline)
+    text = re.sub(r"\n{2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()
 
