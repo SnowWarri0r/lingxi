@@ -37,14 +37,23 @@ class PromptBuilder:
         subjective_view: SubjectiveView | None = None,
         pending_agenda: list[AgendaItem] | None = None,
         biography_hits: list | None = None,
+        mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
 
         biography_hits: LifeEvents retrieved for the current turn, injected as
         "你过去经历过的事" so the persona can naturally share personal history.
+        mode: "single" (default, current single-call format) or "think"
+        (two-call pipeline: output inner_thought + meta, no speech).
         """
+        if mode == "think":
+            from lingxi.conversation.prompts.think import THINK_FORMAT_PREAMBLE
+            preamble = THINK_FORMAT_PREAMBLE
+        else:
+            preamble = self._build_format_preamble()
+
         sections = [
-            self._build_format_preamble(),
+            preamble,
             self._build_identity_section(),
         ]
 

@@ -116,6 +116,12 @@ class ConversationEngine:
         self.biography_addenda_store: "BiographyAddendaStore | None" = None
         self._last_biography_hit: bool = False
 
+        # Two-call (think → compress) — separate provider for the compress step
+        # if the persona enables it. Built lazily on first use.
+        self._compress_llm: LLMProvider | None = None
+        self._last_biography_hits: list = []
+        self._last_user_input: str = ""
+
         # Initialize
         self.memory.set_llm_provider(llm_provider)
         self.planner.initialize_goals()
@@ -230,6 +236,11 @@ class ConversationEngine:
                 print(f"[biography] no hit for {user_input[:20]!r}", flush=True)
         self._last_biography_hit = bool(biography_hits)
 
+        # Stash for compress step (it needs user_input + biography hits)
+        self._last_biography_hits = list(biography_hits)
+        self._last_user_input = user_input
+
+        prompt_mode = "think" if self.persona.compression.enabled else "single"
         system_prompt = self.prompt_builder.build_system_prompt(
             memory_context=memory_context,
             active_plans=self.planner.active_plans if self.planner else None,
@@ -242,6 +253,7 @@ class ConversationEngine:
             subjective_view=subjective_view,
             pending_agenda=pending_agenda,
             biography_hits=biography_hits,
+            mode=prompt_mode,
         )
         if proactive_nudge:
             system_prompt += f"\n\n## 当前内心活动{proactive_nudge}"
@@ -376,6 +388,110 @@ class ConversationEngine:
             parts.append(p.speaking_style.verbal_habits[0])
         return "，".join(parts)
 
+    # === Two-call (think → compress) helpers ==========================
+
+    def _get_compress_llm(self) -> LLMProvider:
+        """Lazy-build a separate provider for the compress call.
+
+        Reuses the main LLM's auth (OAuth token / API key) but with a
+        smaller/cheaper model (default Haiku) for low-latency compression.
+        """
+        if self._compress_llm is not None:
+            return self._compress_llm
+        cfg = self.persona.compression
+        # Reuse same provider class with a different model
+        from lingxi.providers.claude import ClaudeProvider
+        if isinstance(self.llm, ClaudeProvider):
+            self._compress_llm = ClaudeProvider(
+                api_key=self.llm._api_key,
+                model=cfg.compress_model,
+            )
+        else:
+            # Non-Claude main provider — fall back to using main provider
+            # (compression-as-a-task still works, just no latency win)
+            self._compress_llm = self.llm
+        return self._compress_llm
+
+    async def _run_think(self, system_prompt: str, messages: list[dict]) -> str:
+        """Call the main LLM in think mode. Returns raw text (inner_thought + meta)."""
+        result = await self.llm.complete(
+            messages=messages,
+            system=system_prompt,
+            temperature=self.persona.sampling.temperature,
+            top_p=self.persona.sampling.top_p,
+            max_tokens=1500,
+        )
+        return result.content
+
+    def _build_compress_input(self, inner_thought: str, user_input: str) -> tuple[str, list[dict]]:
+        """Build the (system, messages) pair for the compress call."""
+        from lingxi.conversation.prompts.compress import (
+            build_compress_prompt,
+            render_fewshots_for_compress,
+        )
+        from lingxi.conversation.prompt_assembly import DEFAULT_BLACKLIST
+
+        # Few-shot for voice anchoring (use whatever the retriever surfaces
+        # for inner_thought as the most relevant style examples)
+        fewshots: list = []
+        if self.fewshot_retriever is not None:
+            try:
+                # Synchronous-ish: we already retrieved when preparing turn,
+                # but fewshot_retriever was queried separately. Just re-query
+                # synchronously with inner_thought as key — tighter for compress.
+                pass  # left simple: rely on what _prepare_turn already produced
+            except Exception:
+                pass
+        seeds = self._phase0_seed_fewshots()[:3]
+
+        style = self.persona.style
+        blacklist_phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
+        max_chars = style.speech_max_chars
+        if self._last_biography_hit:
+            max_chars = max(120, max_chars)
+
+        prompt_text = build_compress_prompt(
+            persona_name=self.persona.name,
+            voice_hint=self._persona_voice_hint(),
+            inner_thought=inner_thought,
+            user_message=user_input,
+            fewshots_block=render_fewshots_for_compress(seeds),
+            max_chars=max_chars,
+            blacklist="、".join(blacklist_phrases),
+        )
+        return prompt_text, [{"role": "user", "content": prompt_text}]
+
+    async def _run_compress(self, inner_thought: str, user_input: str) -> str:
+        """Call compress LLM and return the full speech (non-streaming)."""
+        cfg = self.persona.compression
+        llm = self._get_compress_llm()
+        prompt_text, messages = self._build_compress_input(inner_thought, user_input)
+        # Compress uses single user message; the persona prompt is in the
+        # user-message text itself (intentional: compress should NOT see the
+        # full persona/memory context, just the thought to translate).
+        result = await llm.complete(
+            messages=messages,
+            max_tokens=cfg.compress_max_tokens,
+            temperature=cfg.compress_temperature,
+        )
+        from lingxi.conversation.response_cleaner import clean_speech
+        return clean_speech(result.content.strip())
+
+    async def _run_compress_stream(self, inner_thought: str, user_input: str):
+        """Stream compressed speech as text chunks."""
+        cfg = self.persona.compression
+        llm = self._get_compress_llm()
+        _, messages = self._build_compress_input(inner_thought, user_input)
+        async for chunk in llm.complete_stream(
+            messages=messages,
+            max_tokens=cfg.compress_max_tokens,
+            temperature=cfg.compress_temperature,
+        ):
+            if chunk.content:
+                yield chunk.content
+
+    # === end two-call helpers ==========================================
+
     def _apply_style_preamble(self, messages: list[dict], preamble: str) -> None:
         """Prepend the preamble to the last user message's text.
 
@@ -480,17 +596,24 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
-        prefill = pick_prefill(self.persona.style)
-
-        result = await self.llm.complete(
-            messages=messages,
-            system=system_prompt,
-            temperature=self.persona.sampling.temperature,
-            top_p=self.persona.sampling.top_p,
-            prefill=prefill,
-        )
-
-        output = self._process_response(result.content)
+        if self.persona.compression.enabled:
+            # Two-call: think (Sonnet) then compress (Haiku)
+            think_raw = await self._run_think(system_prompt, messages)
+            output = self._process_response(think_raw)
+            inner_thought = output.inner_thought or output.speech
+            speech = await self._run_compress(inner_thought, user_input)
+            output.speech = speech
+            output.inner_thought = inner_thought
+        else:
+            prefill = pick_prefill(self.persona.style)
+            result = await self.llm.complete(
+                messages=messages,
+                system=system_prompt,
+                temperature=self.persona.sampling.temperature,
+                top_p=self.persona.sampling.top_p,
+                prefill=prefill,
+            )
+            output = self._process_response(result.content)
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later
@@ -586,56 +709,70 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
-        prefill = pick_prefill(self.persona.style)
+        if self.persona.compression.enabled:
+            # Two-call streaming: think (non-stream) then compress (stream)
+            think_raw = await self._run_think(system_prompt, messages)
+            output_pre = self._process_response(think_raw)
+            inner_thought = output_pre.inner_thought or output_pre.speech
 
-        full_response = ""
-        delimiter_seen = False
-        # Carry a small tail between chunks so we can detect the delimiter
-        # even when it's split across chunk boundaries.
-        tail = ""
-        tail_size = len(META_DELIMITER) - 1  # enough to match if delimiter straddles
+            # Surface a thinking preview so the UI can show "Aria 正在……"
+            preview = inner_thought.strip().replace("\n", " ")[:30]
+            if preview:
+                yield StreamEvent("thinking", preview)
 
-        async for chunk in self.llm.complete_stream(
-            messages=messages,
-            system=system_prompt,
-            temperature=self.persona.sampling.temperature,
-            top_p=self.persona.sampling.top_p,
-            prefill=prefill,
-        ):
-            if not chunk.content:
-                continue
-            full_response += chunk.content
+            full_speech = ""
+            async for chunk_text in self._run_compress_stream(inner_thought, user_input):
+                if not chunk_text:
+                    continue
+                full_speech += chunk_text
+                yield StreamEvent("chunk", chunk_text)
 
-            if delimiter_seen:
-                # After delimiter, everything is metadata — don't stream
-                continue
+            output = output_pre
+            output.speech = full_speech
+            output.inner_thought = inner_thought
+        else:
+            prefill = pick_prefill(self.persona.style)
 
-            combined = tail + chunk.content
-            idx = combined.find(META_DELIMITER)
-            if idx == -1:
-                # Delimiter not yet seen; safely emit everything except the
-                # trailing `tail_size` chars (they might be the start of delimiter)
-                if len(combined) > tail_size:
-                    emit = combined[:-tail_size] if tail_size > 0 else combined
-                    if emit:
-                        yield StreamEvent("chunk", emit)
-                    tail = combined[-tail_size:] if tail_size > 0 else ""
+            full_response = ""
+            delimiter_seen = False
+            tail = ""
+            tail_size = len(META_DELIMITER) - 1
+
+            async for chunk in self.llm.complete_stream(
+                messages=messages,
+                system=system_prompt,
+                temperature=self.persona.sampling.temperature,
+                top_p=self.persona.sampling.top_p,
+                prefill=prefill,
+            ):
+                if not chunk.content:
+                    continue
+                full_response += chunk.content
+
+                if delimiter_seen:
+                    continue
+
+                combined = tail + chunk.content
+                idx = combined.find(META_DELIMITER)
+                if idx == -1:
+                    if len(combined) > tail_size:
+                        emit = combined[:-tail_size] if tail_size > 0 else combined
+                        if emit:
+                            yield StreamEvent("chunk", emit)
+                        tail = combined[-tail_size:] if tail_size > 0 else ""
+                    else:
+                        tail = combined
                 else:
-                    tail = combined
-            else:
-                # Delimiter found — emit everything before it and stop streaming
-                before = combined[:idx]
-                if before:
-                    yield StreamEvent("chunk", before)
-                delimiter_seen = True
-                tail = ""
+                    before = combined[:idx]
+                    if before:
+                        yield StreamEvent("chunk", before)
+                    delimiter_seen = True
+                    tail = ""
 
-        # If we never saw the delimiter, flush remaining tail as speech
-        if not delimiter_seen and tail:
-            yield StreamEvent("chunk", tail)
+            if not delimiter_seen and tail:
+                yield StreamEvent("chunk", tail)
 
-        # Parse full response, apply state changes
-        output = self._process_response(full_response)
+            output = self._process_response(full_response)
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later

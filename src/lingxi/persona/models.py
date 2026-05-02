@@ -188,6 +188,25 @@ class SamplingConfig(BaseModel):
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
 
 
+class CompressionConfig(BaseModel):
+    """Two-call (think → compress-to-speech) pipeline.
+
+    When enabled, every turn runs:
+      1. Think (main model): persona + memory + biography → inner_thought + meta
+      2. Compress (smaller model): inner_thought + few-shot + voice → speech
+
+    Trade-off: ~2× total latency (TTFB ~2s vs ~1s with stage UI), but the
+    LLM in Call 2 sees a "transcribe a thought" task instead of "answer a
+    user", which is outside the helpful-assistant distribution and produces
+    much less AI-tone.
+    """
+
+    enabled: bool = False
+    compress_model: str = "claude-haiku-4-5-20251001"
+    compress_max_tokens: int = 200
+    compress_temperature: float = 0.9
+
+
 class GoalDefinition(BaseModel):
     description: str
     priority: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -242,3 +261,4 @@ class PersonaConfig(BaseModel):
     style: StyleConfig = Field(default_factory=StyleConfig)
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     biography: Biography = Field(default_factory=Biography)
+    compression: CompressionConfig = Field(default_factory=CompressionConfig)
