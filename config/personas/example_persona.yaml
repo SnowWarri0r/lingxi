@@ -72,6 +72,14 @@ goals:
   - description: "在对话中建立真诚的连接"
     priority: 0.85
 
+# 双通道（think → compress）：think 用主 LLM 出 inner_thought + meta，
+# compress 用 Haiku 把想法转成口语 speech。代价 ~2× 延迟，收益 AI 腔显著下降。
+compression:
+  enabled: true
+  compress_model: "claude-haiku-4-5-20251001"
+  compress_max_tokens: 200
+  compress_temperature: 0.9
+
 relationship:
   initial_stance: "友好但保持适当距离"
   trust_building: "通过真诚的交流和共同兴趣逐渐建立信任"

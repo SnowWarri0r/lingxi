@@ -903,7 +903,17 @@ class FeishuBot(OutboundChannel):
                 channel="feishu",
                 recipient_id=chat_id,
             ):
-                if event.type == "chunk":
+                if event.type == "thinking":
+                    # Two-call pipeline finished Call 1; show a transitional
+                    # preview before Call 2's speech starts streaming.
+                    try:
+                        preview = event.content.strip()
+                        if preview:
+                            await card.update_content(f"💭 {preview}…")
+                    except Exception:
+                        pass
+
+                elif event.type == "chunk":
                     accumulated += event.content
                     now = time.time()
                     if now - last_update >= self._update_interval:
