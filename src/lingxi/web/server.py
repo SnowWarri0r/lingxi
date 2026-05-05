@@ -20,12 +20,16 @@ def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(description="Persona Agent API Server")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind host (default: 0.0.0.0)")
+    # Default to 127.0.0.1 — exposing this server publicly would allow
+    # anyone to create sessions and burn the configured LLM API quota.
+    # If you actually need network access, pass --host 0.0.0.0 explicitly
+    # AND set LINGXI_API_KEY.
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8000, help="Bind port (default: 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     args = parser.parse_args()
 
-    print(f"\n  Persona Agent API Server")
+    print("\n  Persona Agent API Server")
     print(f"  http://{args.host}:{args.port}")
     print(f"  API docs: http://{args.host}:{args.port}/docs\n")
 
