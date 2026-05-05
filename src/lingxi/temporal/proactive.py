@@ -12,7 +12,6 @@ import json
 import random
 import re
 import uuid
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -23,7 +22,7 @@ if TYPE_CHECKING:
 
 from lingxi.channels.outbound import ChannelRegistry
 from lingxi.fewshot.models import AnnotationTurn
-from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
+from lingxi.temporal.formatter import format_timedelta_cn
 from lingxi.temporal.tracker import InteractionRecord, InteractionTracker
 
 
@@ -90,31 +89,31 @@ _MESSAGE_STYLES = [
     {
         "name": "话题跟进",
         "desc": "从对方告诉过你的某件具体事直接切入，问进展或问感受。"
-                "不要解释为什么问。就一句，像老朋友。",
+                "不要解释为什么问，就一句。",
         "example": "你那个小游戏字体搞定没？",
     },
     {
         "name": "日常播报",
-        "desc": "告诉对方你正在做什么、在哪儿、看到什么。不追加比喻、不延伸。",
-        "example": "今晚云太多，看不到星星了，有点可惜。",
+        "desc": "告诉对方你正在做什么、在哪儿、看到什么。具体一件事，不追加比喻不延伸。",
+        "example": "刚发现冰箱酸奶过期一周了 我居然都没察觉。",
     },
     {
         "name": "关心",
-        "desc": "基于对方之前说过的具体情况（累、忙、生病等）简短关心一句。"
-                "不要加'加油'之类的废话。",
-        "example": "你之前说周末要加班，今天能好好休息吗？",
+        "desc": "基于对方之前说过的具体事情况简短关心。**问具体的细节**，不要"
+                "'今天还好吗 / 你怎么样了'这种空泛 check-in。",
+        "example": "奶奶今天吃得下东西吗",
     },
     {
         "name": "无聊闲话",
-        "desc": "没什么事，就是想说两句。内容可以是一个念头、一个观察，甚至一个问题。"
+        "desc": "没什么事，就是想说两句。内容可以是一个念头、一个观察、甚至一个问题。"
                 "允许残缺句和语气词。",
         "example": "今天吃了泡面。",
     },
     {
         "name": "随口一问",
         "desc": "抛一个具体的小问题给对方，和他最近提过的事相关。"
-                "不是'你好吗'，是有答案的具体问题。",
-        "example": "你平时早上起得来吗？我在想要不要早起看日出。",
+                "不是'你好吗'这种宽泛的，是有答案的具体问题。",
+        "example": "你那个 IDE 主题用的什么 上次截图看着挺舒服。",
     },
     {
         "name": "小吐槽",
@@ -174,37 +173,24 @@ _RESPONSE_TOKEN_PREFIXES = (
 
 
 def _validate_proactive_opener(message: str) -> str | None:
-    """Code-side check that a proactive message looks like an opener, not a journal entry.
+    """Code-side check that a proactive message looks like an opener, not a reply.
 
-    Returns a short reason string when the message should be rejected,
-    or None when it passes. Engineered constraints (vs prompt rules):
-      1. Doesn't start with a response token (嗯/对/啊…)
-      2. Has at least one of: question hook, "你" referencing the user,
-         or a direct invitation phrase. Pure interior monologue without
-         any user vector reads like Aria journaling at the user.
+    Only one constraint here: opener must NOT start with a response token
+    (嗯/对/啊/哈…) which signals "I'm continuing what was just said".
+
+    The earlier "must have a relational hook (你/?/吗/邀请词)" check was
+    removed because it conflicts with valid opener forms allowed by the
+    prompt — pure first-person observations like "刚发现冰箱酸奶过期一周
+    了" are perfectly natural openers and shouldn't be filtered.
     """
     if not message:
         return "empty"
 
     stripped = message.strip()
 
-    # Response-token prefix check — proactive opener shouldn't start with
-    # tokens that signal "I'm continuing what was just said".
     for tok in _RESPONSE_TOKEN_PREFIXES:
         if stripped.startswith(tok):
             return f"opens_with_response_token:{tok}"
-
-    # Relational hook check — at least one signal that the message
-    # invites engagement instead of being pure self-narration.
-    has_question = any(c in stripped for c in "？?")
-    has_question_particle = any(p in stripped for p in ("吗", "呢", "哈?", "啥"))
-    has_you = "你" in stripped
-    has_invitation = any(
-        marker in stripped
-        for marker in ("一起", "要不要", "陪我", "听我说", "告诉你", "跟你说")
-    )
-    if not (has_question or has_question_particle or has_you or has_invitation):
-        return "no_relational_hook"
 
     return None
 
@@ -390,26 +376,15 @@ class ProactiveScheduler:
         now: datetime,
         force: bool = False,
     ) -> dict | None:
-        persona = self.engine.persona
         rec_key = f"{record.channel}:{record.recipient_id}"
         memory_context = await self.engine.memory.assemble_context(
             "", recipient_key=rec_key
         )
 
-        # Randomize the order/selection of facts so LLM doesn't fixate on top-ranked ones
-        all_facts = memory_context.long_term_facts[:15]
-        if len(all_facts) > 5:
-            picked = random.sample(all_facts, 5)
-        else:
-            picked = all_facts
-        memory_facts = "\n".join(
-            f"- {f.content}" for f in picked
-        ) or "（暂无记忆）"
-
-        recent_episodes = "\n".join(
-            f"- [{ep.timestamp}] {ep.summary}"
-            for ep in memory_context.relevant_episodes[:8]
-        ) or "（暂无回忆）"
+        # NOTE: long-term facts and episodes are still retrieved (via
+        # build_system_prompt below — it consumes memory_context). We don't
+        # need to format them locally any more; the system-prompt path does
+        # that consistently with reactive turns.
 
         # Time-bound user state: pull recent USER turns directly. These
         # carry "what's happening in his life right now" (五一假期 / 在加班 /
@@ -436,15 +411,9 @@ class ProactiveScheduler:
             f"- {m}" for m in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
 
-        relationship_desc = f"关系等级 {record.relationship_level}"
-        for il in persona.relationship.intimacy_levels:
-            if il.level == record.relationship_level:
-                relationship_desc = f"{il.name}（{il.description}）"
-                break
-
-        goals_text = "\n".join(
-            f"- {g.description}" for g in persona.goals[:5]
-        ) or "（暂无明确目标）"
+        # relationship_level / goals were used by the legacy ad-hoc proactive
+        # prompt; they're now rendered consistently inside build_system_prompt
+        # below (relationship section + goals are part of persona).
 
         # Reuse the SAME system prompt that reactive uses. This unifies the
         # persona/state/biography/anti-reflex framing across reactive +
@@ -501,6 +470,14 @@ class ProactiveScheduler:
         except Exception as e:
             print(f"[proactive] history fetch failed: {e}")
 
+        opener_shape = (
+            "## 这条消息是 OPENER（你主动起头），形态约束：\n"
+            "- **直接进话题**——不寒暄打招呼（不要『嗨/你好/在吗/下午好』起手）\n"
+            "- **不空泛 check-in**——不问『今天怎么样/还好吗/最近还好吗』这种"
+            "宽泛问候。要么问具体的事（『奶奶今天吃得下吗』），要么不问只是说一件事，"
+            "要么干脆别发。\n"
+            "- **跟人发消息那种短句**，不是写信开头\n"
+        )
         if force:
             style = random.choice(_MESSAGE_STYLES)
             user_prompt = (
@@ -509,6 +486,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（不要重复套路/比喻/切入点）\n{recent_proactive}\n\n"
+                f"{opener_shape}\n"
                 f"## 这次试一种语气：【{style['name']}】\n"
                 f"{style['desc']}\n"
                 f"参考语气（不要照抄）：「{style['example']}」\n\n"
@@ -524,6 +502,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（避免重复）\n{recent_proactive}\n\n"
+                f"{opener_shape}\n"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
@@ -570,13 +549,22 @@ class ProactiveScheduler:
         except json.JSONDecodeError:
             return {"should_send": bool(message), "message": message}
 
-        # Honour explicit should_send=false; otherwise infer from speech
-        should_send = meta.get("should_send")
-        if should_send is None:
+        # Honour explicit should_send=false; otherwise infer from speech.
+        # Coerce carefully — LLM occasionally emits string "false" / "true"
+        # / "no" / "yes", and bool("false") is True in Python (any non-empty
+        # string is truthy), so we'd ignore the false signal and send.
+        raw = meta.get("should_send")
+        if raw is None:
             should_send = bool(message)
+        elif isinstance(raw, bool):
+            should_send = raw
+        elif isinstance(raw, str):
+            should_send = raw.strip().lower() not in ("false", "no", "0", "")
+        else:
+            should_send = bool(raw)
 
         return {
-            "should_send": bool(should_send),
+            "should_send": should_send,
             "message": message,
             "reason": meta.get("inner", ""),
         }
