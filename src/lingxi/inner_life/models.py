@@ -38,6 +38,9 @@ class Activity(BaseModel):
     # How this activity influences her conversation style/availability
     focus_level: float = Field(default=0.5, ge=0.0, le=1.0)  # high = harder to interrupt
     social_openness: float = Field(default=0.5, ge=0.0, le=1.0)  # high = eager to chat
+    # Physical grounding — where she physically is during this activity.
+    # Examples: "沙发", "书桌前", "厨房", "便利店", "床上". Empty = no scene.
+    scene: str = ""
 
 
 class LifeEvent(BaseModel):
@@ -85,6 +88,13 @@ class InnerState(BaseModel):
     creative_drive: float = Field(default=0.5, ge=0.0, le=1.0)
     social_need: float = Field(default=0.4, ge=0.0, le=1.0)  # wants to talk to people
     last_simulated_at: datetime | None = None
+    # Ambient grounding (set at dawn, decays/refreshes over the day)
+    sleep_quality: float = Field(default=0.7, ge=0.0, le=1.0)  # last night
+    # Cap on per-day significant events (so days don't feel theme-saturated)
+    significant_events_today: int = 0
+    significant_events_reset_date: date | None = None
+    # Reactive: when the user actually chats, social_need drops + we mark this
+    last_chat_at: datetime | None = None
 
 
 # ---------------------------------------------------------------------------

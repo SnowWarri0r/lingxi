@@ -24,6 +24,32 @@ DEFAULT_BLACKLIST: tuple[str, ...] = (
     "很高兴为你",
     "希望对你有帮助",
     "如有任何",
+    # AI 共情套话——这些在 LLM 训练数据里被反复奖励，但真人不这么说
+    "你不是一个人",
+    "你并不孤单",
+    "我能理解",
+    "我太懂了",
+    "感同身受",
+    "我也有过这种感觉",
+    "我也有过那种感觉",
+    "坚持一下",
+    "加油",
+    "辛苦了",
+    # IM 不存在的"我没注意到"系列——LLM 客服话术
+    "刚才分神",
+    "刚才走神",
+    "我没注意到",
+    "刚才没看到",
+    "记不清刚才",
+    "忘了刚才聊",
+    # 表演忏悔系列——被批评后 AI 反射
+    "哎呀我错了",
+    "我也是没想到",
+    "我怎么这样",
+    "你说的这么",  # "你说的这么难受/重要的事我还..." 复述罪状起手
+    "我刚才不该",
+    "对不起 我刚才",
+    "抱歉 我刚才",
     # AI排版特征：长破折号抒情停顿（真人 IM 里极少用）
     "——",
     "——",  # 中英混用，两种都禁
@@ -49,40 +75,32 @@ def build_style_preamble(
     voice_hint: str = "",
     biography_hit: bool = False,
 ) -> str:
-    """Author's Note style block to prepend to the user's final message.
+    """Compact per-turn nudge prepended to user message.
 
-    Returns a multi-line string ending with a trailing newline so the caller
-    can concatenate with the real message.
+    Most behavior rules live in the system prompt. This is just:
+    - length cap for THIS turn
+    - voice_hint reminder (so persona voice doesn't flatten)
+    - the active blacklist (so it's right next to the user message in attention)
+    - biography hit awareness (if applicable)
 
-    voice_hint is a persona-specific one-liner (e.g. "温暖而富有思考性，
-    偶尔带点诗意/天文隐喻") that keeps the character's voice from being
-    flattened into generic WeChat register.
-
-    biography_hit=True means the retriever surfaced a relevant past event;
-    the preamble then encourages the persona to volunteer personal memory
-    ("我也有过……") instead of keeping responses 一问一答.
+    Anti-AI-reflex warnings are NOT duplicated here — they're already in the
+    system prompt's format preamble, repeating them would only inflate tokens
+    and reinforce the negative space they live in.
     """
     phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
-    joined = "、".join(phrases)
-    parts = [
-        f"[style: IM 聊天口语（跟朋友日常发消息那种）。≤{style.speech_max_chars}字。",
-    ]
+    parts = [f"[本轮 ≤{style.speech_max_chars} 字，IM 口语短句"]
     if voice_hint:
-        parts.append(f"语感：{voice_hint} — 保持这个人设的声音，别拉平成通用小市民口吻。")
+        parts.append(f"语感：{voice_hint}")
     if biography_hit:
         parts.append(
-            "这轮你有相关的过去经历（见 system prompt 里的 📖 部分）。"
-            "可以自然地'我也……'起一句分享，可以比平常多说一两句。别憋成一问一答。"
+            "脑子里浮现了相关回忆（见 system prompt 📖）——是底色不是台词，看你真实想不想讲"
         )
-    parts.extend([
-        f"禁用词/禁用符号：{joined}",
-        f"禁止总结、禁止给建议框架（1/2/3 点）",
-        f"禁止：长破折号 `——` 或 ` — ` 做抒情停顿、空行分段写成小作文",
-        f"如果分享较多内容，用空格/句号断句，一段连着写，不要换行分段",
-        f"禁止替对方下身份结论（别假设对方的职业/工种/生活方式）",
-        f"允许：省略、倒装、感叹词（嗯/欸/哦）、短横 `-`、半句话]",
-    ])
-    return "\n".join(parts) + "\n\n"
+    parts.append(f"避用词：{ '、'.join(phrases) }]")
+    # Explicit marker so the model doesn't conflate the latest user message
+    # with earlier turns / fewshot context. The user message immediately
+    # follows this preamble.
+    parts.append("\n— 对方刚发的就是下面这句，只回这句，不要把前几轮的话题混进来 —")
+    return "\n".join(parts) + "\n"
 
 
 def pick_prefill(style: StyleConfig, rng: random.Random | None = None) -> str:

@@ -88,12 +88,201 @@ class MemoryManager:
 
     def set_llm_provider(self, provider: LLMProvider) -> None:
         """Set the LLM provider for consolidation + entity extraction."""
+        self._llm_provider = provider
         self._consolidator = MemoryConsolidator(
             long_term=self.long_term,
             episodic=self.episodic,
             llm_provider=provider,
         )
         self._entity_extractor = EntityExtractor(provider)
+
+    async def compress_aged_turns(self, threshold_minutes: int = 30) -> int:
+        """Mid-term layer: compress turns older than threshold into one-line summaries.
+
+        Looks at the active recipient's short-term buffer for turns that are
+        (a) older than `threshold_minutes` and (b) not yet summarized. Batches
+        them through a single LLM call and stores the summary on each turn.
+
+        Returns count of turns newly summarized.
+        """
+        from datetime import datetime, timedelta
+        llm = getattr(self, "_llm_provider", None)
+        if llm is None:
+            return 0
+
+        cutoff = datetime.now() - timedelta(minutes=threshold_minutes)
+        turns = self.short_term.get_history()
+        pending = [t for t in turns if t.summary is None and t.timestamp < cutoff]
+        if not pending:
+            return 0
+
+        # Build batch prompt
+        lines = []
+        for i, t in enumerate(pending, 1):
+            who = "对方" if t.role == "user" else "我"
+            stamp = t.timestamp.strftime("%H:%M")
+            content = (t.content or "").replace("\n", " ")[:300]
+            lines.append(f"[{i}] {stamp} {who}: {content}")
+        block = "\n".join(lines)
+        prompt = (
+            "下面是聊天记录里的若干 turn。请把每条压成 ≤25 字的中性摘要，"
+            "保留具体话题和谁说的，去掉客套和冗余。"
+            "返回 JSON 数组，元素格式 {\"i\": 序号, \"s\": \"摘要\"}：\n\n"
+            + block
+        )
+        try:
+            result = await llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.3,
+            )
+        except Exception as e:
+            print(f"[mid-term] compress LLM failed: {e}")
+            return 0
+
+        import json as _json
+        import re as _re
+        text = (result.content or "").strip()
+        # Find JSON array
+        m = _re.search(r"\[[\s\S]*\]", text)
+        if not m:
+            return 0
+        try:
+            data = _json.loads(m.group())
+        except Exception:
+            return 0
+
+        count = 0
+        for entry in data:
+            try:
+                idx = int(entry.get("i", 0)) - 1
+                summary = str(entry.get("s", "")).strip()
+                if 0 <= idx < len(pending) and summary:
+                    pending[idx].summary = summary[:80]
+                    count += 1
+            except Exception:
+                continue
+
+        if count > 0:
+            try:
+                await self.short_term.persist_current()
+            except Exception:
+                pass
+            print(f"[mid-term] compressed {count} aged turns")
+        return count
+
+    async def compress_aged_turns_for(
+        self, recipient_key: str, threshold_minutes: int = 30
+    ) -> int:
+        """Recipient-scoped variant: compress aged turns for `recipient_key`
+        without mutating `short_term._current_recipient`.
+
+        Safe to call from a background scheduler while a different reactive
+        turn is in-flight — the snapshot/write path bypasses the singleton
+        active buffer.
+        """
+        from datetime import datetime, timedelta
+        llm = getattr(self, "_llm_provider", None)
+        if llm is None:
+            return 0
+
+        turns = await self.short_term.snapshot_for_recipient(recipient_key)
+        if not turns:
+            return 0
+
+        cutoff = datetime.now() - timedelta(minutes=threshold_minutes)
+        pending_idx = [i for i, t in enumerate(turns) if t.summary is None and t.timestamp < cutoff]
+        if not pending_idx:
+            return 0
+
+        lines = []
+        for k, idx in enumerate(pending_idx, 1):
+            t = turns[idx]
+            who = "对方" if t.role == "user" else "我"
+            stamp = t.timestamp.strftime("%H:%M")
+            content = (t.content or "").replace("\n", " ")[:300]
+            lines.append(f"[{k}] {stamp} {who}: {content}")
+        prompt = (
+            "下面是聊天记录里的若干 turn。请把每条压成 ≤25 字的中性摘要，"
+            "保留具体话题和谁说的，去掉客套和冗余。"
+            "返回 JSON 数组，元素格式 {\"i\": 序号, \"s\": \"摘要\"}：\n\n"
+            + "\n".join(lines)
+        )
+        try:
+            result = await llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=600,
+                temperature=0.3,
+            )
+        except Exception as e:
+            print(f"[mid-term] compress LLM failed for {recipient_key}: {e}")
+            return 0
+
+        import json as _json
+        import re as _re
+        text = (result.content or "").strip()
+        m = _re.search(r"\[[\s\S]*\]", text)
+        if not m:
+            return 0
+        try:
+            data = _json.loads(m.group())
+        except Exception:
+            return 0
+
+        count = 0
+        for entry in data:
+            try:
+                k = int(entry.get("i", 0)) - 1
+                summary = str(entry.get("s", "")).strip()
+                if 0 <= k < len(pending_idx) and summary:
+                    turns[pending_idx[k]].summary = summary[:80]
+                    count += 1
+            except Exception:
+                continue
+
+        if count > 0:
+            try:
+                # Build identity-keyed summary map and apply atomically.
+                # apply_summaries_atomic re-reads the latest file inside a
+                # lock and only patches turns whose summary is still None,
+                # preserving any turns appended during our LLM await.
+                summary_map = {}
+                for orig in turns:
+                    if not orig.summary:
+                        continue
+                    summary_map[(
+                        orig.timestamp.isoformat(),
+                        orig.role,
+                        (orig.content or "")[:60],
+                    )] = orig.summary
+                merged = await self.short_term.apply_summaries_atomic(
+                    recipient_key, summary_map
+                )
+                if merged > 0:
+                    print(f"[mid-term] {recipient_key}: merged {merged}/{count} summaries")
+                else:
+                    print(
+                        f"[mid-term] {recipient_key}: {count} summaries stale "
+                        f"(file moved on), dropping rather than clobbering"
+                    )
+            except Exception as e:
+                print(f"[mid-term] persist failed for {recipient_key}: {e}")
+        return count
+
+    async def assemble_history_messages_for(
+        self, recipient_key: str, assembler
+    ) -> tuple[list, list[dict]]:
+        """Read-only assembly: snapshot turns for `recipient_key` and run
+        them through the given ContextAssembler, returning (turns, messages).
+
+        Does NOT switch the singleton active recipient — safe for background
+        callers (proactive/reflection) racing with reactive chat turns.
+        """
+        turns = await self.short_term.snapshot_for_recipient(recipient_key)
+        from lingxi.memory.manager import MemoryContext
+        mc = MemoryContext(short_term_turns=turns)
+        messages = assembler.assemble_messages(mc)
+        return turns, messages
 
     def set_embed_fn(self, embed_fn) -> None:
         """Set the embedding function for semantic retrieval (raw callable)."""

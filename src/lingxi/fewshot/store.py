@@ -169,6 +169,73 @@ class FewShotStore:
         await asyncio.to_thread(_add)
         await self._append_backup(sample)
 
+    async def remove(self, sample_id: str) -> bool:
+        """Remove a sample from chroma + the jsonl backup atomically.
+
+        Returns True only if BOTH stores agree the sample is gone:
+        chroma delete must succeed AND a verification query must show the
+        id is no longer there. Backup jsonl is then rewritten via temp
+        file + atomic rename. The whole transaction is held under
+        `self._lock` so concurrent add/remove can't truncate or duplicate.
+
+        Returns False (and leaves both stores untouched) if chroma
+        deletion fails or verification still finds the id.
+        """
+        await self.init()
+
+        def _delete_and_verify() -> bool:
+            # Returns True if successfully removed and verified absent.
+            try:
+                self._collection.delete(ids=[sample_id])
+            except Exception as e:
+                print(f"[fewshot] chroma delete failed for {sample_id}: {e}")
+                return False
+            # Verify the id is actually gone (chroma can silently no-op)
+            try:
+                got = self._collection.get(ids=[sample_id])
+                still_there = bool(got and got.get("ids"))
+                if still_there:
+                    print(f"[fewshot] {sample_id} still in chroma after delete")
+                    return False
+            except Exception:
+                # If verification itself fails, be conservative
+                return False
+            return True
+
+        def _rewrite_backup_atomic() -> bool:
+            # Returns True if removed line was found in backup.
+            if not self.backup_path.exists():
+                return False
+            kept_lines: list[str] = []
+            removed = False
+            import json as _json
+            with self.backup_path.open(encoding="utf-8") as fh:
+                for line in fh:
+                    s = line.strip()
+                    if not s:
+                        continue
+                    try:
+                        if _json.loads(s).get("id") == sample_id:
+                            removed = True
+                            continue
+                    except Exception:
+                        pass
+                    kept_lines.append(line.rstrip("\n"))
+            tmp = self.backup_path.with_suffix(self.backup_path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as fh:
+                for ln in kept_lines:
+                    fh.write(ln + "\n")
+            tmp.replace(self.backup_path)
+            return removed
+
+        async with self._lock:
+            chroma_ok = await asyncio.to_thread(_delete_and_verify)
+            if not chroma_ok:
+                # Don't touch jsonl if chroma side failed — both stores
+                # remain consistent (sample still present in both).
+                return False
+            return await asyncio.to_thread(_rewrite_backup_atomic)
+
     async def _append_backup(self, sample: FewShotSample) -> None:
         def _append():
             with self.backup_path.open("a", encoding="utf-8") as fh:

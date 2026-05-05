@@ -19,10 +19,12 @@ from lingxi.providers.base import CompletionResult, LLMProvider, StreamChunk
 class FakeLLM(LLMProvider):
     def __init__(self):
         self.last_messages = None
+        self.last_system = None
 
     async def complete(self, messages, system=None, max_tokens=4096,
                        temperature=0.7, top_p=None, prefill="", **kwargs):
         self.last_messages = list(messages)
+        self.last_system = system
         return CompletionResult(content=f"{prefill}嗯")
 
     async def complete_stream(self, messages, system=None, max_tokens=4096,
@@ -70,11 +72,12 @@ async def test_engine_uses_retriever_when_available(tmp_path: Path):
     # Trigger chat with text that embeds close to "UNIQUE-SIGNAL"
     await engine.chat("UNIQUE-SIGNAL", channel="cli", recipient_id="tester")
 
-    # The prior-turn few-shot block should contain our unique sample's
-    # context_summary and corrected_speech somewhere in the messages.
-    flat = str(llm.last_messages)
-    assert "UNIQUE-SCENE" in flat
-    assert "UNIQUE-SPEECH" in flat
+    # Fewshots are now rendered as a TEXT BLOCK inside the system prompt,
+    # not as user/assistant message pairs (architectural fix to prevent
+    # fewshot context confabulation).
+    sys_text = llm.last_system or ""
+    assert "UNIQUE-SCENE" in sys_text
+    assert "UNIQUE-SPEECH" in sys_text
 
 
 async def test_seeds_always_present_when_retriever_populated(tmp_path: Path):
@@ -110,8 +113,8 @@ async def test_seeds_always_present_when_retriever_populated(tmp_path: Path):
 
     await engine.chat("USER-INNER-0", channel="cli", recipient_id="tester")
 
-    flat = str(llm.last_messages)
+    sys_text = llm.last_system or ""
 
     # Baseline seeds from _phase0_seed_fewshots must always appear
-    # (these are the hardcoded corrected_speech strings from Phase 0 seeds)
-    assert "哦？啥机械？" in flat, "Phase-0 seed must be present as baseline anchor"
+    # (now rendered as text inside the system prompt, not as message pairs)
+    assert "哦？啥机械？" in sys_text, "Phase-0 seed must be present as baseline anchor"

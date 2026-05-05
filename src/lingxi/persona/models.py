@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
+from typing import ClassVar
 
 from pydantic import BaseModel, Field
 
@@ -132,6 +133,22 @@ class EmotionState(BaseModel):
         items.sort(key=lambda kv: kv[1], reverse=True)
         return items[:k]
 
+    # Behavioral families: dimensions that imply specific stickiness
+    # patterns. These are the ENGINEERING contract for "how this emotion
+    # shows up next turn" — encoded once here, not as prompt rules.
+    PROVOKED_DIMS: ClassVar[frozenset[str]] = frozenset({  # 被惹 → 拿乔/嘴硬/要哄
+        "嗔", "不爽", "委屈", "不满", "拌嘴", "调皮", "傲娇", "气", "不平", "不快"
+    })
+    LOW_ENERGY_DIMS: ClassVar[frozenset[str]] = frozenset({  # 累/烦 → 短句敷衍
+        "疲惫", "倦怠", "烦", "无力", "钝"
+    })
+    HEAVY_DIMS: ClassVar[frozenset[str]] = frozenset({  # 沉重 → 沉默/留白
+        "悲伤", "失落", "孤独", "压抑", "心痛", "怅然"
+    })
+    HIGH_ENERGY_DIMS: ClassVar[frozenset[str]] = frozenset({  # 兴奋 → 多说两句
+        "喜悦", "兴奋", "期待", "雀跃", "开心"
+    })
+
     def overall_valence(self) -> str:
         """Rough 'positive/negative/neutral' classification based on dimensions."""
         positive = {"喜悦", "温暖", "兴奋", "好奇", "平静", "满足", "期待", "感动"}
@@ -145,6 +162,54 @@ class EmotionState(BaseModel):
         if neg_sum > pos_sum + 0.3:
             return "消极"
         return "平和"
+
+    def behavioral_implication(self, threshold: float = 0.3) -> str:
+        """Translate active emotion dimensions into concrete behavior cues.
+
+        This is the engineering contract: instead of asking the LLM to
+        infer 'sustain emotion across turns', we render the persistent
+        emotion state directly into the next-turn behavior signal here.
+        Intensity above `threshold` triggers a family-specific cue.
+        """
+        cues: list[str] = []
+
+        provoked = max(
+            (v for n, v in self.dimensions.items() if n in self.PROVOKED_DIMS),
+            default=0.0,
+        )
+        if provoked >= threshold:
+            cues.append(
+                "上一轮被惹了/被挑了，不爽/嗔的劲儿还没过——"
+                "这一轮**不要**乖乖配合答下个问题。可以拿乔（'先说清楚我哪儿像 X'）、"
+                "嘴硬（'懒得理你'）、要哄（'不哄一下我?'）、岔开（'先道歉啊'）。"
+                "对方没哄/没认怂/装没事人 → 情绪不会自动消，让它带到这一轮的语气里。"
+            )
+
+        heavy = max(
+            (v for n, v in self.dimensions.items() if n in self.HEAVY_DIMS),
+            default=0.0,
+        )
+        if heavy >= threshold:
+            cues.append(
+                "心里压着事——这一轮自然短，留白多，不主动起话题，"
+                "不强行配合 helpful 回应。"
+            )
+
+        low = max(
+            (v for n, v in self.dimensions.items() if n in self.LOW_ENERGY_DIMS),
+            default=0.0,
+        )
+        if low >= threshold:
+            cues.append("人乏，回复短一句够了，不展开。")
+
+        high = max(
+            (v for n, v in self.dimensions.items() if n in self.HIGH_ENERGY_DIMS),
+            default=0.0,
+        )
+        if high >= threshold:
+            cues.append("状态在线，自然多说两句，但不是 AI helpful 多。")
+
+        return "\n".join(cues)
 
     def to_prompt_text(self) -> str:
         """Render the emotion state for the system prompt."""
@@ -164,6 +229,13 @@ class EmotionState(BaseModel):
         if self.narrative_label:
             parts.append(f"（关键词：{self.narrative_label}）")
 
+        # Engineering: append behavioral implication of current emotions.
+        # This replaces the prompt rule "remember to sustain emotion across
+        # turns" with a state-driven, runtime-computed signal.
+        impl = self.behavioral_implication()
+        if impl:
+            parts.append("\n\n" + impl)
+
         return "".join(parts)
 
 
@@ -172,7 +244,12 @@ class StyleConfig(BaseModel):
 
     speech_max_chars: int = Field(default=40, ge=1, le=500)
     prefill_openers: list[str] = Field(
-        default_factory=lambda: ["嗯", "欸", "哦", ""],
+        # Mostly empty — forced opener tokens become a tic when the LLM
+        # gets one prepended every turn. Real chat opens with "嗯/欸/哦"
+        # maybe 10-20% of the time, picked organically by the model itself,
+        # not forced by us. Keep one non-empty entry as light anchor for
+        # personas that genuinely want a casual flavor.
+        default_factory=lambda: ["", "", "", "", "嗯"],
         description="Random-pick prefill for assistant message; empty string = no prefill.",
     )
     blacklist_phrases: list[str] = Field(
