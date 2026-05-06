@@ -125,9 +125,10 @@ def clean_speech(text: str) -> str:
     text = re.sub(r"\s+—\s+", "，", text)
     text = re.sub(r"\s+--\s+", "，", text)
 
-    # 6. Collapse excess blank lines AND blank-line paragraph breaks
-    #    (multi-paragraph chat is an AI layout tell; merge to inline)
-    text = re.sub(r"\n{2,}", " ", text)
+    # 6. Preserve `\n\n` as a multi-bubble marker (channel will split on
+    #    it and send each piece as a separate IM message — mimics how real
+    #    people send 2-3 short messages in a row instead of one long one).
+    #    Collapse 3+ newlines to exactly two (paragraph break = bubble break).
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()
 
@@ -135,3 +136,25 @@ def clean_speech(text: str) -> str:
         return original.strip()
 
     return text
+
+
+def split_into_bubbles(speech: str, max_bubbles: int = 3) -> list[str]:
+    """Split a cleaned speech into separate IM-message bubbles.
+
+    Splits on `\\n\\n` (preserved by clean_speech). Each piece becomes one
+    IM message. Drops empty pieces. If the model emits more than
+    `max_bubbles` blank-line-separated paragraphs, overflow is **merged
+    into the last allowed bubble** rather than discarded — capping limits
+    the message COUNT but preserves all content.
+    """
+    if not speech:
+        return []
+    parts = [p.strip() for p in speech.split("\n\n") if p.strip()]
+    if len(parts) <= max_bubbles:
+        return parts
+    head = parts[: max_bubbles - 1]
+    # Merge overflow back together as the last bubble. Use single-space
+    # join (not `\n\n`) so the merged content reads as one continuous
+    # message instead of an embedded paragraph break.
+    tail = " ".join(parts[max_bubbles - 1:])
+    return head + [tail]

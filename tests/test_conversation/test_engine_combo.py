@@ -176,7 +176,9 @@ async def test_two_call_stream_does_not_leak_uncleaned_chunks(memory):
     final = done_events[0]
     assert "——" not in final, f"em-dash survived into done: {final!r}"
     assert " — " not in final, f"single em-dash survived into done: {final!r}"
-    assert "\n\n" not in final, f"paragraph break survived into done: {final!r}"
+    # \n\n is now PRESERVED as a multi-bubble marker; channel splits on it.
+    # We only assert there are no 3+ consecutive newlines (over-splitting).
+    assert "\n\n\n" not in final, f"3+ newlines: {final!r}"
 
 
 async def test_stream_events_surfaces_turn_id(persona, memory):

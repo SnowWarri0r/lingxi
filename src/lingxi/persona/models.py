@@ -242,7 +242,10 @@ class EmotionState(BaseModel):
 class StyleConfig(BaseModel):
     """Output style controls for the single-call combo."""
 
-    speech_max_chars: int = Field(default=40, ge=1, le=500)
+    # 60 is enough room for a complete short thought without forcing
+    # truncation. Bumping from 40 because model was producing reply that
+    # felt cut-off mid-sentence on the old cap.
+    speech_max_chars: int = Field(default=60, ge=1, le=500)
     prefill_openers: list[str] = Field(
         # Mostly empty — forced opener tokens become a tic when the LLM
         # gets one prepended every turn. Real chat opens with "嗯/欸/哦"

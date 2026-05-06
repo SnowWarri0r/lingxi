@@ -141,11 +141,16 @@ class LifeSimulator:
         llm: LLMProvider,
         store: InnerLifeStore,
         tick_interval_minutes: int = 30,
+        memory: object | None = None,
     ):
         self.persona = persona
         self.llm = llm
         self.store = store
         self.tick_interval_minutes = tick_interval_minutes
+        # Optional MemoryManager — when present, daily diary gets
+        # consolidated into chroma episodes so conversation memory can
+        # retrieve "what did Aria do last week" naturally.
+        self.memory = memory
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -187,6 +192,12 @@ class LifeSimulator:
             state.significant_events_reset_date = today
             # Also: roll a fresh sleep_quality at dawn (for "today felt rested" effects)
             state.sleep_quality = self._sample_sleep_quality(state)
+
+        # 0.5 Bridge: roll un-consolidated past days into chroma episodes.
+        # Idempotent (skips dates already in state.consolidated_dates) so
+        # safe to call every tick. Without this, diary lives only in
+        # InnerLifeStore and is invisible to conversation memory retrieval.
+        await self._consolidate_past_days(state, now)
 
         # 1. Ensure there's a plan for today
         need_plan = (
@@ -325,6 +336,74 @@ class LifeSimulator:
         return "\n".join(lines)
 
     # -- internals --
+
+    async def _consolidate_past_days(self, state: InnerState, now: datetime) -> None:
+        """Roll yesterday's (and any older un-consolidated) diary + events
+        through the memory consolidator into chroma episodes.
+
+        Idempotent via state.consolidated_dates. Skips today (still in flight).
+        Only runs if `self.memory` was wired in by app bootstrap.
+        """
+        if self.memory is None:
+            return
+        consolidator = getattr(self.memory, "_consolidator", None)
+        if consolidator is None:
+            return
+
+        from datetime import timedelta
+        today = now.date()
+        already = set(state.consolidated_dates or [])
+
+        # Group diary + events by date
+        by_date: dict[str, dict] = {}
+        for d in state.recent_diary:
+            ds = d.timestamp.date().isoformat()
+            if ds == today.isoformat() or ds in already:
+                continue
+            by_date.setdefault(ds, {"diary": [], "events": []})["diary"].append(d)
+        for e in state.recent_events:
+            ds = e.timestamp.date().isoformat()
+            if ds == today.isoformat() or ds in already:
+                continue
+            # Only significant ones — petty events flood the summary
+            if e.significance < 0.3:
+                continue
+            by_date.setdefault(ds, {"diary": [], "events": []})["events"].append(e)
+
+        if not by_date:
+            return
+
+        # Cap: only consolidate the last 7 days at most per dawn tick to
+        # avoid massive backfill if state was untouched for a long time.
+        for ds in sorted(by_date.keys())[-7:]:
+            data = by_date[ds]
+            lines = []
+            for d in data["diary"]:
+                tag = "/".join(d.tags) if d.tags else ""
+                lines.append(f"[{d.timestamp.strftime('%H:%M')}] [{tag}] {d.content}")
+            for e in data["events"]:
+                share = "📌" if e.wants_to_share else " "
+                lines.append(f"[{e.timestamp.strftime('%H:%M')}] {share} {e.content}")
+            if not lines:
+                continue
+            narrative = "\n".join(lines)
+
+            embed_fn = getattr(self.memory, "_embed_fn", None)
+            try:
+                episode_id = await consolidator.consolidate_day_narrative(
+                    narrative=narrative,
+                    date_label=ds,
+                    embed_fn=embed_fn,
+                    recipient_key="_global",
+                )
+            except Exception as e:
+                print(f"[life] consolidate_day {ds} failed: {e}")
+                continue
+
+            if episode_id:
+                state.consolidated_dates = list(already | {ds})
+                already.add(ds)
+                print(f"[life] consolidated {ds} → episode {episode_id[:8]}")
 
     def _persona_blurb(self) -> str:
         p = self.persona
