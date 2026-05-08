@@ -213,6 +213,26 @@ class ConversationEngine:
                     self._emotion_state.last_decay_at = rec.emotion_last_decay
                 if rec.emotion_narrative:
                     self._current_mood = rec.emotion_narrative
+
+                # Time weight: silence since last interaction bumps emotion
+                # BEFORE we record the new one. Decay carries the shift to
+                # fade naturally over subsequent turns in this conversation.
+                if last_interaction_time:
+                    from lingxi.temporal.silence import (
+                        compute_silence_emotion_deltas,
+                    )
+                    silence = datetime.now() - last_interaction_time
+                    deltas = compute_silence_emotion_deltas(silence)
+                    if deltas:
+                        self._emotion_state.apply_deltas(
+                            deltas,
+                            volatility=self.persona.emotional_baseline.mood_volatility,
+                        )
+                        print(
+                            f"[silence] {silence} → emotion deltas {deltas}",
+                            flush=True,
+                        )
+
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
         # Track input in short-term memory (with image indicator)
