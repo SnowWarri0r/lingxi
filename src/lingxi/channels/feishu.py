@@ -735,21 +735,31 @@ class FeishuBot(OutboundChannel):
                 },
             )
 
-    async def _send_static_card_async(self, chat_id: str, text: str) -> None:
+    async def _send_static_card_async(self, chat_id: str, text: str) -> str:
         """Send a non-streaming card with the given text already baked in.
 
         Used for multi-bubble extras: visually consistent with the first
         bubble's streaming card (border/styling) but without the typing
-        animation since the content is already determined. No annotation
-        footer either — annotation is per-turn, not per-bubble, so the
-        first card's footer covers the whole turn.
+        animation since the content is already determined.
+
+        The markdown element gets element_id="md_stream" so that
+        append_elements (used to attach the annotation footer to the LAST
+        card in a multi-bubble turn) works the same way it does on the
+        streaming card.
+
+        Returns the created card_id so the caller can append elements to
+        it later.
         """
         headers = self.token_mgr.headers()
         static_card = {
             "schema": "2.0",
             "body": {
                 "elements": [
-                    {"tag": "markdown", "content": text},
+                    {
+                        "tag": "markdown",
+                        "content": text,
+                        "element_id": "md_stream",
+                    },
                 ]
             },
         }
@@ -782,6 +792,39 @@ class FeishuBot(OutboundChannel):
             send_data = send.json()
             if send_data.get("code") != 0:
                 raise RuntimeError(f"Send static card failed: {send_data}")
+            return card_id
+
+    async def _append_to_card_id(self, card_id: str, elements: list[dict]) -> None:
+        """Append elements to an existing card by id.
+
+        Same wire shape as StreamingCardSender.append_elements, but
+        callable on a card created by _send_static_card_async (which
+        doesn't return a sender object).
+        """
+        if not card_id or not elements:
+            return
+        headers = self.token_mgr.headers()
+        body = {
+            "type": "insert_after",
+            "target_element_id": "md_stream",
+            "sequence": 1,
+            "elements": json.dumps(elements, ensure_ascii=False),
+        }
+        async with httpx.AsyncClient() as client:
+            try:
+                resp = await client.post(
+                    f"{FEISHU_BASE}/cardkit/v1/cards/{card_id}/elements",
+                    headers=headers,
+                    json=body,
+                )
+                if resp.status_code != 200:
+                    print(
+                        f"[feishu] append to {card_id} failed: "
+                        f"HTTP {resp.status_code}: {resp.text[:200]}",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[feishu] append to {card_id} exception: {e}", flush=True)
 
     async def _handle_command(self, chat_id: str, text: str) -> str | None:
         """Handle /xxx slash commands. Returns reply text, or None to fall through to LLM."""
@@ -1042,7 +1085,14 @@ class FeishuBot(OutboundChannel):
                         now = time.time()
                         if now - last_update >= self._update_interval:
                             try:
-                                await card.update_content(accumulated)
+                                # Only stream the FIRST bubble into the card.
+                                # If `\n\n` has appeared, the rest belongs to
+                                # later bubbles and would otherwise briefly
+                                # flash here before being cut to first_bubble
+                                # at stream-end (visible jank — full message
+                                # appears, then card "shrinks").
+                                first_so_far = accumulated.split("\n\n", 1)[0]
+                                await card.update_content(first_so_far)
                             except Exception:
                                 pass
                             last_update = now
@@ -1094,23 +1144,30 @@ class FeishuBot(OutboundChannel):
                 f"bubbles={len(bubbles)}",
                 flush=True,
             )
-            if turn_id:
-                try:
-                    await card.append_elements(
-                        build_annotation_footer_elements(turn_id)
-                    )
-                except Exception as e:
-                    print(f"[feishu] append buttons failed: {e}", flush=True)
 
-            # Send the extra bubbles as separate static cards (only on
-            # success path — error path doesn't send extras). Cards (not
-            # plain text) so the chat looks consistent: every bubble in
-            # the turn shares the same card border/styling. Annotation
-            # buttons stay only on the first card — they cover the whole
-            # turn, not per-bubble.
+            # Send extras as static cards. Track the LAST card sent so we
+            # can attach annotation buttons there — buttons under the most
+            # recent message read more naturally than buttons under the
+            # first bubble (which can be 2-3 messages above by the time
+            # the user wants to react).
+            last_extra_card_id: str | None = None
             for extra in extras:
                 try:
-                    await self._send_static_card_async(chat_id, extra)
+                    last_extra_card_id = await self._send_static_card_async(
+                        chat_id, extra
+                    )
                 except Exception as e:
                     print(f"[feishu] extra bubble send failed: {e}", flush=True)
+
+            if turn_id:
+                footer = build_annotation_footer_elements(turn_id)
+                try:
+                    if last_extra_card_id is not None:
+                        # Annotation footer on the LAST extra card
+                        await self._append_to_card_id(last_extra_card_id, footer)
+                    else:
+                        # No extras → buttons on the first (only) card
+                        await card.append_elements(footer)
+                except Exception as e:
+                    print(f"[feishu] append buttons failed: {e}", flush=True)
 
