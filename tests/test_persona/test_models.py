@@ -145,6 +145,89 @@ class TestPromptBuilder:
         assert long_msg not in prompt
 
 
+class TestMessageHabits:
+    def test_default_empty_not_rendered(self):
+        from lingxi.persona.models import Identity, PersonaConfig
+        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt()
+        # No populated fields → no section
+        assert "打字的习惯" not in prompt
+
+    def test_is_populated_returns_false_for_empty(self):
+        from lingxi.persona.models import MessageHabits
+        assert MessageHabits().is_populated() is False
+
+    def test_is_populated_returns_true_when_any_field_set(self):
+        from lingxi.persona.models import MessageHabits
+        assert MessageHabits(punctuation_habit="x").is_populated() is True
+        assert MessageHabits(coldness_markers=["x"]).is_populated() is True
+        assert MessageHabits(avg_length="短").is_populated() is True
+
+    def test_renders_when_populated(self):
+        from lingxi.persona.models import (
+            Identity, MessageHabits, PersonaConfig,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            message_habits=MessageHabits(
+                avg_length="短",
+                punctuation_habit="句号常省",
+                coldness_markers=["单字回"],
+                warmth_markers=["接具体细节"],
+            ),
+        )
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt()
+        assert "打字的习惯" in prompt
+        assert "句号常省" in prompt
+        assert "单字回" in prompt
+        assert "接具体细节" in prompt
+
+    def test_signature_phrases_quoted(self):
+        from lingxi.persona.models import (
+            Identity, MessageHabits, PersonaConfig,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            message_habits=MessageHabits(signature_phrases=["诶", "好像"]),
+        )
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt()
+        assert '"诶"' in prompt
+        assert '"好像"' in prompt
+
+    def test_signature_phrases_capped_at_six(self):
+        from lingxi.persona.models import (
+            Identity, MessageHabits, PersonaConfig,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            message_habits=MessageHabits(
+                signature_phrases=[f"p{i}" for i in range(20)],
+            ),
+        )
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt()
+        assert '"p0"' in prompt
+        assert '"p5"' in prompt
+        assert '"p6"' not in prompt
+
+    def test_aria_yaml_loads_message_habits(self):
+        path = Path(__file__).parent.parent.parent / "config" / "personas" / "example_persona.yaml"
+        if not path.exists():
+            return
+        persona = load_persona(path)
+        assert persona.message_habits.is_populated()
+        assert persona.message_habits.coldness_markers
+        assert persona.message_habits.warmth_markers
+        # Aria's signature_phrases stays empty (we deliberately don't pre-fill)
+        assert persona.message_habits.signature_phrases == []
+
+
 class TestStyleConfig:
     def test_defaults(self):
         cfg = StyleConfig()
