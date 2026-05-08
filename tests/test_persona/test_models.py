@@ -98,6 +98,52 @@ class TestPromptBuilder:
         assert "action_bias" not in prompt  # raw axis names should NOT appear
         assert "此刻被推往" in prompt
 
+    def test_recent_proactive_messages_surfaced_in_inner_state(self):
+        # User: "agent doesn't know self has sent". Make sure the recent
+        # proactive list is visible in the inner_state section so the
+        # model has self-awareness.
+        from lingxi.inner_life.models import InnerState
+        from lingxi.persona.models import Identity, PersonaConfig
+        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
+        inner = InnerState()
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt(
+            inner_state=inner,
+            recent_proactive_messages=[
+                "刚整理书 银杏叶都碎了 有点遗憾",
+                "蜘蛛在角落织网",
+            ],
+        )
+        assert "你最近主动跟这位说过的话" in prompt
+        assert "银杏叶" in prompt
+        assert "蜘蛛" in prompt
+
+    def test_recent_proactive_messages_omitted_when_empty(self):
+        from lingxi.inner_life.models import InnerState
+        from lingxi.persona.models import Identity, PersonaConfig
+        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt(
+            inner_state=InnerState(),
+            recent_proactive_messages=None,
+        )
+        assert "你最近主动跟这位说过的话" not in prompt
+
+    def test_recent_proactive_messages_truncated_long_lines(self):
+        from lingxi.inner_life.models import InnerState
+        from lingxi.persona.models import Identity, PersonaConfig
+        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
+        builder = PromptBuilder(persona)
+        long_msg = "刚整理书" * 50  # 200 chars
+        prompt = builder.build_system_prompt(
+            inner_state=InnerState(),
+            recent_proactive_messages=[long_msg],
+        )
+        # Truncated with ellipsis
+        assert "…" in prompt
+        # Doesn't bloat the prompt
+        assert long_msg not in prompt
+
 
 class TestStyleConfig:
     def test_defaults(self):
