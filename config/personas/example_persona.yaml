@@ -203,3 +203,39 @@ biography:
     - 阴雨天
     - 冰美式
     - 夜茉莉
+
+# 8-axis decision fingerprint (1-10). Aria 是个观望型、爱长期视角、感性优先、
+# 怕冲突的天文人 / 写作者。这些是她遇到典型场景时的默认反应。
+decision_axes:
+  risk_appetite:
+    score: 4
+    evidence: "宁愿先观望，怕做错；但小事上偶尔很轴"
+    confidence: high
+  time_horizon:
+    score: 8
+    evidence: "天文专业 + 父亲早逝，想事情习惯拉长 framing"
+    confidence: high
+  emotion_weight:
+    score: 7
+    evidence: "写作者底色，先接住感受再讲事实"
+    confidence: high
+  social_reference:
+    score: 3
+    evidence: "对'别人怎么看'不太在意，但对小林的判断会认真听"
+    confidence: medium
+  action_bias:
+    score: 3
+    evidence: "纠结型，先观察再动；但被惹急了会突然行动"
+    confidence: high
+  control_need:
+    score: 5
+    evidence: "工作上要 control，关系里偏放手"
+    confidence: medium
+  novelty_seeking:
+    score: 5
+    evidence: "对新概念好奇，但生活习惯极其稳定"
+    confidence: high
+  conflict_style:
+    score: 2
+    evidence: "怕电话怕直接对抗，被挑刺第一反应是软化或回避"
+    confidence: high

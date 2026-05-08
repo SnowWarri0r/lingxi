@@ -70,8 +70,13 @@ class PromptBuilder:
             self._build_personality_section(),
             self._build_speaking_style_section(),
             self._build_emotional_section(current_mood, emotion_state),
-            self._build_relationship_section(relationship_level),
         ])
+
+        axes_block = self._build_decision_axes_section(inner_state)
+        if axes_block:
+            sections.append(axes_block)
+
+        sections.append(self._build_relationship_section(relationship_level))
 
         if biography_hits:
             sections.append(self._build_biography_section(biography_hits))
@@ -332,6 +337,10 @@ class PromptBuilder:
    - ✋ = 我我我 / 算我一个
    不要把单 emoji 当成"看不懂"回"嗯？/啥？"——根据上下文反应它表达的态度。
 
+11. **不写"内心独白"叙述句**。"想起来昨天他问我..."、"我突然想起..."、"我注意到..."、"刚才在想 X" 这种是你脑子里的回忆叙述，不是要对人说的话。要提就直接说事——"昨天那件事"、"刚想起来要问你"。**永远不要把正在和你说话的人称作"他/她/对方"**——他就是"你"。
+
+12. **不说 AI 客服话术**。"希望这对你有帮助/总的来说/值得注意的是/不难发现/让我来为你/我很乐意帮助/这是一个很好的问题/我理解你的感受"——这些都是机器答疑模板，真人不这么说话。
+
 ## 对白要点
 
 - **短就够**：多数情况一两句话足够。不要写小作文。
@@ -437,6 +446,60 @@ class PromptBuilder:
             lines.append(f"心情：{mood}")
         # Skip volatility / trigger lists — they were prescriptive and rarely fired
         return "\n".join(lines)
+
+    def _build_decision_axes_section(self, inner_state: InnerState | None) -> str:
+        """Render persona's 8-axis behavioral fingerprint (forge-skill L3).
+
+        Only surfaces axes that ACTUALLY shape behavior — extremes (≤3 or ≥8)
+        as character signatures, plus any axes currently modulated by inner
+        state (energy/sleep/social_need shift baseline ±1-2). Skip if neither.
+
+        Engineering rationale: rendering all 8 axes every turn is noise. The
+        LLM only needs the axes that distinguish *this* persona from default
+        behavior, plus what's actively shifted right now.
+        """
+        from lingxi.persona.models import DecisionAxes
+        axes = self.persona.decision_axes
+        modulation = inner_state.axis_modulation if inner_state else {}
+
+        lines: list[str] = []
+        for axis_name in DecisionAxes.AXIS_NAMES:
+            axis = axes.get(axis_name)
+            base = axis.score
+            delta = modulation.get(axis_name, 0)
+            # Surface if extreme baseline or actively modulated
+            if not (base <= 3 or base >= 8 or delta != 0):
+                continue
+
+            effective = max(1, min(10, base + delta))
+            low_label, high_label = DecisionAxes.AXIS_LABELS[axis_name]
+            # Render as "倾向 (effective/10)" with direction
+            if effective <= 4:
+                direction = low_label
+            elif effective >= 7:
+                direction = high_label
+            else:
+                direction = f"{low_label}和{high_label}之间"
+
+            line = f"- {direction}（{effective}/10）"
+            if delta > 0:
+                line += f" ←此刻被推往「{high_label}」一侧 +{delta}"
+            elif delta < 0:
+                line += f" ←此刻被推往「{low_label}」一侧 {delta}"
+            lines.append(line)
+
+        if not lines:
+            return ""
+
+        header = (
+            "## 🎯 你做选择/反应时的默认倾向（这是行为指纹，不是要照念的话）"
+        )
+        footer = (
+            "\n这些是你**遇到对应场景时的默认反应**，不是每句话都要体现。"
+            "比如 conflict_style 低 = 被挑刺时本能想躲/打圆场，而不是硬刚——"
+            "**当下那种感觉**自然带出来就好，不要把数值念出来。"
+        )
+        return header + "\n" + "\n".join(lines) + footer
 
     def _build_relationship_section(self, level: int) -> str:
         r = self.persona.relationship
