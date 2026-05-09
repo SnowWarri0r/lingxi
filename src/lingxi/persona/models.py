@@ -247,13 +247,16 @@ class StyleConfig(BaseModel):
     # felt cut-off mid-sentence on the old cap.
     speech_max_chars: int = Field(default=60, ge=1, le=500)
     prefill_openers: list[str] = Field(
-        # Mostly empty — forced opener tokens become a tic when the LLM
-        # gets one prepended every turn. Real chat opens with "嗯/欸/哦"
-        # maybe 10-20% of the time, picked organically by the model itself,
-        # not forced by us. Keep one non-empty entry as light anchor for
-        # personas that genuinely want a casual flavor.
-        default_factory=lambda: ["", "", "", "", "嗯"],
-        description="Random-pick prefill for assistant message; empty string = no prefill.",
+        # Default empty — no forced prefill. Style now emerges from L2
+        # message_habits (cold/warm markers, punctuation, signature_phrases)
+        # + emotion behavioral_implication + decision_axes. Random
+        # context-blind prepending of "嗯" was a residual workaround from
+        # before those layers existed; it's now redundant and inconsistent
+        # with the rest of the state-driven design (every behavior should
+        # follow from explicit state, not random injection).
+        # Personas that genuinely need an opener anchor can override.
+        default_factory=list,
+        description="Random-pick prefill for assistant message; empty list = no prefill.",
     )
     blacklist_phrases: list[str] = Field(
         default_factory=list,
