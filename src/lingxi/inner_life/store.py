@@ -66,6 +66,36 @@ class InnerLifeStore:
         async with self._lock:
             await self._atomic_write(self._state_path, state.model_dump(mode="json"))
 
+    async def update_state(self, mutator) -> InnerState:
+        """Atomic read-modify-write under the store lock.
+
+        Use this when you need to mutate a single field (e.g. clear a
+        wants_to_share marker) and any concurrent writer (life simulator
+        tick, reactive turn touching last_chat_at) might also be saving.
+        Without this, load_state → mutate → save_state has a race window
+        that overwrites the concurrent writer's whole snapshot.
+
+        mutator(state) is called synchronously inside the lock; whatever
+        it does to state is what gets persisted. Returns the post-mutation
+        state for observability.
+        """
+        async with self._lock:
+            # Re-read under lock for the freshest snapshot — disregard any
+            # caller-held copy.
+            if not self._state_path.exists():
+                state = InnerState()
+            else:
+                try:
+                    data = await asyncio.to_thread(
+                        lambda: json.loads(self._state_path.read_text(encoding="utf-8"))
+                    )
+                    state = InnerState.model_validate(data)
+                except Exception:
+                    state = InnerState()
+            mutator(state)
+            await self._atomic_write(self._state_path, state.model_dump(mode="json"))
+            return state
+
     # --- Subjective views ---
 
     async def load_subjective(self, recipient_key: str) -> SubjectiveView:
