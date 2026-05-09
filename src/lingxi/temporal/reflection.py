@@ -219,13 +219,19 @@ class ReflectionLoop:
 
         rec_key = f"{record.channel}:{record.recipient_id}"
 
-        # Get recent dialogue for this recipient. Switch the short-term
-        # buffer to this recipient first — same pattern other paths use.
+        # Get recent dialogue WITHOUT mutating the singleton active buffer
+        # — switch_recipient races with concurrent chat_stream_events on a
+        # different recipient (the chat path's compress_aged_turns +
+        # assemble_context reads the singleton; if reflection switched it
+        # mid-flight, the chat reads the wrong buffer and ends up sending
+        # an empty messages list to Anthropic → 400). Use the snapshot
+        # API instead — it's read-only.
         try:
-            await self.engine.memory.short_term.switch_recipient(rec_key)
+            all_turns = await self.engine.memory.short_term.snapshot_for_recipient(rec_key)
         except Exception:
-            pass
-        turns = self.engine.memory.short_term.get_history(last_n=30)
+            all_turns = []
+        # snapshot_for_recipient returns full history; reflection only needs the tail
+        turns = all_turns[-30:] if all_turns else []
         if len(turns) < 6:
             # Too little to extract from
             return
@@ -331,9 +337,14 @@ class ReflectionLoop:
         print(f"[biography] grew: {age}岁·{content[:40]}")
 
     async def _generate_insights(self, record: InteractionRecord) -> list[dict]:
-        # Temporarily switch short-term to this recipient's context
+        # NEVER switch the singleton active recipient here — race against
+        # a concurrent chat_stream_events on a different recipient that
+        # got us "messages: at least one message is required" 400s in
+        # production. Use snapshot_for_recipient (read-only) for the
+        # turns; for long_term_facts / episodes we accept the cost of
+        # not having recipient-scoped retrieval (most facts are global
+        # for our single-persona setup).
         recipient_key = f"{record.channel}:{record.recipient_id}"
-        await self.engine.memory.short_term.switch_recipient(recipient_key)
 
         memory_context = await self.engine.memory.assemble_context("")
 
@@ -347,7 +358,13 @@ class ReflectionLoop:
         ) or "（暂无回忆）"
 
         recent_turns = ""
-        turns = self.engine.memory.short_term.get_history(last_n=10)
+        try:
+            all_turns = await self.engine.memory.short_term.snapshot_for_recipient(
+                recipient_key
+            )
+        except Exception:
+            all_turns = []
+        turns = all_turns[-10:] if all_turns else []
         if turns:
             lines = []
             for t in turns:
