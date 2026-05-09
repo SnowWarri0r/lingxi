@@ -195,7 +195,79 @@ class ReflectionLoop:
         except Exception as e:
             print(f"[reflection] biography add failed: {e}")
 
+        # Extract relational deltas (inside jokes, shared places, fight
+        # patterns, sweet moments, pet names, daily patterns) from the
+        # same idle window. Conservative — most cycles will add nothing,
+        # which is correct.
+        try:
+            await self._maybe_extract_relational(record)
+        except Exception as e:
+            print(f"[reflection] relational extract failed: {e}")
+
         self._last_reflection[key] = now
+
+    async def _maybe_extract_relational(self, record: InteractionRecord) -> None:
+        """Run the relational extractor against recent dialogue and merge
+        any new entries into the per-recipient store.
+
+        No-op when no relational store is configured or when there isn't
+        enough recent dialogue to be worth analyzing.
+        """
+        store = getattr(self.engine, "relational_store", None)
+        if store is None:
+            return
+
+        rec_key = f"{record.channel}:{record.recipient_id}"
+
+        # Get recent dialogue for this recipient. Switch the short-term
+        # buffer to this recipient first — same pattern other paths use.
+        try:
+            await self.engine.memory.short_term.switch_recipient(rec_key)
+        except Exception:
+            pass
+        turns = self.engine.memory.short_term.get_history(last_n=30)
+        if len(turns) < 6:
+            # Too little to extract from
+            return
+
+        existing = await store.load(rec_key)
+
+        from lingxi.relational.extractor import (
+            extract_relational_deltas,
+            merge_deltas_into_memory,
+        )
+        deltas = await extract_relational_deltas(self.engine.llm, existing, turns)
+
+        # Skip the write if nothing new
+        all_empty = (
+            not deltas.get("inside_jokes")
+            and not deltas.get("shared_places")
+            and not deltas.get("fight_patterns")
+            and not deltas.get("sweet_moments")
+            and not deltas.get("pet_names")
+            and not deltas.get("daily_patterns")
+            and not deltas.get("relationship_summary_update")
+        )
+        if all_empty:
+            return
+
+        added_count = [0]
+
+        def _mutate(memory):
+            n = merge_deltas_into_memory(memory, deltas)
+            added_count[0] = n
+
+        await store.update_memory(rec_key, _mutate)
+        if added_count[0]:
+            print(
+                f"[relational] {rec_key}: +{added_count[0]} entries "
+                f"(jokes={len(deltas['inside_jokes'])}, "
+                f"places={len(deltas['shared_places'])}, "
+                f"sweet={len(deltas['sweet_moments'])}, "
+                f"daily={len(deltas['daily_patterns'])}, "
+                f"names={len(deltas['pet_names'])})",
+                flush=True,
+            )
 
     async def _maybe_add_biography_event(self, record: InteractionRecord) -> None:
         """Ask the LLM whether this session produced a biographical moment for Aria herself."""
