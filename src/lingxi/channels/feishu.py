@@ -309,15 +309,29 @@ class FeishuBot(OutboundChannel):
     def channel_name(self) -> str:
         return "feishu"
 
-    async def send_message(self, recipient_id: str, text: str) -> None:
-        """OutboundChannel implementation - send proactive message as a card."""
+    async def send_message(
+        self,
+        recipient_id: str,
+        text: str,
+        turn_id: str | None = None,
+    ) -> None:
+        """OutboundChannel implementation - send proactive message as a card.
+
+        If `turn_id` is provided, append the 👍/👎/✏️ annotation footer so
+        the user can rate the proactive message.
+        """
         try:
-            await self._send_proactive_card(recipient_id, text)
+            await self._send_proactive_card(recipient_id, text, turn_id=turn_id)
         except Exception:
             # Fallback to plain text if card fails
             await self._send_text_async(recipient_id, text)
 
-    async def _send_proactive_card(self, chat_id: str, text: str) -> None:
+    async def _send_proactive_card(
+        self,
+        chat_id: str,
+        text: str,
+        turn_id: str | None = None,
+    ) -> None:
         """Send a message as a markdown card (visually consistent with chat replies)."""
         async with httpx.AsyncClient(timeout=30) as http:
             card = StreamingCardSender(self.token_mgr, http)
@@ -325,6 +339,13 @@ class FeishuBot(OutboundChannel):
             await card.send_to_chat(chat_id)
             await card.update_content(text)
             await card.finish()
+            if turn_id:
+                try:
+                    await card.append_elements(
+                        build_annotation_footer_elements(turn_id)
+                    )
+                except Exception as e:
+                    print(f"[feishu] append proactive buttons failed: {e}", flush=True)
 
     async def _send_card_or_text(self, chat_id: str, text: str) -> None:
         """Send as card, fallback to text on failure."""
@@ -897,50 +918,57 @@ class FeishuBot(OutboundChannel):
             last_update = 0.0
             turn_id: str | None = None
 
-            async for event in self.engine.chat_stream_events(
-                user_text,
-                images=images,
-                channel="feishu",
-                recipient_id=chat_id,
-            ):
-                if event.type == "thinking":
-                    # Two-call pipeline finished Call 1; show a transitional
-                    # preview before Call 2's speech starts streaming.
-                    try:
-                        preview = event.content.strip()
-                        if preview:
-                            await card.update_content(f"💭 {preview}…")
-                    except Exception:
-                        pass
-
-                elif event.type == "chunk":
-                    accumulated += event.content
-                    now = time.time()
-                    if now - last_update >= self._update_interval:
+            stream_error: Exception | None = None
+            try:
+                async for event in self.engine.chat_stream_events(
+                    user_text,
+                    images=images,
+                    channel="feishu",
+                    recipient_id=chat_id,
+                ):
+                    if event.type == "thinking":
                         try:
-                            await card.update_content(accumulated)
+                            preview = event.content.strip()
+                            if preview:
+                                await card.update_content(f"💭 {preview}…")
                         except Exception:
                             pass
-                        last_update = now
 
-                elif event.type == "turn_id":
-                    turn_id = event.content
+                    elif event.type == "chunk":
+                        accumulated += event.content
+                        now = time.time()
+                        if now - last_update >= self._update_interval:
+                            try:
+                                await card.update_content(accumulated)
+                            except Exception:
+                                pass
+                            last_update = now
 
-                elif event.type == "done":
-                    # Final render: pure speech, no meta leaked to user
-                    final = event.content
-                    try:
-                        await card.update_content(final)
-                    except Exception:
-                        pass
+                    elif event.type == "turn_id":
+                        turn_id = event.content
 
-            # Finish streaming, then append annotation buttons inline
+                    elif event.type == "done":
+                        final = event.content
+                        try:
+                            await card.update_content(final)
+                        except Exception:
+                            pass
+            except Exception as e:
+                stream_error = e
+                print(f"[feishu] stream raised: {e}", flush=True)
+                # Replace the "💭 thinking..." placeholder with a graceful
+                # error so the user isn't staring at it forever.
+                try:
+                    await card.update_content("嗯 网络抽了一下 你再说一次")
+                except Exception:
+                    pass
+
             try:
                 await card.finish()
             except Exception as e:
                 print(f"[feishu] finish() failed: {e}", flush=True)
 
-            print(f"[feishu] stream done, turn_id={turn_id!r}", flush=True)
+            print(f"[feishu] stream done, turn_id={turn_id!r}, err={stream_error!r}", flush=True)
             if turn_id:
                 try:
                     await card.append_elements(

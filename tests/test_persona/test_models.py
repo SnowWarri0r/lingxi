@@ -59,7 +59,8 @@ class TestStyleConfig:
     def test_defaults(self):
         cfg = StyleConfig()
         assert cfg.speech_max_chars == 40
-        assert cfg.prefill_openers == ["嗯", "欸", "哦", ""]
+        # Defaults are mostly empty so forced prefills don't become a tic.
+        assert cfg.prefill_openers == ["", "", "", "", "嗯"]
         assert cfg.blacklist_phrases == []
 
     def test_custom_values(self):
