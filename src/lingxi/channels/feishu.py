@@ -418,10 +418,10 @@ class FeishuBot(OutboundChannel):
 
         proactive_hint = "开启" if self._proactive_config.enabled else "关闭"
         print(f"\n{'='*50}")
-        print(f"  飞书机器人已启动 (WebSocket 长连接)")
+        print("  飞书机器人已启动 (WebSocket 长连接)")
         print(f"  人设: {self.engine.persona.name}")
         print(f"  主动消息: {proactive_hint}")
-        print(f"  在飞书中找到机器人，发消息即可对话")
+        print("  在飞书中找到机器人，发消息即可对话")
         print(f"{'='*50}\n")
 
         ws_client.start()
@@ -516,14 +516,21 @@ class FeishuBot(OutboundChannel):
             P2CardActionTriggerResponse,
         )
 
-        print(f"[feishu] _on_card_action fired", flush=True)
+        print("[feishu] _on_card_action fired", flush=True)
         try:
             action_obj = event.event.action if event.event else None
             value = (action_obj.value or {}) if action_obj else {}
             form_value = (action_obj.form_value or {}) if action_obj else {}
             action = value.get("action", "")
             turn_id = value.get("turn_id", "")
-            print(f"[feishu] action={action!r} turn_id={turn_id!r} form_value={form_value!r}", flush=True)
+            # Lark P2CardActionTrigger event carries the originating chat_id
+            event_data = getattr(event, "event", None)
+            open_chat_id = getattr(event_data, "open_chat_id", None) or ""
+            print(
+                f"[feishu] action={action!r} turn_id={turn_id!r} "
+                f"chat={open_chat_id[:12]}... form_value={form_value!r}",
+                flush=True,
+            )
 
             if not turn_id or not action.startswith("annotate_"):
                 return P2CardActionTriggerResponse({})
@@ -541,9 +548,12 @@ class FeishuBot(OutboundChannel):
                         },
                     })
 
-            # Dispatch to annotation in background (handler returns synchronously)
+            # Dispatch to annotation in background (handler returns synchronously).
+            # Pass open_chat_id so the handler can verify the turn belongs to
+            # this chat before acting on it.
             asyncio.run_coroutine_threadsafe(
-                self._handle_card_annotation(action, turn_id, correction), self._loop,
+                self._handle_card_annotation(action, turn_id, correction, open_chat_id),
+                self._loop,
             )
 
             # Show a lightweight toast back to the user
@@ -567,13 +577,34 @@ class FeishuBot(OutboundChannel):
             return P2CardActionTriggerResponse({})
 
     async def _handle_card_annotation(
-        self, action: str, turn_id: str, correction: str | None = None
+        self,
+        action: str,
+        turn_id: str,
+        correction: str | None = None,
+        open_chat_id: str = "",
     ) -> None:
-        """Dispatch the annotation action to AnnotationCollector."""
+        """Dispatch the annotation action to AnnotationCollector.
+
+        Verifies the turn's recipient_key matches the chat the action came
+        from — prevents one user clicking a forged button on another user's
+        turn id from training/exposing that other user's data.
+        """
         print(f"[feishu] _handle_card_annotation start: action={action}, turn={turn_id[:8]}, correction={correction!r}", flush=True)
         if self.engine.annotation_store is None or self.engine.fewshot_store is None:
-            print(f"[feishu] skip: annotation_store or fewshot_store is None", flush=True)
+            print("[feishu] skip: annotation_store or fewshot_store is None", flush=True)
             return
+
+        # Recipient match check
+        if open_chat_id:
+            expected = f"feishu:{open_chat_id}"
+            turn = await self.engine.annotation_store.get_turn(turn_id)
+            if turn is None or turn.recipient_key != expected:
+                print(
+                    f"[feishu] reject card-action: turn recipient={getattr(turn, 'recipient_key', None)!r} "
+                    f"!= expected={expected!r}",
+                    flush=True,
+                )
+                return
 
         from lingxi.fewshot.collector import AnnotationCollector
         from lingxi.fewshot.summarizer import AnnotationSummarizer
@@ -583,7 +614,7 @@ class FeishuBot(OutboundChannel):
             if self.engine.fewshot_retriever else None
         )
         if embedder is None:
-            print(f"[feishu] skip: no embedder available (need ARK_API_KEY for fewshot pool)", flush=True)
+            print("[feishu] skip: no embedder available (need ARK_API_KEY for fewshot pool)", flush=True)
             return
 
         print(f"[feishu] collector ready, embedder={type(embedder).__name__}", flush=True)
@@ -596,13 +627,13 @@ class FeishuBot(OutboundChannel):
 
         try:
             if action == "annotate_positive":
-                print(f"[feishu] calling record_positive", flush=True)
+                print("[feishu] calling record_positive", flush=True)
                 await collector.record_positive(turn_id)
             elif action == "annotate_negative":
-                print(f"[feishu] calling record_negative", flush=True)
+                print("[feishu] calling record_negative", flush=True)
                 await collector.record_negative(turn_id)
             elif action == "annotate_correction" and correction:
-                print(f"[feishu] calling record_correction", flush=True)
+                print("[feishu] calling record_correction", flush=True)
                 await collector.record_correction(turn_id, correction)
             print(f"[feishu] annotation recorded: {action}", flush=True)
         except Exception as e:
@@ -797,44 +828,63 @@ class FeishuBot(OutboundChannel):
                 "（这会删除所有针对你的对话记忆和情绪状态，不可恢复）"
             )
 
+        expected_recipient = f"feishu:{chat_id}"
+
         if cmd == "/reveal":
             turn_id = arg.strip()
             if not turn_id:
                 return "用法: /reveal <turn_id>"
             if self.engine.annotation_store is None:
                 return "未启用标注存储"
-            # Resolve short id (8-char prefix) to a full turn_id
-            turn = await self._resolve_turn(turn_id)
+            turn = await self._resolve_turn(turn_id, expected_recipient=expected_recipient)
             if turn is None:
                 return f"未找到 turn {turn_id}"
             return f"💭 Aria 当时想的（{turn.turn_id[:8]}）：\n{turn.inner_thought or '(无)'}"
 
         if cmd == "/bad":
-            return await self._cmd_correction(arg.strip())
+            return await self._cmd_correction(arg.strip(), expected_recipient=expected_recipient)
 
         if cmd == "/good":
-            return await self._cmd_good(arg.strip())
+            return await self._cmd_good(arg.strip(), expected_recipient=expected_recipient)
 
         # Unknown command - let LLM handle it
         return None
 
-    async def _resolve_turn(self, ref: str):
-        """Accept either a full turn_id or an 8-char prefix; returns AnnotationTurn or None."""
+    _TURN_REF_RE = __import__("re").compile(r"^[0-9a-fA-F-]{6,36}$")
+
+    async def _resolve_turn(self, ref: str, expected_recipient: str | None = None):
+        """Resolve `ref` to an AnnotationTurn, with optional recipient match.
+
+        - `ref` must be hex/dash only (UUID format) — guards against glob
+          meta-chars like `?` `[` `*` that would expand the match set.
+        - When `expected_recipient` is given, the resolved turn's
+          `recipient_key` must equal it. Prevents one user from poking at
+          another user's turn ids by guessing 8-char prefixes.
+        """
         if self.engine.annotation_store is None or not ref:
             return None
-        turn = await self.engine.annotation_store.get_turn(ref)
-        if turn is not None:
-            return turn
-        # Try prefix resolution
-        from pathlib import Path
-        turns_dir = Path(self.engine.annotation_store.turns_dir)
-        if not turns_dir.exists():
+        if not self._TURN_REF_RE.match(ref):
             return None
-        for p in turns_dir.glob(f"{ref}*.json"):
-            return await self.engine.annotation_store.get_turn(p.stem)
-        return None
 
-    async def _cmd_correction(self, arg: str) -> str:
+        turn = await self.engine.annotation_store.get_turn(ref)
+        if turn is None:
+            # Prefix resolution — glob is now safe because ref is hex-only.
+            from pathlib import Path
+            turns_dir = Path(self.engine.annotation_store.turns_dir)
+            if not turns_dir.exists():
+                return None
+            for p in turns_dir.glob(f"{ref}*.json"):
+                turn = await self.engine.annotation_store.get_turn(p.stem)
+                if turn is not None:
+                    break
+
+        if turn is None:
+            return None
+        if expected_recipient and turn.recipient_key != expected_recipient:
+            return None
+        return turn
+
+    async def _cmd_correction(self, arg: str, expected_recipient: str | None = None) -> str:
         """`/bad <turn_id_or_prefix> <correction>` — record a user_correction sample."""
         if self.engine.annotation_store is None or self.engine.fewshot_store is None:
             return "未启用标注闭环"
@@ -842,7 +892,7 @@ class FeishuBot(OutboundChannel):
         if len(parts) < 2:
             return "用法: /bad <turn_id 前 8 位> <应该说的话>"
         ref, correction = parts[0], parts[1].strip()
-        turn = await self._resolve_turn(ref)
+        turn = await self._resolve_turn(ref, expected_recipient=expected_recipient)
         if turn is None:
             return f"未找到 turn {ref}"
 
@@ -868,7 +918,7 @@ class FeishuBot(OutboundChannel):
         except Exception as e:
             return f"失败: {e}"
 
-    async def _cmd_good(self, arg: str) -> str:
+    async def _cmd_good(self, arg: str, expected_recipient: str | None = None) -> str:
         """`/good [turn_id_or_prefix]` — record as positive (defaults to last turn)."""
         if self.engine.annotation_store is None or self.engine.fewshot_store is None:
             return "未启用标注闭环"
@@ -876,7 +926,10 @@ class FeishuBot(OutboundChannel):
         if not ref:
             last = getattr(self.engine, "_last_output", None)
             ref = last.turn_id if last else ""
-        turn = await self._resolve_turn(ref) if ref else None
+        turn = (
+            await self._resolve_turn(ref, expected_recipient=expected_recipient)
+            if ref else None
+        )
         if turn is None:
             return "未找到 turn（用 /good <前 8 位>）"
 
