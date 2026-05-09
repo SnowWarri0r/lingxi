@@ -84,3 +84,35 @@ def detect_last_assistant_question(
             # Cap length so it doesn't bloat the reminder
             return bubble[:200]
     return None
+
+
+# Aria-directed accusations / challenges. Each entry is a substring that
+# strongly indicates the user is calling Aria out (cold reply / not
+# caring / says something hurtful). Conservative: better to miss a
+# borderline case than fluster on every venting message.
+_CONFRONTATION_PATTERNS: tuple[str, ...] = (
+    # Style criticism (almost always Aria-targeted)
+    "好敷衍", "敷衍", "好冷漠", "冷漠",
+    # 你-prefix accusations
+    "你都不", "你怎么不", "你为什么不", "你这样", "你这个人",
+    "你竟然", "你居然", "你也不",
+    # Relationship / care questioning
+    "什么关系", "我算什么",
+    "不在乎我", "不安慰", "都不在乎",
+    # "I'm hurt" markers
+    "失望", "伤心了", "我生气了",
+)
+
+
+def detect_confrontation(user_text: str) -> bool:
+    """True if user_text contains Aria-directed accusation/challenge signals.
+
+    These trigger a fluster bump on Aria's emotion (慌乱/心虚) so the
+    next reply lands destabilized instead of composed. Real humans
+    scramble when caught; the lack of scrambling is itself an AI tell
+    (the user's exact diagnosis: "感觉没有手忙脚乱也没有极力解释").
+    """
+    if not user_text:
+        return False
+    text = user_text.strip()
+    return any(p in text for p in _CONFRONTATION_PATTERNS)
