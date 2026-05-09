@@ -9,8 +9,12 @@ from __future__ import annotations
 import uuid
 from datetime import date, datetime
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from lingxi.persona.models import EmotionState
 
 
 class ActivityKind(str, Enum):
@@ -24,6 +28,70 @@ class ActivityKind(str, Enum):
     OUTDOORS = "outdoors"     # walk, stargazing, errands
     MEAL = "meal"
     HOBBY = "hobby"
+
+
+class EngagementMode(str, Enum):
+    """How present Aria is in this turn.
+
+    Derived per-turn from emotion + energy. Existence of this enum is the
+    "agency" lever — without it, Aria is structurally helpful (every turn
+    must be a good response). With it, "短一句就停" / "只回个嗯" /
+    "不接对方的话题" are first-class legal outputs in their own modes,
+    not embarrassing fallbacks.
+
+    full       — default. Engages normally per persona/state.
+    curt       — low energy / mild irritation. Replies short, no follow-up
+                 question, no warmth markers. "嗯" or one-line is fine.
+    withdrawn  — heavy emotion (悲伤/孤独/压抑) ≥ 0.5. Sentence-level
+                 silence is allowed; one-emoji or "嗯..." is enough.
+                 Don't echo user's topic, don't ask follow-up.
+    """
+
+    FULL = "full"
+    CURT = "curt"
+    WITHDRAWN = "withdrawn"
+
+
+def derive_engagement_mode(
+    inner_state: "InnerState | None",
+    emotion: "EmotionState | None",
+) -> EngagementMode:
+    """Pick an engagement mode from current emotion + inner state.
+
+    Per-turn — represents NOW, not a sticky state machine. Recomputed
+    every prompt build so a heavy-emotion turn naturally retreats and
+    a recovered turn springs back. Order of checks matters: HEAVY
+    overrides everything else; PROVOKED only matters if not HEAVY.
+    """
+    # No state context — assume normal engagement
+    if inner_state is None and emotion is None:
+        return EngagementMode.FULL
+
+    # Heavy emotion — withdraw. Higher precedence than provoked because
+    # 悲伤/孤独 reads inward (less talking), not outward (snapping).
+    if emotion is not None:
+        # Local import to avoid the runtime cycle: inner_life models
+        # describe the lever, persona models hold the dim families.
+        from lingxi.persona.models import EmotionState
+        heavy = max(
+            (v for n, v in emotion.dimensions.items() if n in EmotionState.HEAVY_DIMS),
+            default=0.0,
+        )
+        if heavy >= 0.5:
+            return EngagementMode.WITHDRAWN
+
+        provoked = max(
+            (v for n, v in emotion.dimensions.items() if n in EmotionState.PROVOKED_DIMS),
+            default=0.0,
+        )
+        if provoked >= 0.4:
+            return EngagementMode.CURT
+
+    # Very low energy → curt (no emotional reason, just tired)
+    if inner_state is not None and inner_state.energy < 0.3:
+        return EngagementMode.CURT
+
+    return EngagementMode.FULL
 
 
 class Activity(BaseModel):
