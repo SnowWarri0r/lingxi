@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from lingxi.memory.manager import MemoryContext
     from lingxi.planning.models import Plan
     from lingxi.relational.models import RelationalMemory
+    from lingxi.world.models import DailyBriefing
 
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
@@ -79,6 +80,7 @@ class PromptBuilder:
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
         relational_memory: RelationalMemory | None = None,
+        daily_briefing: DailyBriefing | None = None,
         mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
@@ -111,10 +113,13 @@ class PromptBuilder:
         # Inner state comes right after time — it's "what I'm actually doing right now"
         if inner_state is not None:
             inner_block = self._build_inner_state_section(
-                inner_state, recent_proactive_messages
+                inner_state, recent_proactive_messages, daily_briefing
             )
             if inner_block:
                 sections.append(inner_block)
+        elif daily_briefing is not None and not daily_briefing.is_empty():
+            # World awareness even when inner_state isn't loaded
+            sections.append(self._build_world_section(daily_briefing))
 
         sections.extend([
             self._build_personality_section(),
@@ -176,6 +181,7 @@ class PromptBuilder:
         self,
         state: InnerState,
         recent_proactive_messages: list[str] | None = None,
+        daily_briefing: "DailyBriefing | None" = None,
     ) -> str:
         """Inject 'what I'm doing right now' so participation level is emergent from state."""
         lines = ["## 🌱 你此刻的生活状态（真实在发生，不是设定）"]
@@ -230,6 +236,18 @@ class PromptBuilder:
                     marker = "📌想说" if e.wants_to_share else "·"
                     when = _age_label(e.timestamp, now)
                     lines.append(f"  {marker} [{when}] {e.content}")
+
+        # World awareness — what she "saw this morning". Real-world news
+        # injected as part of her state so she doesn't feel offline.
+        # Skip when empty (no items) to avoid adding noise on quiet days.
+        if daily_briefing is not None and not daily_briefing.is_empty():
+            lines.append(
+                "\n你今早扫到的事（**不是要播报**——只在话题撞上时自然带，"
+                "或者别人问你最近 X 时能接住，**不主动罗列**）："
+            )
+            for item in daily_briefing.items[:5]:
+                cat = f"[{item.category}] " if item.category != "其他" else ""
+                lines.append(f"  - {cat}{item.aria_voice}")
 
         # Self-awareness of what's already been said proactively. Surface
         # alongside events so the agent treats "I already pitched 银杏叶 to
@@ -560,6 +578,16 @@ class PromptBuilder:
             mood = current_mood or e.default_mood
             lines.append(f"心情：{mood}")
         # Skip volatility / trigger lists — they were prescriptive and rarely fired
+        return "\n".join(lines)
+
+    def _build_world_section(self, briefing: "DailyBriefing") -> str:
+        """Standalone world block (used when inner_state isn't available)."""
+        lines = [
+            "## 🌐 你今早扫到的事（**不是要播报**——只在话题撞上时带，不主动罗列）："
+        ]
+        for item in briefing.items[:5]:
+            cat = f"[{item.category}] " if item.category != "其他" else ""
+            lines.append(f"- {cat}{item.aria_voice}")
         return "\n".join(lines)
 
     def _build_engagement_section(self, mode) -> str:

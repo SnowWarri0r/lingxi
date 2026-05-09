@@ -114,6 +114,7 @@ class ConversationEngine:
         annotation_store: AnnotationStore | None = None,
         fewshot_retriever: FewShotRetriever | None = None,
         relational_store=None,
+        world_store=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -122,6 +123,7 @@ class ConversationEngine:
         self.agenda_engine = agenda_engine
         self.subjective_layer = subjective_layer
         self.relational_store = relational_store
+        self.world_store = world_store
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -308,6 +310,15 @@ class ConversationEngine:
                 print(f"[relational] load failed: {e}", flush=True)
                 relational_memory = None
 
+        # World awareness: today's news briefing (if generated)
+        daily_briefing = None
+        if self.world_store is not None:
+            try:
+                daily_briefing = await self.world_store.load_today()
+            except Exception as e:
+                print(f"[world] load failed: {e}", flush=True)
+                daily_briefing = None
+
         # Retrieve biographical events relevant to the current turn.
         # Query: user input (most directly topical); later we could also
         # fold in the previous inner_thought for continuity.
@@ -354,6 +365,7 @@ class ConversationEngine:
             pending_agenda=pending_agenda,
             biography_hits=biography_hits,
             relational_memory=relational_memory,
+            daily_briefing=daily_briefing,
             mode=prompt_mode,
         )
         if proactive_nudge:
