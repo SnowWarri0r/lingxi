@@ -373,6 +373,23 @@ class ConversationEngine:
 
         messages = self.context_assembler.assemble_messages(memory_context)
 
+        # Turn-focus reminder: high-recency `<system-reminder>` block embedded
+        # at the start of the user's current message. Pattern lifted from
+        # Claude Code (utils/api.ts:449 prependUserContext + attachments.ts
+        # surfacer). System prompt has stable identity/rules; this carries
+        # what needs ATTENTION right now (the question Aria just asked,
+        # which 99% of "我问了X对方答了Y我装没看见" bugs trace to).
+        from lingxi.conversation.turn_focus import (
+            build_turn_focus_reminder,
+            detect_last_assistant_question,
+        )
+        last_question = detect_last_assistant_question(
+            self.memory.short_term.get_history()
+        )
+        focus_reminder = build_turn_focus_reminder(
+            last_assistant_question=last_question,
+        )
+
         # If there are images, inject them into the last user message as multimodal blocks
         if images:
             # Rebuild last user message as content block array
@@ -394,6 +411,18 @@ class ConversationEngine:
                 messages[-1] = {"role": "user", "content": blocks}
             else:
                 messages.append({"role": "user", "content": blocks})
+
+        # Embed focus reminder into the start of the user's current message.
+        # Either prepend to the string content, or insert as the first text
+        # block in the multimodal array — order matters: reminder first,
+        # then the user's actual content.
+        if focus_reminder and messages and messages[-1].get("role") == "user":
+            last = messages[-1]
+            content = last.get("content")
+            if isinstance(content, str):
+                last["content"] = f"{focus_reminder}\n\n{content}"
+            elif isinstance(content, list):
+                content.insert(0, {"type": "text", "text": focus_reminder})
 
         # --- Few-shot retrieval (rendered as TEXT inside system prompt now,
         # not as user/assistant message pairs interleaved with real history).
