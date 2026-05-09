@@ -735,6 +735,54 @@ class FeishuBot(OutboundChannel):
                 },
             )
 
+    async def _send_static_card_async(self, chat_id: str, text: str) -> None:
+        """Send a non-streaming card with the given text already baked in.
+
+        Used for multi-bubble extras: visually consistent with the first
+        bubble's streaming card (border/styling) but without the typing
+        animation since the content is already determined. No annotation
+        footer either — annotation is per-turn, not per-bubble, so the
+        first card's footer covers the whole turn.
+        """
+        headers = self.token_mgr.headers()
+        static_card = {
+            "schema": "2.0",
+            "body": {
+                "elements": [
+                    {"tag": "markdown", "content": text},
+                ]
+            },
+        }
+        async with httpx.AsyncClient() as client:
+            create = await client.post(
+                f"{FEISHU_BASE}/cardkit/v1/cards",
+                headers=headers,
+                json={
+                    "type": "card_json",
+                    "data": json.dumps(static_card, ensure_ascii=False),
+                },
+            )
+            create_data = create.json()
+            if create_data.get("code") != 0:
+                raise RuntimeError(f"Create static card failed: {create_data}")
+            card_id = create_data["data"]["card_id"]
+
+            send = await client.post(
+                f"{FEISHU_BASE}/im/v1/messages?receive_id_type=chat_id",
+                headers=headers,
+                json={
+                    "receive_id": chat_id,
+                    "msg_type": "interactive",
+                    "content": json.dumps(
+                        {"type": "card", "data": {"card_id": card_id}}
+                    ),
+                    "uuid": uuid.uuid4().hex,
+                },
+            )
+            send_data = send.json()
+            if send_data.get("code") != 0:
+                raise RuntimeError(f"Send static card failed: {send_data}")
+
     async def _handle_command(self, chat_id: str, text: str) -> str | None:
         """Handle /xxx slash commands. Returns reply text, or None to fall through to LLM."""
         recipient_key = f"feishu:{chat_id}"
@@ -1054,11 +1102,15 @@ class FeishuBot(OutboundChannel):
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
 
-            # Send the extra bubbles as separate text messages (only on
-            # success path — error path doesn't send extras).
+            # Send the extra bubbles as separate static cards (only on
+            # success path — error path doesn't send extras). Cards (not
+            # plain text) so the chat looks consistent: every bubble in
+            # the turn shares the same card border/styling. Annotation
+            # buttons stay only on the first card — they cover the whole
+            # turn, not per-bubble.
             for extra in extras:
                 try:
-                    await self._send_text_async(chat_id, extra)
+                    await self._send_static_card_async(chat_id, extra)
                 except Exception as e:
                     print(f"[feishu] extra bubble send failed: {e}", flush=True)
 
