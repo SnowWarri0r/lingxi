@@ -583,7 +583,22 @@ class ConversationEngine:
         return self._compress_llm
 
     async def _run_think(self, system_prompt: str, messages: list[dict]) -> str:
-        """Call the main LLM in think mode. Returns raw text (inner_thought + meta)."""
+        """Call the main LLM in think mode. Returns raw text (inner_thought + meta).
+
+        Defensive guard against an empty messages list — the Anthropic API
+        rejects with `messages: at least one message is required`. We
+        observed one transient case in production around concurrent
+        relational extraction; root cause unclear, but if it happens
+        again at least the error log says where instead of just bubbling
+        a 400 from inside complete().
+        """
+        if not messages:
+            raise RuntimeError(
+                "_run_think received empty messages list — likely a "
+                "race in context assembly or a recipient with no buffered "
+                "history yet. system prompt was "
+                f"{len(system_prompt)} chars."
+            )
         result = await self.llm.complete(
             messages=messages,
             system=system_prompt,
