@@ -199,6 +199,12 @@ class LifeSimulator:
         # InnerLifeStore and is invisible to conversation memory retrieval.
         await self._consolidate_past_days(state, now)
 
+        # 0.6 Decay stale wants_to_share flags. An event marked "想说" stays
+        # marked forever otherwise — proactive picks the same 📌 event on
+        # every cycle and the user sees "蜘蛛会做梦" 4 times in 2 hours.
+        # After 2 hours the urge to share has faded; treat as "passed".
+        self._decay_share_markers(state, now, ttl_hours=2)
+
         # 1. Ensure there's a plan for today
         need_plan = (
             state.today_plan is None
@@ -234,6 +240,12 @@ class LifeSimulator:
 
         # 5. Drift dynamics: energy/creative_drive/social_need over the day
         self._drift_dynamics(state, now)
+
+        # 5.5 Recompute decision-axis modulation from current state. Bridges
+        # energy/social_need into the persona's 8-axis behavioral fingerprint
+        # at prompt time. Replaces (not accumulates) each tick — this is the
+        # current state, not history.
+        self._update_axis_modulation(state)
 
         state.last_simulated_at = now
         await self.store.save_state(state)
@@ -336,6 +348,70 @@ class LifeSimulator:
         return "\n".join(lines)
 
     # -- internals --
+
+    @staticmethod
+    def _update_axis_modulation(state: InnerState) -> None:
+        """Compute current decision-axis modulation from inner state.
+
+        Maps energy / social_need to ±1-2 deltas on the persona's 8 axes,
+        capped at ±2 per axis. Replaces state.axis_modulation each tick —
+        this represents *now*, not history.
+
+        Engineering rationale: the LLM is bad at inferring "she's tired so
+        she'd push back less" from raw energy=0.3. Better to derive the
+        behavioral implication once here as an explicit axis delta and let
+        the prompt render the *effective* score.
+        """
+        mod: dict[str, int] = {}
+
+        # Energy effects: low energy → less action, less push-back
+        if state.energy < 0.35:
+            mod["action_bias"] = mod.get("action_bias", 0) - 1
+            mod["conflict_style"] = mod.get("conflict_style", 0) - 1
+        elif state.energy > 0.8:
+            mod["action_bias"] = mod.get("action_bias", 0) + 1
+
+        # Social need effects: drained vs touch-starved
+        if state.social_need < 0.25:
+            # Just talked / socially saturated: cooler, less reaching
+            mod["emotion_weight"] = mod.get("emotion_weight", 0) - 1
+            mod["action_bias"] = mod.get("action_bias", 0) - 1
+        elif state.social_need > 0.75:
+            # Wants connection: more emotionally open
+            mod["emotion_weight"] = mod.get("emotion_weight", 0) + 1
+
+        # Sleep quality effect: bad night → less novelty appetite
+        if state.sleep_quality < 0.4:
+            mod["novelty_seeking"] = mod.get("novelty_seeking", 0) - 1
+            mod["risk_appetite"] = mod.get("risk_appetite", 0) - 1
+
+        # Cap to ±2 per axis, drop zeros
+        state.axis_modulation = {
+            k: max(-2, min(2, v)) for k, v in mod.items() if v != 0
+        }
+
+    @staticmethod
+    def _decay_share_markers(
+        state: InnerState, now: datetime, ttl_hours: float = 2
+    ) -> int:
+        """Clear wants_to_share on events older than ttl_hours.
+
+        Without this, an event keeps its 📌想说 marker forever; proactive
+        cycles every 5 minutes pick the same event each round and the
+        user sees the same factoid (e.g. "蜘蛛会做梦") repeatedly.
+
+        Returns count cleared.
+        """
+        from datetime import timedelta
+        cutoff = now - timedelta(hours=ttl_hours)
+        cleared = 0
+        for ev in state.recent_events:
+            if ev.wants_to_share and ev.timestamp < cutoff:
+                ev.wants_to_share = False
+                cleared += 1
+        if cleared:
+            print(f"[life] decayed {cleared} stale wants_to_share markers")
+        return cleared
 
     async def _consolidate_past_days(self, state: InnerState, now: datetime) -> None:
         """Roll yesterday's (and any older un-consolidated) diary + events

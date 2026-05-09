@@ -54,6 +54,50 @@ class TestPromptBuilder:
         prompt = builder.build_system_prompt(current_mood="excited")
         assert "excited" in prompt
 
+    def test_axes_section_omitted_when_all_neutral(self, sample_persona):
+        # Defaults are all 5/10 — no axis is extreme, no modulation → skip
+        builder = PromptBuilder(sample_persona)
+        prompt = builder.build_system_prompt()
+        assert "行为指纹" not in prompt
+
+    def test_axes_section_renders_extreme_axis(self):
+        from lingxi.persona.models import (
+            DecisionAxes, DecisionAxis, Identity, PersonaConfig,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            decision_axes=DecisionAxes(
+                conflict_style=DecisionAxis(score=2),
+                time_horizon=DecisionAxis(score=8),
+            ),
+        )
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt()
+        assert "行为指纹" in prompt
+        assert "回避冲突" in prompt
+        assert "看长远" in prompt
+
+    def test_axes_section_renders_modulation(self):
+        from lingxi.inner_life.models import InnerState
+        from lingxi.persona.models import (
+            DecisionAxes, DecisionAxis, Identity, PersonaConfig,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            decision_axes=DecisionAxes(
+                action_bias=DecisionAxis(score=5),  # neutral baseline
+            ),
+        )
+        # action_bias is neutral but has active modulation → must surface
+        inner = InnerState(axis_modulation={"action_bias": -2})
+        builder = PromptBuilder(persona)
+        prompt = builder.build_system_prompt(inner_state=inner)
+        assert "行为指纹" in prompt
+        assert "action_bias" not in prompt  # raw axis names should NOT appear
+        assert "此刻被推往" in prompt
+
 
 class TestStyleConfig:
     def test_defaults(self):
@@ -105,3 +149,53 @@ class TestPersonaConfigNewFields:
         )
         assert persona.style.speech_max_chars == 60
         assert persona.sampling.temperature == 1.0
+
+
+class TestDecisionAxes:
+    def test_default_axes_all_neutral(self):
+        from lingxi.persona.models import DecisionAxes
+        axes = DecisionAxes()
+        for name in DecisionAxes.AXIS_NAMES:
+            assert axes.get(name).score == 5
+            assert axes.get(name).confidence == "high"
+
+    def test_axis_score_clamped_1_to_10(self):
+        from lingxi.persona.models import DecisionAxis
+        with pytest.raises(Exception):
+            DecisionAxis(score=0)
+        with pytest.raises(Exception):
+            DecisionAxis(score=11)
+
+    def test_effective_score_baseline_no_modulation(self):
+        from lingxi.persona.models import DecisionAxes, DecisionAxis
+        axes = DecisionAxes(conflict_style=DecisionAxis(score=2))
+        assert axes.effective_score("conflict_style") == 2
+
+    def test_effective_score_with_modulation(self):
+        from lingxi.persona.models import DecisionAxes, DecisionAxis
+        axes = DecisionAxes(action_bias=DecisionAxis(score=3))
+        assert axes.effective_score("action_bias", {"action_bias": 2}) == 5
+        assert axes.effective_score("action_bias", {"action_bias": -2}) == 1
+
+    def test_effective_score_clamps_at_bounds(self):
+        from lingxi.persona.models import DecisionAxes, DecisionAxis
+        axes = DecisionAxes(time_horizon=DecisionAxis(score=9))
+        # +3 would push to 12, must clamp at 10
+        assert axes.effective_score("time_horizon", {"time_horizon": 3}) == 10
+        axes2 = DecisionAxes(risk_appetite=DecisionAxis(score=2))
+        assert axes2.effective_score("risk_appetite", {"risk_appetite": -5}) == 1
+
+    def test_persona_loads_with_axes_from_yaml(self):
+        path = Path(__file__).parent.parent.parent / "config" / "personas" / "example_persona.yaml"
+        if not path.exists():
+            return
+        persona = load_persona(path)
+        # Aria's defining axes from yaml
+        assert persona.decision_axes.conflict_style.score == 2
+        assert persona.decision_axes.time_horizon.score == 8
+        assert persona.decision_axes.action_bias.score == 3
+
+    def test_persona_without_axes_yaml_field_uses_defaults(self):
+        # Backwards compat: yaml without decision_axes still loads
+        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
+        assert persona.decision_axes.risk_appetite.score == 5

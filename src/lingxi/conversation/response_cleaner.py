@@ -46,6 +46,60 @@ _META_PATTERNS = [
     re.compile(r"^[^\n]*其实我(?:是|想|要)?想说[^\n]*$", re.MULTILINE),
 ]
 
+# Internal-monologue leaks: the model produces retrospective thought-narration
+# ("想起来 X 他问我 Y...") instead of dialogue. Two-part trigger required —
+# a retrospective/inner-thought opener AND a third-person reference to the
+# chat partner (or chat-history reference). Conservative on purpose: a bare
+# "想起来" line could be legitimate dialogue ("想起来一件事 你猜怎么着")
+# so we only drop when it pairs with the leak signal. Allow up to 12 chars
+# between 他/她/对方 and 问/说/etc to catch "他昨天问我" / "她那时候说我"
+# style leaks.
+_MONOLOGUE_PATTERNS = [
+    # Retrospective opener + third-person reference to user / chat history.
+    # Negative lookahead at the START rules out lines that contain second-
+    # person "你" or joint-pronoun "我们/咱们" — those are addressing the
+    # user directly ("想起来你上次提到了...", "想到我们之前聊过的电影")
+    # and must be preserved as legitimate follow-up dialogue.
+    re.compile(
+        r"^(?![^\n]*(?:你|我们|咱们))"
+        r"[^\n]*?(?:想起来|想起|刚才(?:在想|想到|想起)|我注意到|我意识到|"
+        r"突然想起|我突然想到|我发现自己)"
+        r"[^\n]*?"
+        r"(?:(?:他|她|对方)[^\n]{0,12}?(?:问|说|跟|对|和)我|聊起|提到了|聊过)"
+        r"[^\n]*$",
+        re.MULTILINE,
+    ),
+    # Bare "他/她/对方 ...问我 X" at line scope — Aria addressing user as
+    # third-person is almost always narration leak. Only triggers when the
+    # line has no second-person / joint pronoun anywhere.
+    re.compile(
+        r"^(?![^\n]*(?:你|我们|咱们))"
+        r"[^\n]*?(?:他|她|对方)[^\n]{0,12}?(?:问|说|跟|对|和)我[^\n]*$",
+        re.MULTILINE,
+    ),
+]
+
+# AI-template phrases that signal client-service / explainer mode. Lines
+# containing these get dropped wholesale (they're never dialogue). Borrowed
+# from her-skill/anti_ai_rules.md, filtered to phrases we actually see leak.
+_AI_PHRASE_BLACKLIST = (
+    "希望这对你有帮助",
+    "希望对你有帮助",
+    "总的来说",
+    "综上所述",
+    "值得注意的是",
+    "不难发现",
+    "让我来为你",
+    "我很乐意帮助",
+    "作为一个人工智能",
+    "作为一个语言模型",
+    "作为一个 AI",
+    "作为一个AI",
+    "这是一个很好的问题",
+    "这是个很好的问题",
+    "我理解你的感受",
+)
+
 # Inline action-phrase at end of sentence: strip after the ending punctuation
 _INLINE_TRAILING = re.compile(
     r"(?P<keep>[^\n]*?[。！？!?])\s+(?P<tail>[^\n]*)"
@@ -133,9 +187,24 @@ def clean_speech(text: str) -> str:
     text = text.strip()
 
     if not text:
-        return original.strip()
+        text = original.strip()
 
-    return text
+    # 7. HARD FILTERS — applied last and bypass the fallback. If the entire
+    #    output is internal-monologue or AI-template phrases, returning empty
+    #    is correct: better to send nothing than to send a leak. Channels
+    #    handle empty speech by skipping the bubble.
+    for pat in _MONOLOGUE_PATTERNS:
+        text = pat.sub("", text)
+
+    if any(phrase in text for phrase in _AI_PHRASE_BLACKLIST):
+        kept_lines = [
+            line for line in text.split("\n")
+            if not any(phrase in line for phrase in _AI_PHRASE_BLACKLIST)
+        ]
+        text = "\n".join(kept_lines)
+
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def split_into_bubbles(speech: str, max_bubbles: int = 3) -> list[str]:

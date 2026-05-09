@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, Field
 
@@ -287,6 +287,75 @@ class CompressionConfig(BaseModel):
     compress_temperature: float = 0.9
 
 
+class DecisionAxis(BaseModel):
+    """Single behavioral axis on a 1-10 scale (forge-skill L3 lift).
+
+    score: baseline 1-10 — what she defaults to when nothing's pushing
+    evidence: short note grounding the score (so the LLM has a reason)
+    confidence: how settled this trait is — low-confidence axes get more
+                modulation latitude in inner_life
+    """
+
+    score: int = Field(default=5, ge=1, le=10)
+    evidence: str = ""
+    confidence: Literal["high", "medium", "low"] = "high"
+
+
+class DecisionAxes(BaseModel):
+    """8-axis behavioral fingerprint (forge-skill L3).
+
+    Each axis shapes a specific kind of moment. Rendered into the prompt
+    as a tight 'this is how you default' block so the LLM has concrete
+    behavioral parameters instead of inventing them per turn. inner_life
+    can apply ±2 modulation on top based on current energy/mood.
+
+    Axis interpretations (1 ↔ 10):
+      risk_appetite:    保守 ↔ 冒险
+      time_horizon:     只看眼前 ↔ 长远布局
+      emotion_weight:   纯理性 ↔ 优先感受
+      social_reference: 独立判断 ↔ 参考别人
+      action_bias:      先观望 ↔ 立刻行动
+      control_need:     放手 ↔ 要掌控
+      novelty_seeking:  喜欢熟悉 ↔ 追求新鲜
+      conflict_style:   回避冲突 ↔ 直接对抗
+    """
+
+    risk_appetite: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    time_horizon: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    emotion_weight: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    social_reference: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    action_bias: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    control_need: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    novelty_seeking: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+    conflict_style: DecisionAxis = Field(default_factory=lambda: DecisionAxis(score=5))
+
+    AXIS_NAMES: ClassVar[tuple[str, ...]] = (
+        "risk_appetite", "time_horizon", "emotion_weight", "social_reference",
+        "action_bias", "control_need", "novelty_seeking", "conflict_style",
+    )
+
+    # Per-axis interpretation: (low_label, high_label) for rendering
+    AXIS_LABELS: ClassVar[dict[str, tuple[str, str]]] = {
+        "risk_appetite":    ("保守", "冒险"),
+        "time_horizon":     ("只看眼前", "看长远"),
+        "emotion_weight":   ("理性优先", "感受优先"),
+        "social_reference": ("独立判断", "参考别人"),
+        "action_bias":      ("先观望", "立刻行动"),
+        "control_need":     ("放手", "要掌控"),
+        "novelty_seeking":  ("喜欢熟悉", "追求新鲜"),
+        "conflict_style":   ("回避冲突", "直接对抗"),
+    }
+
+    def get(self, name: str) -> DecisionAxis:
+        return getattr(self, name)
+
+    def effective_score(self, name: str, modulation: dict[str, int] | None = None) -> int:
+        """Baseline + modulation, clamped to [1, 10]."""
+        base = self.get(name).score
+        delta = (modulation or {}).get(name, 0)
+        return max(1, min(10, base + delta))
+
+
 class GoalDefinition(BaseModel):
     description: str
     priority: float = Field(default=0.5, ge=0.0, le=1.0)
@@ -342,3 +411,4 @@ class PersonaConfig(BaseModel):
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     biography: Biography = Field(default_factory=Biography)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
+    decision_axes: DecisionAxes = Field(default_factory=DecisionAxes)
