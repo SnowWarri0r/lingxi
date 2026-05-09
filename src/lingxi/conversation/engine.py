@@ -372,6 +372,13 @@ class ConversationEngine:
 
         messages = self.context_assembler.assemble_messages(memory_context)
 
+        # Defensive: if messages is empty (we've seen this happen when a
+        # concurrent reflection-driven switch_recipient races with our
+        # compress_aged_turns + assemble_context path), at least surface
+        # the literal user input so the API call never gets an empty list.
+        if not messages and (user_input or images):
+            messages = [{"role": "user", "content": user_input or "（图片消息）"}]
+
         # Turn-focus reminder: high-recency `<system-reminder>` block embedded
         # at the start of the user's current message. Pattern lifted from
         # Claude Code (utils/api.ts:449). System prompt has stable identity
