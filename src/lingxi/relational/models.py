@@ -96,6 +96,12 @@ class RelationalMemory(BaseModel):
     sweet_moments: list[SweetMoment] = Field(default_factory=list)
     pet_names: list[str] = Field(default_factory=list)         # "笨蛋", "老李"
     daily_patterns: list[DailyPattern] = Field(default_factory=list)
+    # Voice diff (#4): phrases Aria has characteristically used WITH THIS
+    # user — different from inside_jokes (which both use as references)
+    # and from persona.message_habits.signature_phrases (character-wide,
+    # kept empty to avoid forced tics). Per-recipient: her voice grows
+    # with the relationship.
+    signature_phrases: list[str] = Field(default_factory=list)
     relationship_summary: str = ""    # one-paragraph narrative she tells herself
     last_extracted_at: datetime | None = None  # for incremental extraction
 
@@ -108,5 +114,6 @@ class RelationalMemory(BaseModel):
             or self.sweet_moments
             or self.pet_names
             or self.daily_patterns
+            or self.signature_phrases
             or self.relationship_summary
         )

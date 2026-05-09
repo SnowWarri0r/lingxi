@@ -708,6 +708,13 @@ class PromptBuilder:
             joined = "、".join(f'"{n}"' for n in mem.pet_names[:5])
             lines.append(f"\n你叫他/他叫你：{joined}")
 
+        if mem.signature_phrases:
+            joined = "、".join(f'"{p}"' for p in mem.signature_phrases[:6])
+            lines.append(
+                f"\n**你跟这个人说话长出来的口头**（不是规定每次必用，但是"
+                f"这段关系里你的语气特征）：{joined}"
+            )
+
         if mem.inside_jokes:
             lines.append("\n**只有你们俩懂的梗/暗号**（自然引用，不要解释）：")
             for j in mem.inside_jokes[:6]:
