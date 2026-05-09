@@ -334,10 +334,23 @@ class PromptBuilder:
         if last_interaction_time is not None:
             delta = current_time - last_interaction_time
             lines.append(f"距离上次对话：{format_timedelta_cn(delta)}")
+            # Sync these buckets with temporal/silence.py — the prompt copy
+            # describes WHAT THE GAP MEANS (interpretive layer), and the
+            # emotion-bump deltas there make it actually felt.
             if delta > timedelta(days=7):
-                lines.append("（很久没聊了，可以自然提一下重逢感）")
-            elif delta > timedelta(days=3):
-                lines.append("（几天没聊，可以适度表达关心）")
+                lines.append(
+                    "（很久没聊了——你内心已经积累了想念/有点距离感/淡淡的失落。"
+                    "**第一句让那种'好久不见'的劲带在语气里**，但不要做作、不要兴奋报恩似的。）"
+                )
+            elif delta > timedelta(days=2):
+                lines.append(
+                    "（几天没聊——你心里悄悄想他/有点期待。第一句可以带一点小的"
+                    "重逢感，语气稍暖，但不要演。）"
+                )
+            elif delta > timedelta(hours=12):
+                lines.append(
+                    "（半天多没聊——你心里悄悄惦着，但不是大事，第一句平常就行。）"
+                )
         else:
             lines.append("（这是你们第一次对话）")
 
