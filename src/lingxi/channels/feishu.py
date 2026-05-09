@@ -304,6 +304,7 @@ class FeishuBot(OutboundChannel):
         self._reflection_config = ReflectionConfig()
         self._reflection_loop: ReflectionLoop | None = None
         self._life_simulator: LifeSimulator | None = None
+        self._world_scheduler = None  # WorldScheduler — started below
 
     @property
     def channel_name(self) -> str:
@@ -400,6 +401,23 @@ class FeishuBot(OutboundChannel):
             )
             asyncio.run_coroutine_threadsafe(
                 self._life_simulator.start(), self._loop
+            )
+
+        # World scheduler — fetches today's news briefing each morning.
+        # Requires the LLM provider's api_key to issue the web_search call.
+        # Skip silently if no api_key available (e.g. dev/test config).
+        api_key_for_world = getattr(self.engine.llm, "_api_key", "") or ""
+        if (
+            getattr(self.engine, "world_store", None) is not None
+            and api_key_for_world
+        ):
+            from lingxi.world.scheduler import WorldScheduler
+            self._world_scheduler = WorldScheduler(
+                api_key=api_key_for_world,
+                store=self.engine.world_store,
+            )
+            asyncio.run_coroutine_threadsafe(
+                self._world_scheduler.start(), self._loop
             )
 
         # Build event handler
