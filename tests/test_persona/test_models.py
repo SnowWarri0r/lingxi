@@ -50,9 +50,12 @@ class TestPromptBuilder:
         assert "curious" in prompt or "好奇" in prompt
 
     def test_prompt_includes_mood(self, sample_persona):
+        # Mood is dynamic — surfaces in the focus reminder, not the
+        # static system prompt (Phase 2 context refactor).
         builder = PromptBuilder(sample_persona)
-        prompt = builder.build_system_prompt(current_mood="excited")
-        assert "excited" in prompt
+        reminder = builder.build_turn_focus_reminder(current_mood="excited")
+        assert reminder is not None
+        assert "excited" in reminder
 
     def test_axes_section_omitted_when_all_neutral(self, sample_persona):
         # Defaults are all 5/10 — no axis is extreme, no modulation → skip
@@ -99,35 +102,38 @@ class TestPromptBuilder:
         assert "此刻被推往" in prompt
 
     def test_recent_proactive_messages_surfaced_in_inner_state(self):
-        # User: "agent doesn't know self has sent". Make sure the recent
-        # proactive list is visible in the inner_state section so the
-        # model has self-awareness.
+        # User: "agent doesn't know self has sent". Phase 2 context refactor
+        # — recent proactive list moved to focus reminder (high recency)
+        # alongside inner_state events.
         from lingxi.inner_life.models import InnerState
         from lingxi.persona.models import Identity, PersonaConfig
         persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
         inner = InnerState()
         builder = PromptBuilder(persona)
-        prompt = builder.build_system_prompt(
+        reminder = builder.build_turn_focus_reminder(
             inner_state=inner,
             recent_proactive_messages=[
                 "刚整理书 银杏叶都碎了 有点遗憾",
                 "蜘蛛在角落织网",
             ],
         )
-        assert "你最近主动跟这位说过的话" in prompt
-        assert "银杏叶" in prompt
-        assert "蜘蛛" in prompt
+        assert reminder is not None
+        assert "你最近主动跟这位说过的话" in reminder
+        assert "银杏叶" in reminder
+        assert "蜘蛛" in reminder
 
     def test_recent_proactive_messages_omitted_when_empty(self):
         from lingxi.inner_life.models import InnerState
         from lingxi.persona.models import Identity, PersonaConfig
         persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
         builder = PromptBuilder(persona)
-        prompt = builder.build_system_prompt(
+        reminder = builder.build_turn_focus_reminder(
             inner_state=InnerState(),
             recent_proactive_messages=None,
         )
-        assert "你最近主动跟这位说过的话" not in prompt
+        # Reminder may render time/inner_state but not the proactive subblock
+        if reminder is not None:
+            assert "你最近主动跟这位说过的话" not in reminder
 
     def test_recent_proactive_messages_truncated_long_lines(self):
         from lingxi.inner_life.models import InnerState
@@ -135,14 +141,15 @@ class TestPromptBuilder:
         persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
         builder = PromptBuilder(persona)
         long_msg = "刚整理书" * 50  # 200 chars
-        prompt = builder.build_system_prompt(
+        reminder = builder.build_turn_focus_reminder(
             inner_state=InnerState(),
             recent_proactive_messages=[long_msg],
         )
+        assert reminder is not None
         # Truncated with ellipsis
-        assert "…" in prompt
-        # Doesn't bloat the prompt
-        assert long_msg not in prompt
+        assert "…" in reminder
+        # Doesn't bloat the reminder
+        assert long_msg not in reminder
 
 
 class TestTraitBehaviorCue:
