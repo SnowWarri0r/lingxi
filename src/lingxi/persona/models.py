@@ -287,6 +287,49 @@ class CompressionConfig(BaseModel):
     compress_temperature: float = 0.9
 
 
+class MessageHabits(BaseModel):
+    """Character-level typing fingerprint (forge-skill L2 lift).
+
+    Concrete behavioral signals the LLM can use to shape OUTPUT FORM
+    (not content). The point is to give the model explicit "how she
+    actually types when cold / warm" cues instead of asking it to infer
+    from abstract personality traits.
+
+    Notes:
+    - signature_phrases stays empty by default. Pre-filled phrase lists
+      become repetition tics (the same lesson as speaking_style.
+      example_phrases — every turn forces one of the listed phrases,
+      reads as a stuck loop). Only populate if a persona has a genuine,
+      sparse-use catchphrase.
+    - coldness_markers / warmth_markers are BEHAVIORS, not phrases.
+      "句末省句号" / "回得更短" not "嗯..." / "好的呀". These get applied
+      contextually based on emotion state.
+    """
+
+    # Free-form one-liner descriptions
+    punctuation_habit: str = ""        # "句号常省，不用感叹号"
+    multi_send_pattern: str = ""       # "偶尔拆 2 条短句"
+    avg_length: str = ""               # "短—一两句"
+
+    # Behavioral signals — applied contextually
+    coldness_markers: list[str] = Field(default_factory=list)
+    warmth_markers: list[str] = Field(default_factory=list)
+
+    # Specific real-quote phrases (default empty — avoid forced tics)
+    signature_phrases: list[str] = Field(default_factory=list)
+
+    def is_populated(self) -> bool:
+        """True if any field has content worth rendering."""
+        return bool(
+            self.punctuation_habit
+            or self.multi_send_pattern
+            or self.avg_length
+            or self.coldness_markers
+            or self.warmth_markers
+            or self.signature_phrases
+        )
+
+
 class DecisionAxis(BaseModel):
     """Single behavioral axis on a 1-10 scale (forge-skill L3 lift).
 
@@ -412,3 +455,4 @@ class PersonaConfig(BaseModel):
     biography: Biography = Field(default_factory=Biography)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     decision_axes: DecisionAxes = Field(default_factory=DecisionAxes)
+    message_habits: MessageHabits = Field(default_factory=MessageHabits)
