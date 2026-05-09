@@ -102,48 +102,29 @@ class PromptBuilder:
         else:
             preamble = self._build_format_preamble()
 
+        # System prompt holds STABLE persona+rules — cache-friendly.
+        # Dynamic per-turn state (time, current activity, recent events,
+        # emotion, engagement mode, today's news, recent proactive
+        # messages) goes through build_turn_focus_reminder, surfaced as
+        # a `<system-reminder>` user message right before the user's
+        # actual content. CC pattern (utils/api.ts:449); recency channel
+        # gives that material proper attention weight.
         sections = [
             preamble,
             self._build_identity_section(),
-        ]
-
-        if current_time is not None:
-            sections.append(self._build_time_awareness_section(current_time, last_interaction_time))
-
-        # Inner state comes right after time — it's "what I'm actually doing right now"
-        if inner_state is not None:
-            inner_block = self._build_inner_state_section(
-                inner_state, recent_proactive_messages, daily_briefing
-            )
-            if inner_block:
-                sections.append(inner_block)
-        elif daily_briefing is not None and not daily_briefing.is_empty():
-            # World awareness even when inner_state isn't loaded
-            sections.append(self._build_world_section(daily_briefing))
-
-        sections.extend([
             self._build_personality_section(),
             self._build_speaking_style_section(),
-        ])
+        ]
 
         habits_block = self._build_message_habits_section()
         if habits_block:
             sections.append(habits_block)
 
-        sections.append(self._build_emotional_section(current_mood, emotion_state))
-
-        # Engagement mode — derived from emotion + energy. The whole point
-        # is to make non-engagement (单字回 / 沉默 / 不接 follow-up) a
-        # first-class legal output instead of an embarrassing fallback.
-        # Only render when not in default mode; full == invisible.
-        from lingxi.inner_life.models import (
-            EngagementMode,
-            derive_engagement_mode,
-        )
-        mode = derive_engagement_mode(inner_state, emotion_state)
-        if mode != EngagementMode.FULL:
-            sections.append(self._build_engagement_section(mode))
-
+        # decision_axes still uses inner_state.axis_modulation as input —
+        # the axes section itself is stable persona dimensions, but
+        # which axes are CURRENTLY pushed depends on inner_state. Reading
+        # inner_state for that purpose is fine; we just don't render the
+        # inner_state SECTION here.
         axes_block = self._build_decision_axes_section(inner_state)
         if axes_block:
             sections.append(axes_block)
@@ -176,6 +157,100 @@ class PromptBuilder:
             sections.append(self._build_plan_section(active_plans))
 
         return "\n\n".join(sections)
+
+    def build_turn_focus_reminder(
+        self,
+        *,
+        last_assistant_question: str | None = None,
+        current_time: datetime | None = None,
+        last_interaction_time: datetime | None = None,
+        inner_state: "InnerState | None" = None,
+        emotion_state: "EmotionState | None" = None,
+        current_mood: str | None = None,
+        daily_briefing: "DailyBriefing | None" = None,
+        recent_proactive_messages: list[str] | None = None,
+    ) -> str | None:
+        """Assemble the `<system-reminder>` content surfaced right before
+        the user's current message.
+
+        This carries everything that's NEW this turn — time, current
+        activity, recent_events, emotion + engagement mode, today's
+        news briefing, what Aria's already said proactively, and the
+        question Aria just asked (which the user is now answering).
+
+        System prompt has the stable persona/rules; this has the
+        attention-needed dynamic state. Two channels, one each, no
+        cross-contamination of the static cache.
+
+        Returns None when nothing is dynamic — caller skips embedding.
+        """
+        sections: list[str] = []
+
+        if current_time is not None:
+            sections.append(
+                self._build_time_awareness_section(current_time, last_interaction_time)
+            )
+
+        if inner_state is not None:
+            inner_block = self._build_inner_state_section(
+                inner_state, recent_proactive_messages, daily_briefing
+            )
+            if inner_block:
+                sections.append(inner_block)
+        elif daily_briefing is not None and not daily_briefing.is_empty():
+            # World awareness even when inner_state isn't loaded
+            sections.append(self._build_world_section(daily_briefing))
+
+        # Emotional + engagement mode are highly dynamic — recency-anchored
+        if current_mood is not None or emotion_state is not None:
+            sections.append(self._build_emotional_section(current_mood, emotion_state))
+
+        from lingxi.inner_life.models import (
+            EngagementMode,
+            derive_engagement_mode,
+        )
+        mode = derive_engagement_mode(inner_state, emotion_state)
+        if mode != EngagementMode.FULL:
+            sections.append(self._build_engagement_section(mode))
+
+        # The question Aria just asked — most directly addresses Rule 15
+        # ("must engage with literal answer to own yes/no question"). Sits
+        # last in the reminder so it's closest to the user's actual reply.
+        if last_assistant_question:
+            sections.append(self._build_question_focus_block(last_assistant_question))
+
+        if not sections:
+            return None
+
+        body = "\n\n".join(sections)
+        return (
+            f"<system-reminder>\n"
+            f"{body}\n\n"
+            f"IMPORTANT: 上面是你此刻的状态/上一句你说过什么/今天扫到的事——这些是状态提醒，"
+            f"对方真正发的话才是要回应的。\n"
+            f"</system-reminder>"
+        )
+
+    def _build_question_focus_block(self, question: str) -> str:
+        """Render the 'you just asked X' block.
+
+        Pulled out so build_turn_focus_reminder reads cleanly. The copy
+        targets the exact production trace where Aria asked '在家了吗',
+        user said '还不在呢', Aria replied '对 明天再休息' (Rule 15).
+        """
+        return (
+            f"## 🎯 你刚问了对方\n"
+            f"「{question}」\n\n"
+            f"对方接下来这条**很可能是在回答这个问题**——先看清楚他说的"
+            f"内容是不是回答你刚问的，然后**接住答覆里的具体状态**。\n"
+            f"- 短句答覆（'还不在' / '还没' / '不是' / '在' / '加班'）→ "
+            f"对那个具体状态直接给反应（'啊还在加班?' / '都几点了' / "
+            f"'怎么 太忙?'）\n"
+            f"- **不要**用 '对 / 嗯' 起头当低 conviction 胶水\n"
+            f"- **不要**切到通用劝慰（'早点休息' / '好好放松'）\n"
+            f"- **不要**跳回 2 轮前的旧话题装关心\n"
+            f"- **不要**忽略他的回答直接换话题"
+        )
 
     def _build_inner_state_section(
         self,

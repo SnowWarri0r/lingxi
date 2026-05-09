@@ -365,7 +365,6 @@ class ConversationEngine:
             pending_agenda=pending_agenda,
             biography_hits=biography_hits,
             relational_memory=relational_memory,
-            daily_briefing=daily_briefing,
             mode=prompt_mode,
         )
         if proactive_nudge:
@@ -375,19 +374,22 @@ class ConversationEngine:
 
         # Turn-focus reminder: high-recency `<system-reminder>` block embedded
         # at the start of the user's current message. Pattern lifted from
-        # Claude Code (utils/api.ts:449 prependUserContext + attachments.ts
-        # surfacer). System prompt has stable identity/rules; this carries
-        # what needs ATTENTION right now (the question Aria just asked,
-        # which 99% of "我问了X对方答了Y我装没看见" bugs trace to).
-        from lingxi.conversation.turn_focus import (
-            build_turn_focus_reminder,
-            detect_last_assistant_question,
-        )
+        # Claude Code (utils/api.ts:449). System prompt has stable identity
+        # + rules; this carries every dynamic per-turn signal: time, current
+        # activity, recent events, emotion + engagement mode, today's news
+        # briefing, the question Aria just asked.
+        from lingxi.conversation.turn_focus import detect_last_assistant_question
         last_question = detect_last_assistant_question(
             self.memory.short_term.get_history()
         )
-        focus_reminder = build_turn_focus_reminder(
+        focus_reminder = self.prompt_builder.build_turn_focus_reminder(
             last_assistant_question=last_question,
+            current_time=datetime.now(),
+            last_interaction_time=last_interaction_time,
+            inner_state=inner_state,
+            emotion_state=self._emotion_state,
+            current_mood=self._current_mood,
+            daily_briefing=daily_briefing,
         )
 
         # If there are images, inject them into the last user message as multimodal blocks

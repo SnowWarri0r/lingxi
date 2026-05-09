@@ -572,16 +572,27 @@ class ProactiveScheduler:
             memory_context=memory_context,
             current_mood=None,
             relationship_level=record.relationship_level,
-            current_time=now,
-            last_interaction_time=record.last_interaction,
             emotion_state=emotion_state,
             inner_state=inner_state,
+            relational_memory=relational_memory,
+            mode="single",
+        )
+
+        # Dynamic per-turn state goes through the focus reminder, surfaced
+        # via `<system-reminder>` user-channel right before the actual user
+        # prompt content. Recency weight + distinct framing (CC pattern).
+        # No `last_assistant_question` for proactive — there's nothing to
+        # answer in this OPENER turn.
+        focus_reminder = self.engine.prompt_builder.build_turn_focus_reminder(
+            current_time=now,
+            last_interaction_time=record.last_interaction,
+            inner_state=inner_state,
+            emotion_state=emotion_state,
+            current_mood=None,
+            daily_briefing=daily_briefing,
             recent_proactive_messages=(
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),
-            relational_memory=relational_memory,
-            daily_briefing=daily_briefing,
-            mode="single",
         )
 
         # Recipient-scoped read path: do NOT mutate the singleton active
@@ -643,6 +654,12 @@ class ProactiveScheduler:
                 f"不该发就：\n```\n\n===META===\n"
                 f'{{"should_send": false, "inner": "为什么不发"}}\n```'
             )
+
+        # Embed the focus reminder at the start of the proactive prompt
+        # (same placement as engine.chat_full — recency weight, distinct
+        # `<system-reminder>` framing).
+        if focus_reminder:
+            user_prompt = f"{focus_reminder}\n\n{user_prompt}"
 
         # Final messages = recent chat history (so model sees what was
         # actually said today) + the proactive trigger as the latest user msg

@@ -1,18 +1,32 @@
 """Tests for turn_focus — last-question detection + reminder rendering.
 
-Phase 1 of the CC-pattern context refactor. The reminder uses the user-
-message channel for high-recency placement of the question Aria just
-asked, since system prompt loses that signal under the weight of all
-the stable persona/state blocks.
+CC-pattern context refactor. The reminder uses the user-message channel
+for high-recency placement of dynamic state, since system prompt loses
+that signal under the weight of stable persona/rule blocks.
+
+build_turn_focus_reminder lives on PromptBuilder (it needs persona-aware
+rendering). detect_last_assistant_question is a pure utility here.
 """
 
 from datetime import datetime
 
-from lingxi.conversation.turn_focus import (
-    build_turn_focus_reminder,
-    detect_last_assistant_question,
-)
+from lingxi.conversation.turn_focus import detect_last_assistant_question
 from lingxi.memory.short_term import ConversationTurn
+from lingxi.persona.models import Identity, PersonaConfig
+from lingxi.persona.prompt_builder import PromptBuilder
+
+
+def _builder():
+    return PromptBuilder(
+        PersonaConfig(name="T", identity=Identity(full_name="T"))
+    )
+
+
+def build_turn_focus_reminder(last_assistant_question=None):
+    """Compatibility shim — calls PromptBuilder method with question only."""
+    return _builder().build_turn_focus_reminder(
+        last_assistant_question=last_assistant_question,
+    )
 
 
 def _t(role: str, content: str) -> ConversationTurn:
