@@ -37,3 +37,6 @@ logs/
 # Local config overrides
 config/local.yaml
 config/*.local.yaml
+
+# Claude Code local state
+.claude/
