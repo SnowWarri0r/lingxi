@@ -534,6 +534,17 @@ class ProactiveScheduler:
         except Exception:
             inner_state = None
 
+        # Relational memory for this recipient — same source the reactive
+        # turn uses, so proactive references "我们的暗号 / 共同地点 / 甜蜜
+        # 瞬间" the same way she would mid-conversation.
+        relational_memory = None
+        if getattr(self.engine, "relational_store", None) is not None:
+            try:
+                relational_memory = await self.engine.relational_store.load(rec_key)
+            except Exception as e:
+                print(f"[relational] proactive load failed: {e}", flush=True)
+                relational_memory = None
+
         try:
             relationship_record = self.engine.interaction_tracker.get_record(
                 record.channel, record.recipient_id
@@ -559,6 +570,7 @@ class ProactiveScheduler:
             recent_proactive_messages=(
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),
+            relational_memory=relational_memory,
             mode="single",
         )
 

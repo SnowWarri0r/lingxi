@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     )
     from lingxi.memory.manager import MemoryContext
     from lingxi.planning.models import Plan
+    from lingxi.relational.models import RelationalMemory
 
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
@@ -77,6 +78,7 @@ class PromptBuilder:
         pending_agenda: list[AgendaItem] | None = None,
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
+        relational_memory: RelationalMemory | None = None,
         mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
@@ -151,6 +153,13 @@ class PromptBuilder:
             subj_block = SubjectiveLayer.render_for_prompt(subjective_view)
             if subj_block:
                 sections.append(subj_block)
+
+        # Relational memory: between-us texture (inside jokes, shared
+        # places, fight patterns, sweet moments...). Renders only when
+        # populated — fresh relationship has nothing yet, accumulates
+        # via reflection-driven extractor.
+        if relational_memory is not None and not relational_memory.is_empty():
+            sections.append(self._build_relational_section(relational_memory))
 
         if memory_context and memory_context.long_term_facts:
             sections.append(self._build_memory_section(memory_context))
@@ -678,6 +687,60 @@ class PromptBuilder:
             "**当下那种感觉**自然带出来就好，不要把数值念出来。"
         )
         return header + "\n" + "\n".join(lines) + footer
+
+    def _build_relational_section(self, mem: "RelationalMemory") -> str:
+        """Render the per-recipient relationship texture.
+
+        This is what's missing from "she remembers what happened" → "我们之间
+        有东西". Inside jokes, pet names, shared places, fight-patterns,
+        sweet moments all render here. The model gets concrete handles for
+        "我们" reference instead of having to reconstruct each turn.
+
+        Order chosen so the most-used items (inside_jokes, pet_names) come
+        first; archives (fight/sweet) come last as background context.
+        """
+        lines = ["## 💞 你和这个人之间专属的（**这是「我们」的部分，不是设定**）"]
+
+        if mem.relationship_summary:
+            lines.append(f"\n你心里对这段关系的概括：{mem.relationship_summary}")
+
+        if mem.pet_names:
+            joined = "、".join(f'"{n}"' for n in mem.pet_names[:5])
+            lines.append(f"\n你叫他/他叫你：{joined}")
+
+        if mem.inside_jokes:
+            lines.append("\n**只有你们俩懂的梗/暗号**（自然引用，不要解释）：")
+            for j in mem.inside_jokes[:6]:
+                lines.append(f"- 「{j.phrase}」 — {j.origin}")
+
+        if mem.shared_places:
+            lines.append("\n**你们的共同地点**（聊到相关时可以自然带）：")
+            for p in mem.shared_places[:4]:
+                lines.append(f"- {p.name}：{p.significance}")
+
+        if mem.daily_patterns:
+            lines.append("\n**他生活的规律**（你心里记着的）：")
+            for d in mem.daily_patterns[:5]:
+                lines.append(f"- {d.pattern}")
+
+        if mem.sweet_moments:
+            lines.append("\n**回忆里的几个具体瞬间**（不是 episode 流水账，是你心里留下的）：")
+            for m in mem.sweet_moments[:5]:
+                lines.append(f"- {m.content}")
+
+        if mem.fight_patterns:
+            lines.append("\n**你们吵架/冷战的典型节奏**（自我察觉，不是要复述）：")
+            for f in mem.fight_patterns[:3]:
+                lines.append(
+                    f"- 触发：{f.trigger}；你的反应：{f.her_pattern}；"
+                    f"通常怎么修复：{f.typical_repair}"
+                )
+
+        lines.append(
+            "\n这些是**你们独有**的——别把它们当设定念出来，但聊到相关的"
+            "事可以自然引用、回忆、玩梗。"
+        )
+        return "\n".join(lines)
 
     def _build_relationship_section(self, level: int) -> str:
         r = self.persona.relationship
