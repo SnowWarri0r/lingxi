@@ -149,3 +149,42 @@ class TestReminderBuilding:
         result = build_turn_focus_reminder(last_assistant_question="你吃饭了吗")
         # Caveat reminds model that user's actual message is the task
         assert "对方真正的话" in result or "状态提醒" in result
+
+
+class TestConfrontationDetection:
+    def test_empty_text_returns_false(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        assert detect_confrontation("") is False
+        assert detect_confrontation("   ") is False
+
+    def test_好敷衍_detected(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        assert detect_confrontation("好敷衍") is True
+        assert detect_confrontation("我们是什么关系") is True
+
+    def test_你都不_pattern(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        assert detect_confrontation("你都不安慰我") is True
+        assert detect_confrontation("你怎么不说话") is True
+        assert detect_confrontation("你为什么不回我") is True
+
+    def test_你这样_你这个人(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        assert detect_confrontation("你这样真的好吗") is True
+        assert detect_confrontation("你这个人真冷漠") is True
+
+    def test_normal_message_not_detected(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        # Normal venting / sharing — Aria not the target
+        assert detect_confrontation("今天好烦") is False
+        assert detect_confrontation("准备下班") is False
+        assert detect_confrontation("你好") is False
+
+    def test_failed_relationship_question_detected(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        # The actual production trace
+        assert detect_confrontation("好敷衍，我们是什么关系") is True
+
+    def test_失望_detected(self):
+        from lingxi.conversation.turn_focus import detect_confrontation
+        assert detect_confrontation("我对你有点失望") is True

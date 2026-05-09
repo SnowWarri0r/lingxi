@@ -45,11 +45,17 @@ class EngagementMode(str, Enum):
     withdrawn  — heavy emotion (悲伤/孤独/压抑) ≥ 0.5. Sentence-level
                  silence is allowed; one-emoji or "嗯..." is enough.
                  Don't echo user's topic, don't ask follow-up.
+    flustered  — just got called out / accused / said something cold the
+                 user pushed back on. HIGH engagement, HIGH stress —
+                 sentence fragments, repeated chars, over-explanation,
+                 self-criticism. The "she was caught and now she's
+                 scrambling" register that real humans land in.
     """
 
     FULL = "full"
     CURT = "curt"
     WITHDRAWN = "withdrawn"
+    FLUSTERED = "flustered"
 
 
 def derive_engagement_mode(
@@ -67,12 +73,23 @@ def derive_engagement_mode(
     if inner_state is None and emotion is None:
         return EngagementMode.FULL
 
-    # Heavy emotion — withdraw. Higher precedence than provoked because
-    # 悲伤/孤独 reads inward (less talking), not outward (snapping).
     if emotion is not None:
         # Local import to avoid the runtime cycle: inner_life models
         # describe the lever, persona models hold the dim families.
         from lingxi.persona.models import EmotionState
+
+        # Flustered FIRST — the most acute reaction. Even if she's also
+        # heavy or provoked underneath, the "just got caught" overrides
+        # because it dominates output style this turn (scrambling).
+        flustered = max(
+            (v for n, v in emotion.dimensions.items() if n in EmotionState.FLUSTERED_DIMS),
+            default=0.0,
+        )
+        if flustered >= 0.4:
+            return EngagementMode.FLUSTERED
+
+        # Heavy — withdraw. 悲伤/孤独 reads inward (less talking), not
+        # outward (snapping).
         heavy = max(
             (v for n, v in emotion.dimensions.items() if n in EmotionState.HEAVY_DIMS),
             default=0.0,
