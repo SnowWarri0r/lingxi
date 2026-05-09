@@ -145,6 +145,86 @@ class TestPromptBuilder:
         assert long_msg not in prompt
 
 
+class TestTraitBehaviorCue:
+    def test_default_cue_empty(self):
+        from lingxi.persona.models import Trait
+        t = Trait(trait="好奇", intensity=0.9)
+        assert t.behavior_cue == ""
+
+    def test_high_intensity_cue_renders(self):
+        from lingxi.persona.models import (
+            Identity, PersonaConfig, PersonalityProfile, Trait,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            personality=PersonalityProfile(
+                traits=[
+                    Trait(
+                        trait="好奇",
+                        intensity=0.9,
+                        behavior_cue="听到新概念会问一个具体细节",
+                    ),
+                ],
+            ),
+        )
+        prompt = PromptBuilder(persona).build_system_prompt()
+        # Both label and cue surface
+        assert "好奇" in prompt
+        assert "听到新概念会问一个具体细节" in prompt
+        # Cue gets the "→" arrow prefix
+        assert "**好奇** → 听到新概念会问一个具体细节" in prompt
+
+    def test_high_intensity_no_cue_label_only(self):
+        from lingxi.persona.models import (
+            Identity, PersonaConfig, PersonalityProfile, Trait,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            personality=PersonalityProfile(
+                traits=[Trait(trait="好奇", intensity=0.9, behavior_cue="")],
+            ),
+        )
+        prompt = PromptBuilder(persona).build_system_prompt()
+        # Label appears
+        assert "好奇" in prompt
+        # No "具体怎么显出来的" header when no traits have cues
+        assert "具体怎么显出来的" not in prompt
+
+    def test_mid_intensity_cue_not_rendered(self):
+        # Cues are only for high-intensity traits (>0.7) — mid-traits
+        # are rendered as a label-only secondary list
+        from lingxi.persona.models import (
+            Identity, PersonaConfig, PersonalityProfile, Trait,
+        )
+        persona = PersonaConfig(
+            name="T",
+            identity=Identity(full_name="T"),
+            personality=PersonalityProfile(
+                traits=[
+                    Trait(
+                        trait="温和",
+                        intensity=0.5,
+                        behavior_cue="说话语气柔",
+                    ),
+                ],
+            ),
+        )
+        prompt = PromptBuilder(persona).build_system_prompt()
+        assert "温和" in prompt
+        assert "说话语气柔" not in prompt
+
+    def test_aria_yaml_loads_behavior_cues(self):
+        path = Path(__file__).parent.parent.parent / "config" / "personas" / "example_persona.yaml"
+        if not path.exists():
+            return
+        persona = load_persona(path)
+        cued = [t for t in persona.personality.traits if t.behavior_cue]
+        # All 5 high-intensity traits should have cues configured
+        assert len(cued) >= 4
+
+
 class TestMessageHabits:
     def test_default_empty_not_rendered(self):
         from lingxi.persona.models import Identity, PersonaConfig

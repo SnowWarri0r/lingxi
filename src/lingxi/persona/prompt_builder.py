@@ -460,6 +460,11 @@ class PromptBuilder:
         Trait names alone (with intensity numbers) cause the LLM to *perform*
         the trait — '0.9 curiosity' becomes interrogation. We render traits
         in plain language about how she shows up, not as a stat sheet.
+
+        High-intensity traits (>0.7) that have a configured behavior_cue
+        get the cue rendered as a "→ how it shows up" line — forge/ex-skill
+        tag→behavior translation. This is what stops "好奇 0.9" from turning
+        into a string of "你为什么...?" interrogation.
         """
         p = self.persona.personality
         if not p.traits and not p.values and not p.fears:
@@ -467,12 +472,18 @@ class PromptBuilder:
         lines = ["## 你是什么样的人"]
         if p.traits:
             top = sorted(p.traits, key=lambda t: t.intensity, reverse=True)
-            high = [t.trait for t in top if t.intensity > 0.7]
-            mid = [t.trait for t in top if 0.4 <= t.intensity <= 0.7]
+            high = [t for t in top if t.intensity > 0.7]
+            mid = [t for t in top if 0.4 <= t.intensity <= 0.7]
             if high:
-                lines.append(f"骨子里是这样的人：{'、'.join(high)}。")
+                lines.append(f"骨子里是这样的人：{'、'.join(t.trait for t in high)}。")
+                # Render behavior cues for high-intensity traits that have one
+                cued = [t for t in high if t.behavior_cue]
+                if cued:
+                    lines.append("具体怎么显出来的：")
+                    for t in cued:
+                        lines.append(f"- **{t.trait}** → {t.behavior_cue}")
             if mid:
-                lines.append(f"也带一点：{'、'.join(mid)}。")
+                lines.append(f"也带一点：{'、'.join(t.trait for t in mid)}。")
         if p.values:
             lines.append(f"在乎：{'、'.join(p.values)}。")
         if p.fears:

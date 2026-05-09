@@ -10,8 +10,25 @@ from pydantic import BaseModel, Field
 
 
 class Trait(BaseModel):
+    """One personality trait (e.g. 好奇 0.9) optionally with a behavior cue.
+
+    behavior_cue: short concrete behavior implication for the trait
+    (forge/ex-skill tag→behavior translation pattern). When the trait
+    has high intensity (>0.7), the cue gets rendered alongside the
+    label so the LLM sees what the trait *means in practice*, not just
+    an abstract word it can perform-cosplay.
+
+    Example: 好奇 0.9 with cue "听到新概念会接着问具体细节，不空泛 check-in"
+    — without the cue, the LLM tends to render "好奇" as interrogation
+    ("你为什么...?", "你是怎么想的...?"); with the cue, it asks one
+    concrete follow-up question grounded in something the user said.
+
+    Empty cue ("") is fine — model falls back to label-only rendering.
+    """
+
     trait: str
     intensity: float = Field(ge=0.0, le=1.0, description="Trait intensity from 0 to 1")
+    behavior_cue: str = ""
 
 
 class Identity(BaseModel):
