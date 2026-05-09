@@ -154,3 +154,6 @@ class TestPromptRendering:
         # Anti-topic-switch guard
         assert "换话题" in prompt
         assert "你现在还在工作吗" in prompt or "无关的 follow-up" in prompt
+        # Anti-fabrication guard (don't invent times/numbers as filler)
+        assert "凭空塞" in prompt or "编个事实" in prompt
+        assert "快五点了" in prompt
