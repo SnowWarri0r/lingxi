@@ -246,6 +246,7 @@ class ReflectionLoop:
             and not deltas.get("sweet_moments")
             and not deltas.get("pet_names")
             and not deltas.get("daily_patterns")
+            and not deltas.get("signature_phrases")
             and not deltas.get("relationship_summary_update")
         )
         if all_empty:
@@ -265,7 +266,8 @@ class ReflectionLoop:
                 f"places={len(deltas['shared_places'])}, "
                 f"sweet={len(deltas['sweet_moments'])}, "
                 f"daily={len(deltas['daily_patterns'])}, "
-                f"names={len(deltas['pet_names'])})",
+                f"names={len(deltas['pet_names'])}, "
+                f"sig={len(deltas['signature_phrases'])})",
                 flush=True,
             )
 

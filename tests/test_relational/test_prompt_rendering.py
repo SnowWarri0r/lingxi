@@ -106,6 +106,32 @@ class TestPopulatedRendering:
         assert "温和但带点距离感" in prompt
 
 
+class TestSignaturePhrases:
+    def test_signature_phrases_rendered_quoted(self):
+        m = RelationalMemory(
+            recipient_key="x",
+            signature_phrases=["懂", "等下"],
+        )
+        prompt = PromptBuilder(_persona()).build_system_prompt(relational_memory=m)
+        assert '"懂"' in prompt
+        assert '"等下"' in prompt
+        assert "你跟这个人说话长出来的口头" in prompt
+
+    def test_signature_phrases_capped_at_six(self):
+        m = RelationalMemory(
+            recipient_key="x",
+            signature_phrases=[f"p{i}" for i in range(15)],
+        )
+        prompt = PromptBuilder(_persona()).build_system_prompt(relational_memory=m)
+        assert '"p5"' in prompt
+        assert '"p6"' not in prompt
+
+    def test_empty_signature_phrases_no_render(self):
+        m = RelationalMemory(recipient_key="x", pet_names=["x"])  # has other content
+        prompt = PromptBuilder(_persona()).build_system_prompt(relational_memory=m)
+        assert "你跟这个人说话长出来的口头" not in prompt
+
+
 class TestCaps:
     def test_inside_jokes_capped_at_six(self):
         m = RelationalMemory(

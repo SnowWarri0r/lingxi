@@ -150,3 +150,28 @@ class TestMergeDeltas:
         assert m.last_extracted_at is None
         merge_deltas_into_memory(m, self._payload())
         assert m.last_extracted_at is not None
+
+    def test_merge_adds_signature_phrases(self):
+        m = RelationalMemory(recipient_key="x")
+        merge_deltas_into_memory(
+            m, self._payload(signature_phrases=["懂", "等下"])
+        )
+        assert "懂" in m.signature_phrases
+        assert "等下" in m.signature_phrases
+
+    def test_merge_dedupes_existing_signature_phrases(self):
+        m = RelationalMemory(recipient_key="x", signature_phrases=["懂"])
+        added = merge_deltas_into_memory(
+            m, self._payload(signature_phrases=["懂", "等下"])
+        )
+        # "懂" deduped, "等下" added
+        assert added == 1
+        assert m.signature_phrases.count("懂") == 1
+        assert "等下" in m.signature_phrases
+
+    def test_merge_skips_non_string_signature_entry(self):
+        m = RelationalMemory(recipient_key="x")
+        merge_deltas_into_memory(
+            m, self._payload(signature_phrases=["ok", {"phrase": "x"}, None])
+        )
+        assert m.signature_phrases == ["ok"]
