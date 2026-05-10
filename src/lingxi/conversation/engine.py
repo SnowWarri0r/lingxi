@@ -15,7 +15,6 @@ from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
 from lingxi.conversation.prompt_assembly import (
     build_style_preamble,
     pick_prefill,
-    render_fewshots_as_messages,
 )
 from lingxi.fewshot.models import AnnotationTurn, FewShotSample
 from lingxi.fewshot.retriever import FewShotRetriever
@@ -59,6 +58,38 @@ _DIRECTIVE_TAGS = (
     "action",
     "inner",
 )
+
+
+# Heavy-topic markers — when ANY of these appear in the user message, we
+# suppress biography injection and instruct compress to be ≤25 chars and
+# absent of grandstanding ("我爸那会儿…"). The list is intentionally narrow
+# to avoid false positives on light teasing / hypotheticals.
+_HEAVY_TOPIC_MARKERS = (
+    # death / loss
+    "走了", "走的那年", "走的时候", "离开了", "去世", "过世", "不在了", "没了",
+    "丧亲", "葬礼", "白事", "遗体", "尸体", "前年走", "去年走",
+    # serious illness
+    "癌", "肿瘤", "化疗", "放疗", "晚期",
+    "脑梗", "脑干", "脑出血", "中风", "心梗", "心衰",
+    "重病", "病危", "ICU", "插管", "植物人",
+    # mental health crises
+    "想死", "想不开", "活不下去", "自杀", "抑郁症",
+    # relationship / job ruptures
+    "离婚", "分手了", "出轨",
+    "被裁", "失业了", "被辞退", "被开除",
+)
+
+
+def _looks_like_heavy_topic(user_input: str) -> bool:
+    """Cheap substring check for heavy-emotion markers in user message.
+
+    Designed to be conservative: prefers false-negatives (still grandstands
+    sometimes) over false-positives (suppresses biography on jokes/teasing).
+    """
+    if not user_input:
+        return False
+    text = user_input
+    return any(marker in text for marker in _HEAVY_TOPIC_MARKERS)
 
 
 class ConversationEngine:
@@ -121,6 +152,8 @@ class ConversationEngine:
         self._compress_llm: LLMProvider | None = None
         self._last_biography_hits: list = []
         self._last_user_input: str = ""
+        self._last_fewshots: list = []
+        self._last_is_heavy_topic: bool = False
 
         # Initialize
         self.memory.set_llm_provider(llm_provider)
@@ -172,6 +205,17 @@ class ConversationEngine:
             memory_text = f"[发送了{len(images)}张图片] {user_input}".strip()
         self.memory.add_turn("user", memory_text)
 
+        # Mid-term layer: opportunistically compress aged turns (older than
+        # the verbatim window) into one-line summaries before assembling
+        # the context. Cheap because it only runs when there are pending
+        # turns that haven't been summarized yet.
+        try:
+            await self.memory.compress_aged_turns(
+                threshold_minutes=self.context_assembler.budget.verbatim_window_minutes
+            )
+        except Exception as e:
+            print(f"[mid-term] compress failed: {e}")
+
         memory_context = await self.memory.assemble_context(
             user_input or "(图片消息)",
             recipient_key=recipient_key,
@@ -221,7 +265,13 @@ class ConversationEngine:
         # Query: user input (most directly topical); later we could also
         # fold in the previous inner_thought for continuity.
         biography_hits: list = []
-        if self.biography_retriever is not None and user_input.strip():
+        # Heavy-topic gate: if the user is sharing a serious life event
+        # (death/illness/loss/breakup/firing), do NOT surface biography
+        # at all. Even with a "don't grandstand" rule, having those
+        # memories in the system prompt biases the model to share them.
+        # Better not to put them in front of the model on those turns.
+        is_heavy_topic = _looks_like_heavy_topic(user_input)
+        if self.biography_retriever is not None and user_input.strip() and not is_heavy_topic:
             try:
                 biography_hits = await self.biography_retriever.retrieve(
                     query=user_input, k=2, threshold=0.25,
@@ -234,7 +284,10 @@ class ConversationEngine:
                 print(f"[biography] hit {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
             else:
                 print(f"[biography] no hit for {user_input[:20]!r}", flush=True)
+        elif is_heavy_topic:
+            print(f"[biography] suppressed (heavy topic) for {user_input[:30]!r}", flush=True)
         self._last_biography_hit = bool(biography_hits)
+        self._last_is_heavy_topic = is_heavy_topic
 
         # Stash for compress step (it needs user_input + biography hits)
         self._last_biography_hits = list(biography_hits)
@@ -282,11 +335,12 @@ class ConversationEngine:
             else:
                 messages.append({"role": "user", "content": blocks})
 
-        # --- Dynamic few-shot (Task 16) ---
-        # Spec §6.3: always anchor with seeds as baseline, then suffix with
-        # retrieved user_correction/positive samples in the "most recent"
-        # position for strongest LLM imitation.
-        baseline_seeds = self._phase0_seed_fewshots()[:3]  # anchor
+        # --- Few-shot retrieval (rendered as TEXT inside system prompt now,
+        # not as user/assistant message pairs interleaved with real history).
+        # The pair-injection approach caused the model to confabulate prior
+        # user messages from fewshot context. Text-block treatment avoids
+        # that while still anchoring voice. ---
+        baseline_seeds = self._phase0_seed_fewshots()[:3]
         retrieved: list[FewShotSample] = []
         if self.fewshot_retriever is not None:
             try:
@@ -298,18 +352,20 @@ class ConversationEngine:
                 )
             except Exception:
                 retrieved = []
-        # Seeds first (baseline), retrieved last (recency = strongest signal)
         seed_fewshots = baseline_seeds + retrieved
-        few_shot_msgs = render_fewshots_as_messages(seed_fewshots)
+        self._last_fewshots = seed_fewshots
+
+        # Render fewshots as a text block and append to system prompt
+        if seed_fewshots:
+            voice_examples_block = self._render_fewshots_as_text(seed_fewshots[:5])
+            if voice_examples_block:
+                system_prompt = f"{system_prompt}\n\n{voice_examples_block}"
 
         # Attach style preamble to the last user message
-        # When biography hit: relax the length cap so Aria can actually
-        # share a personal anecdote ("我也有过xxx...") instead of being
-        # forced back into one-liner mode.
         effective_style = self.persona.style
         if self._last_biography_hit:
             effective_style = effective_style.model_copy(
-                update={"speech_max_chars": max(120, effective_style.speech_max_chars)},
+                update={"speech_max_chars": max(effective_style.speech_max_chars, 60)},
             )
         style_preamble = build_style_preamble(
             effective_style,
@@ -318,9 +374,33 @@ class ConversationEngine:
         )
         self._apply_style_preamble(messages, style_preamble)
 
-        # Final message list = few-shot pairs + history (which already includes the user turn)
-        final_messages = few_shot_msgs + messages
-        return system_prompt, final_messages
+        # Final message list = real chat history only (NO fewshot pair injection)
+        return system_prompt, messages
+
+    @staticmethod
+    def _render_fewshots_as_text(samples: list[FewShotSample]) -> str:
+        """Render fewshots as a TEXT block in the system prompt.
+
+        Format: '场景：X / 你那时说："Y"'. The samples are voice anchors,
+        explicitly NOT prior conversation turns the model should treat
+        as if the user said them.
+        """
+        if not samples:
+            return ""
+        lines = [
+            "## 你的说话样本（仅作语感参考——这些**不是**对方刚说的话，"
+            "**不是**真实历史，只是几个'当年类似场景下你会怎么说'的示例）"
+        ]
+        for s in samples:
+            ctx = (s.context_summary or "").strip()[:60]
+            speech = (s.corrected_speech or "").strip()[:100]
+            if not speech:
+                continue
+            if ctx:
+                lines.append(f'- 场景："{ctx}" → 你那时说："{speech}"')
+            else:
+                lines.append(f'- 你那时说："{speech}"')
+        return "\n".join(lines)
 
     def _phase0_seed_fewshots(self) -> list[FewShotSample]:
         """Hardcoded baseline seeds before Task 16's retriever lands.
@@ -368,24 +448,23 @@ class ConversationEngine:
     def _persona_voice_hint(self) -> str:
         """Derive a one-line voice descriptor from the persona YAML.
 
-        Pulls tone + top personality traits (+ 1 verbal habit if short)
-        so the style preamble can keep Aria's voice from being flattened
-        into generic WeChat register.
+        Tone + top personality traits only. We deliberately do NOT inject
+        verbal_habits here — those tend to be writerly self-descriptions
+        like "喜欢用天文学隐喻" that, when handed to a small/cheap compress
+        model as an instruction, get treated as "always do this," which
+        produces pure AI-tone in casual IM chat. verbal_habits still
+        influence the main think-call via prompt_builder.
         """
         p = self.persona
         parts: list[str] = []
         tone = p.speaking_style.tone.strip()
         if tone and tone != "neutral":
             parts.append(tone)
-        # Top 2 traits (above baseline intensity)
         top_traits = sorted(
             p.personality.traits, key=lambda t: t.intensity, reverse=True
         )[:2]
         if top_traits:
             parts.append("/".join(t.trait for t in top_traits))
-        # One verbal habit for flavor (optional)
-        if p.speaking_style.verbal_habits:
-            parts.append(p.speaking_style.verbal_habits[0])
         return "，".join(parts)
 
     # === Two-call (think → compress) helpers ==========================
@@ -431,24 +510,21 @@ class ConversationEngine:
         )
         from lingxi.conversation.prompt_assembly import DEFAULT_BLACKLIST
 
-        # Few-shot for voice anchoring (use whatever the retriever surfaces
-        # for inner_thought as the most relevant style examples)
-        fewshots: list = []
-        if self.fewshot_retriever is not None:
-            try:
-                # Synchronous-ish: we already retrieved when preparing turn,
-                # but fewshot_retriever was queried separately. Just re-query
-                # synchronously with inner_thought as key — tighter for compress.
-                pass  # left simple: rely on what _prepare_turn already produced
-            except Exception:
-                pass
-        seeds = self._phase0_seed_fewshots()[:3]
+        # Use whatever _prepare_turn already retrieved (3 seeds + up to 3
+        # context-relevant samples). Falling back to seeds-only when there's
+        # no stash means cold-start still has voice anchors.
+        seeds = list(self._last_fewshots) if self._last_fewshots else self._phase0_seed_fewshots()[:3]
+        seeds = seeds[:5]
 
         style = self.persona.style
         blacklist_phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
         max_chars = style.speech_max_chars
         if self._last_biography_hit:
-            max_chars = max(120, max_chars)
+            max_chars = max(max_chars, 60)
+        # Heavy topic: hard-cap to 25 chars regardless of biography. Short +
+        # present beats grandstanding empathy speech.
+        if self._last_is_heavy_topic:
+            max_chars = min(max_chars, 25)
 
         prompt_text = build_compress_prompt(
             persona_name=self.persona.name,
@@ -544,7 +620,29 @@ class ConversationEngine:
                         self._current_recipient_key, self._last_response_text
                     )
                 )
+
+            # Reactive life: chat just happened → drop social_need + stamp
+            if self.inner_life_store is not None:
+                loop.create_task(self._touch_inner_life_chatted())
         except RuntimeError:
+            pass
+
+    async def _touch_inner_life_chatted(self) -> None:
+        """Lightweight hook: inform the life simulator that a chat just occurred.
+
+        Reduces social_need (she just talked to someone) and stamps last_chat_at
+        so drift_dynamics can keep social_need depressed for the next ~hour.
+        """
+        if self.inner_life_store is None:
+            return
+        try:
+            state = await self.inner_life_store.load_state()
+            from datetime import datetime as _dt
+            state.last_chat_at = _dt.now()
+            state.social_need = max(0.1, state.social_need - 0.15)
+            await self.inner_life_store.save_state(state)
+        except Exception:
+            # Never let life-state errors break the chat path
             pass
 
     async def _mark_agenda_delivered_if_mentioned(
@@ -711,24 +809,73 @@ class ConversationEngine:
 
         if self.persona.compression.enabled:
             # Two-call streaming: think (non-stream) then compress (stream)
-            think_raw = await self._run_think(system_prompt, messages)
-            output_pre = self._process_response(think_raw)
-            inner_thought = output_pre.inner_thought or output_pre.speech
+            try:
+                think_raw = await self._run_think(system_prompt, messages)
+                output_pre = self._process_response(think_raw)
+                inner_thought = output_pre.inner_thought or output_pre.speech
+            except Exception as e:
+                # Think call dead → emit graceful fallback rather than
+                # leaving the card stuck. User can b-correct.
+                print(f"[engine] think call failed: {e}")
+                from lingxi.conversation.output_schema import TurnOutput
+                output = TurnOutput()
+                output.speech = "嗯 网络抽了一下 你再发一次"
+                output.turn_id = str(uuid.uuid4())
+                if self.annotation_store is not None and channel and recipient_id:
+                    try:
+                        await self.annotation_store.record(AnnotationTurn(
+                            turn_id=output.turn_id,
+                            recipient_key=f"{channel}:{recipient_id}",
+                            user_message=user_input,
+                            inner_thought="",
+                            speech=output.speech,
+                        ))
+                    except Exception:
+                        pass
+                yield StreamEvent("turn_id", output.turn_id)
+                yield StreamEvent("done", output.speech)
+                return
 
             # Surface a thinking preview so the UI can show "Aria 正在……"
             preview = inner_thought.strip().replace("\n", " ")[:30]
             if preview:
                 yield StreamEvent("thinking", preview)
 
+            # Accumulate the entire compressed reply WITHOUT emitting
+            # per-chunk events. clean_speech() is global (paragraph collapse
+            # + line-level narration detection), so partial cleaning during
+            # stream would still flash em-dashes / `\n\n` to the user before
+            # the final replace. Trade ~0.8s of typing animation for a
+            # single render of the cleaned result. The "thinking" preview
+            # above already covers "something's happening" UX.
             full_speech = ""
-            async for chunk_text in self._run_compress_stream(inner_thought, user_input):
-                if not chunk_text:
-                    continue
-                full_speech += chunk_text
-                yield StreamEvent("chunk", chunk_text)
+            compress_error: Exception | None = None
+            try:
+                async for chunk_text in self._run_compress_stream(inner_thought, user_input):
+                    if chunk_text:
+                        full_speech += chunk_text
+            except Exception as e:
+                compress_error = e
+                print(f"[engine] compress stream failed, falling back: {e}")
+
+            # Fallback 1: try non-streaming compress (same retry policy in provider)
+            if not full_speech.strip() and compress_error is not None:
+                try:
+                    full_speech = await self._run_compress(inner_thought, user_input)
+                except Exception as e:
+                    print(f"[engine] compress non-stream also failed: {e}")
+                    full_speech = ""
+
+            # Fallback 2: still empty → emit a graceful filler so the card
+            # doesn't sit on "💭 思考中..." forever. Persist anyway so user
+            # can b-correct the failure case.
+            from lingxi.conversation.response_cleaner import clean_speech
+            cleaned = clean_speech(full_speech)
+            if not cleaned.strip():
+                cleaned = "嗯 我刚刚走神了一下，你再说一遍？"
 
             output = output_pre
-            output.speech = full_speech
+            output.speech = cleaned
             output.inner_thought = inner_thought
         else:
             prefill = pick_prefill(self.persona.style)

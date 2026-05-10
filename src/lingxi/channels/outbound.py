@@ -14,8 +14,17 @@ class OutboundChannel(ABC):
         """Identifier for this channel type (e.g., 'feishu', 'web', 'cli')."""
 
     @abstractmethod
-    async def send_message(self, recipient_id: str, text: str) -> None:
-        """Send a proactive message to a specific recipient."""
+    async def send_message(
+        self,
+        recipient_id: str,
+        text: str,
+        turn_id: str | None = None,
+    ) -> None:
+        """Send a proactive message to a specific recipient.
+
+        If `turn_id` is provided, the channel may attach annotation UI
+        (👍/👎/✏️) so the user can rate the proactive message.
+        """
 
 
 class ChannelRegistry:

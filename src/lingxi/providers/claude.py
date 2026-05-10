@@ -122,6 +122,20 @@ class ClaudeProvider(LLMProvider):
             return _build_oauth_headers(self._api_key, self._session_id)
         return _build_apikey_headers(self._api_key)
 
+    @staticmethod
+    def _request_timeout() -> "httpx.Timeout":
+        """Per-request timeout used for both stream + non-stream calls.
+
+        Tighter than the client default. Prevents the proxy stalling silently
+        on TLS handshake from hanging the whole turn for 10 minutes.
+        """
+        return httpx.Timeout(
+            connect=10.0,   # TLS handshake must complete in 10s
+            read=120.0,     # Time between chunks (long for slow streaming)
+            write=30.0,     # Body upload
+            pool=10.0,      # Time to acquire a pool conn
+        )
+
     def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
             self._http_client = httpx.AsyncClient(timeout=httpx.Timeout(600.0))
@@ -227,7 +241,7 @@ class ClaudeProvider(LLMProvider):
         """Make a request; on 401, refresh token from keychain and retry once."""
         client = self._get_http_client()
         headers = self._get_headers()
-        response = await client.post(url, headers=headers, json=body)
+        response = await client.post(url, headers=headers, json=body, timeout=self._request_timeout())
 
         if response.status_code == 401 and self._is_oauth:
             # Token expired — try reading fresh token from Claude Code keychain
@@ -237,7 +251,7 @@ class ClaudeProvider(LLMProvider):
                 self.update_credentials(new_token)
                 headers = self._get_headers()
                 client = self._get_http_client()
-                response = await client.post(url, headers=headers, json=body)
+                response = await client.post(url, headers=headers, json=body, timeout=self._request_timeout())
 
         if response.status_code != 200:
             raise RuntimeError(
@@ -330,7 +344,10 @@ class ClaudeProvider(LLMProvider):
             content_yielded_this_attempt = False
 
             try:
-                async with client.stream("POST", url, headers=headers, json=body) as response:
+                async with client.stream(
+                    "POST", url, headers=headers, json=body,
+                    timeout=self._request_timeout(),
+                ) as response:
                     if response.status_code == 401 and self._is_oauth:
                         need_refresh = True
                         continue
