@@ -117,8 +117,13 @@ class PromptBuilder:
         sections.extend([
             self._build_personality_section(),
             self._build_speaking_style_section(),
-            self._build_emotional_section(current_mood, emotion_state),
         ])
+
+        habits_block = self._build_message_habits_section()
+        if habits_block:
+            sections.append(habits_block)
+
+        sections.append(self._build_emotional_section(current_mood, emotion_state))
 
         axes_block = self._build_decision_axes_section(inner_state)
         if axes_block:
@@ -499,6 +504,46 @@ class PromptBuilder:
             mood = current_mood or e.default_mood
             lines.append(f"心情：{mood}")
         # Skip volatility / trigger lists — they were prescriptive and rarely fired
+        return "\n".join(lines)
+
+    def _build_message_habits_section(self) -> str:
+        """Render character-level typing fingerprint (forge-skill L2 lift).
+
+        The point is to give the model explicit "how this persona actually
+        types when cold / warm / etc" cues, so it doesn't have to invent
+        them from abstract trait labels each turn. Skip if nothing is
+        populated — empty defaults are not worth render budget.
+        """
+        habits = self.persona.message_habits
+        if not habits.is_populated():
+            return ""
+
+        lines = ["## ⌨️ 你打字的习惯（行为指纹——形态约束，不是内容）"]
+        if habits.avg_length:
+            lines.append(f"- **长度**：{habits.avg_length}")
+        if habits.punctuation_habit:
+            lines.append(f"- **标点**：{habits.punctuation_habit}")
+        if habits.multi_send_pattern:
+            lines.append(f"- **多条**：{habits.multi_send_pattern}")
+        if habits.signature_phrases:
+            joined = "、".join(f'"{p}"' for p in habits.signature_phrases[:6])
+            lines.append(
+                f"- **偶尔会冒出来的词**（不是每句都用，自然地夹）：{joined}"
+            )
+        if habits.coldness_markers:
+            joined = "；".join(habits.coldness_markers[:6])
+            lines.append(
+                f"- **状态冷/累/敷衍时的样子**（被惹/低能量/不想搭理时这样写）：{joined}"
+            )
+        if habits.warmth_markers:
+            joined = "；".join(habits.warmth_markers[:6])
+            lines.append(
+                f"- **状态暖/有共鸣时的样子**（真听进去/有兴趣时这样写）：{joined}"
+            )
+        lines.append(
+            "\n这是**形态约束**：状态决定走 cold 还是 warm 那一栏。"
+            "**不要把这些标签或解释念出来**——就是按这种风格自然写出来。"
+        )
         return "\n".join(lines)
 
     def _build_decision_axes_section(self, inner_state: InnerState | None) -> str:
