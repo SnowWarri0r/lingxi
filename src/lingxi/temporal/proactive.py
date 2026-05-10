@@ -164,6 +164,32 @@ PROACTIVE_FORCE_PROMPT = """你是 {persona_name}。{current_time_cn}
 {{"should_send": true, "message": "消息内容"}}"""
 
 
+def _content_overlap(a: str, b: str) -> int:
+    """Largest contiguous run of 4+ chars from `a` appearing in `b`.
+
+    Used to detect whether an episode summary or event was already
+    voiced in a recent proactive message — overlap≥4 means likely
+    already-spoken; the new message would just repeat it.
+    """
+    if not a or not b:
+        return 0
+    best = 0
+    n = len(a)
+    for i in range(n):
+        j = i + 4
+        if j > n:
+            break
+        if a[i:j] not in b:
+            continue
+        k = j
+        while k < n and a[i:k + 1] in b:
+            k += 1
+        run = k - i
+        if run > best:
+            best = run
+    return best
+
+
 # Tokens that signal "I'm continuing/responding to something just said".
 # Real openers don't start with these — only replies do.
 _RESPONSE_TOKEN_PREFIXES = (
@@ -358,7 +384,63 @@ class ProactiveScheduler:
         if len(recent) > self._max_recent_proactive:
             del recent[: len(recent) - self._max_recent_proactive]
 
+        # Clear wants_to_share on whichever recent event this message
+        # actually voiced — content-match by character n-gram overlap.
+        # Without this, a 📌想说 event stays marked until TTL decay (2h)
+        # and proactive cycles every 5min keep picking it.
+        try:
+            await self._mark_event_shared(message)
+        except Exception as e:
+            print(f"[proactive] mark_event_shared failed: {e}")
+
         return {"key": key, "status": "sent", "message": message}
+
+    async def _mark_event_shared(self, message: str) -> None:
+        """Find the recent_event whose content overlaps most with `message`
+        and clear its wants_to_share flag.
+
+        Heuristic: sliding char-window overlap. Looking for any 4+ char
+        substring shared between the event content and the proactive
+        message. Cheap, no embedding needed; mismatches are tolerated
+        (TTL decay catches the rest).
+
+        Uses store.update_state for atomic read-modify-write — without it,
+        a sim tick or reactive turn updating state between our load and
+        save would clobber its writes (we'd persist a stale snapshot).
+        """
+        if self.engine.inner_life_store is None or not message:
+            return
+        msg = message.strip()
+        cleared_event_id: list[str] = []
+        cleared_score: list[int] = []
+
+        def _mutate(state) -> None:
+            if not state.recent_events:
+                return
+            scored = []
+            for ev in state.recent_events:
+                if not ev.wants_to_share:
+                    continue
+                score = _content_overlap(ev.content, msg)
+                if score >= 4:
+                    scored.append((score, ev))
+            if not scored:
+                return
+            scored.sort(key=lambda x: -x[0])
+            top_score, top_event = scored[0]
+            top_event.wants_to_share = False
+            cleared_event_id.append(top_event.content[:30])
+            cleared_score.append(top_score)
+
+        try:
+            await self.engine.inner_life_store.update_state(_mutate)
+            if cleared_event_id:
+                print(
+                    f"[proactive] cleared wants_to_share on event "
+                    f"'{cleared_event_id[0]}...' (score={cleared_score[0]})"
+                )
+        except Exception as e:
+            print(f"[proactive] update_state after share-clear failed: {e}")
 
     async def trigger_manually(self) -> list[dict]:
         """Manual trigger for all recipients (for testing). Bypasses silence + cooldown."""
@@ -410,6 +492,31 @@ class ProactiveScheduler:
         recent_proactive = "\n".join(
             f"- {m}" for m in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
+
+        # Filter relevant_episodes: drop any episode whose content overlaps
+        # with recent proactive messages. Without this, an episode that
+        # records "Aria 对蜘蛛做梦感到好奇" keeps getting retrieved into the
+        # prompt even after proactive already said it 3 times — the model
+        # sees the episode framed as "her past" and uses it as fresh
+        # proactive material on the next cycle.
+        if memory_context.relevant_episodes and recent_msgs:
+            kept = []
+            dropped = 0
+            for ep in memory_context.relevant_episodes:
+                summary = (ep.summary or "")
+                # If any recent proactive message has 4+ char overlap
+                # with this episode summary, treat it as already-spoken.
+                already = any(
+                    _content_overlap(summary, m) >= 4
+                    for m in recent_msgs[-self._max_recent_proactive:]
+                )
+                if already:
+                    dropped += 1
+                else:
+                    kept.append(ep)
+            if dropped:
+                print(f"[proactive] filtered {dropped} already-said episodes from {rec_key}")
+                memory_context.relevant_episodes = kept
 
         # relationship_level / goals were used by the legacy ad-hoc proactive
         # prompt; they're now rendered consistently inside build_system_prompt
