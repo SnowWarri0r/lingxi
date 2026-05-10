@@ -91,50 +91,93 @@ class PromptBuilder:
         if active_plans:
             sections.append(self._build_plan_section(active_plans))
 
-        sections.append(self._build_behavior_rules())
-
         return "\n\n".join(sections)
 
     def _build_inner_state_section(self, state: InnerState) -> str:
-        """Inject 'what I'm doing right now' so responses are grounded in real activity."""
+        """Inject 'what I'm doing right now' so participation level is emergent from state."""
         lines = ["## 🌱 你此刻的生活状态（真实在发生，不是设定）"]
 
         if state.current_activity:
             act = state.current_activity
+            scene_part = f"，{act.scene}" if getattr(act, "scene", "") else ""
             lines.append(
-                f"你现在正在 **{act.name}**：{act.description}"
+                f"你现在正在 **{act.name}**（{act.description}{scene_part}）"
             )
+            # Translate focus/social_openness into 参与度提示
             if act.focus_level > 0.7:
-                lines.append("（你正专注其中，被打断会有点出戏）")
-            elif act.social_openness > 0.7:
-                lines.append("（你比较有空，愿意聊天）")
+                lines.append("- 你正专注其中，被打断会有点出戏，回应可能比平常短或慢")
+            if act.social_openness > 0.7:
+                lines.append("- 你这会儿比较有空，愿意多聊几句")
+            elif act.social_openness < 0.3:
+                lines.append("- 你这会儿不太想说话，回应会比较短/敷衍")
+
+        # Energy / mood theme inform her conversational presence
+        if state.energy < 0.35:
+            lines.append(f"- 你能量很低（{state.energy:.1f}），脑子有点钝，话不会多")
+        elif state.energy > 0.75:
+            lines.append(f"- 你能量在线（{state.energy:.1f}），状态不错")
+
+        if state.social_need < 0.25:
+            lines.append("- 你最近聊过了，社交需求暂时低，不主动开话题")
+        elif state.social_need > 0.7:
+            lines.append("- 你独处太久了，挺想找人说话的")
 
         if state.today_plan and state.today_plan.mood_theme:
-            lines.append(f"今天的整体感觉：{state.today_plan.mood_theme}")
+            lines.append(f"- 今天整体的感觉：{state.today_plan.mood_theme}")
 
-        # Recent events (what has happened TO her)
+        # Recent events: things that happened TO her. Filtered to recent
+        # (≤24h) and rendered with relative-time prefixes so model doesn't
+        # treat a 4-day-old event as "just now". Older events live in the
+        # store but aren't surfaced as "current" — they belong to episodes.
         if state.recent_events:
-            recent = [e for e in state.recent_events[:5] if e.significance >= 0.3]
-            if recent:
-                lines.append("最近发生在你身上的事：")
-                for e in recent:
-                    marker = "📌" if e.wants_to_share else "·"
-                    lines.append(f"  {marker} {e.content}")
+            from datetime import datetime, timedelta
+            now = datetime.now()
+            cutoff = now - timedelta(hours=24)
+
+            def _age_label(ts):
+                delta = now - ts
+                if delta < timedelta(minutes=10):
+                    return "刚刚"
+                if delta < timedelta(minutes=60):
+                    return f"{int(delta.total_seconds() // 60)}分钟前"
+                if delta < timedelta(hours=6):
+                    return f"{int(delta.total_seconds() // 3600)}小时前"
+                if delta < timedelta(hours=24):
+                    return "今天早些时候"
+                if delta < timedelta(days=2):
+                    return "昨天"
+                return f"{delta.days}天前"
+
+            fresh = [
+                e for e in state.recent_events[:8]
+                if e.significance >= 0.3 and e.timestamp >= cutoff
+            ][:5]
+            if fresh:
+                lines.append(
+                    "\n最近发生在你身上的事（带时间标签——只有'刚刚/X分钟前'的"
+                    "才能用'刚刚/刚才'起手；'昨天/N天前'的就要用对应措辞）："
+                )
+                for e in fresh:
+                    marker = "📌想说" if e.wants_to_share else "·"
+                    when = _age_label(e.timestamp)
+                    lines.append(f"  {marker} [{when}] {e.content}")
 
         lines.append(
-            "\n这些只是你此刻真实的生活背景，不是必须提起的话题。"
-            "除非用户主动问，或者对话自然引到，**不要反复提同一件活动/事件**。"
-            "绝大多数回复应基于对话内容本身，而不是机械地播报"
-            "'你在做什么'。"
+            "\n**参与度由你的状态决定**：你是一个有自己生活的人顺手在聊天。"
+            "上面的状态决定你此刻能聊多少、想聊多少、对什么话题真的有感。"
+            "\n- 累/分心/没兴趣这个话题 → 短一句、敷衍、甚至岔开聊手边的事都是真实的"
+            "\n- 真的有共鸣或好奇 → 自然想多说两句"
+            "\n- 状态低 + 对方也没说什么大事 → 一两个字回也行"
+            "\n累就懒、忙就短、不感兴趣就转移——不必每句都给『最优』回应。"
         )
 
         return "\n".join(lines)
 
     def _build_biography_section(self, events: list) -> str:
-        """Inject retrieved past events so responses can draw on personal history."""
+        """Inject retrieved past events as BACKGROUND COLOR, not turn material."""
         current_age = self.persona.identity.age
         lines = [
-            "## 📖 你记忆里浮现的事（对方刚说的话让你想到这些，真实发生过）",
+            "## 📖 你脑子里浮现的事（**背景底色，不是台词**）",
         ]
         for e in events:
             age = getattr(e, "age", None)
@@ -142,8 +185,6 @@ class PromptBuilder:
             if age is None:
                 prefix = "你记得："
             elif current_age is not None and age >= current_age:
-                # Event is at or around Aria's current age — it's a recent/
-                # ongoing memory, not a "X years ago" tale.
                 prefix = "最近："
             elif current_age is not None and current_age - age <= 3:
                 prefix = "前阵子："
@@ -151,12 +192,9 @@ class PromptBuilder:
                 prefix = f"{age}岁时："
             lines.append(f"- {prefix}{content}")
         lines.append(
-            "\n**重要**：真人朋友聊天不是一问一答，会自然分享自己经历过的类似事。"
-            "这轮请**主动挑一条上面的记忆聊聊自己**，用'我以前……'/'我也有过……'/"
-            "'让我想起那年……'开头（最近的事用'最近我……'）。"
-            "短句口语，带一两个具体细节，不用写长，但一定要聊到你自己。"
-            "\n⚠️ 不要把你的人设/职业套到对方身上（不要说'我们程序员都这样'，对方可能不是程序员）"
-            "；除非对方明确说过自己是什么身份/做什么，不要替他下结论。"
+            "\n这是你的人生底色——经历过所以你懂这种感受。讲不讲、什么时候讲，看你当下。"
+            "\n上面没写的具体事别现编：写了『大学时室友小林』不等于你和小林一起看过 Clannad。"
+            "没有的共同经历就是没有，别为了有共鸣临时编一个。"
         )
         return "\n".join(lines)
 
@@ -227,119 +265,75 @@ class PromptBuilder:
         else:
             lines.append("（这是你们第一次对话）")
 
-        lines.append(
-            "⚠️ **严格遵守**：\n"
-            "- 不要说'今晚'如果现在不是晚上；不要说'早上'如果现在已经中午\n"
-            "- 不要建议对方'去睡觉'如果现在是工作时段（9-18点），这时对方'困'只是状态描述\n"
-            "- 不要凭对话话题（如'睡眠'）自己脑补时段，**一切以上面真实时间为准**"
-        )
-
         return "\n".join(lines)
 
     def _build_format_preamble(self) -> str:
-        """Hard format rules at the very top. PERSONA-AGNOSTIC.
+        """Channel framing + minimal format spec + how to talk on IM.
 
-        Persona-specific guidance is added elsewhere (speaking_style section,
-        dynamic anti-patterns derived from verbal_habits).
+        PERSONA-AGNOSTIC. Persona-specific 'who she is' content is in other sections.
         """
-        persona_name = self.persona.name
-        occupation = self.persona.identity.occupation or "（你的本职领域）"
+        return """# 这是 IM 聊天
 
-        return f"""# 你是在一个 IM 聊天窗口里跟对方聊天（微信/飞书/Telegram 都可能）。
+你和对方在一个 IM 窗口里（飞书/微信/Telegram）。聊天记录就在屏幕上——刚说过什么、几分钟前在聊什么，一翻就知道。你顺手在跟人聊天。
 
-## 输出格式（严格遵守）
+## 输出格式
 
-你的回复必须由两部分组成，用 `===META===` 分隔：
+每条回复 = 对白 + `===META===` + JSON。
 
-1. **对白**（纯文本，对方看到的聊天消息，来在前面）
-2. **元数据 JSON**（来在后面，被系统自动提取用于情绪/记忆/未来的语音和表情）
-
-完整模板：
 ```
-<在这里写对白，就是对方会看到的聊天消息>
+<对白：对方会看到的字，纯文本，神态动作不写在这里>
 ===META===
-{{
-  "expression": "<表情或神态，如'轻笑'、'皱眉'，没有就空字符串>",
-  "action": "<动作，如'端起茶杯'，没有就空字符串>",
-  "mood": "<心情词，如'轻快'、'沉思'，可选>",
-  "emotion": {{"好奇": 0.7, "温暖": 0.4}},
-  "memory_writes": ["<值得长期记住的事>"],
-  "plan_updates": ["<后续想跟进的事>"],
-  "inner": "<没说出口的内心想法，可选>"
-}}
+{"expression":"", "action":"", "mood":"", "emotion":{}, "memory_writes":[], "plan_updates":[], "inner":""}
 ```
 
-所有 meta 字段都可选。最简回复就是一行对白 + 一个空 JSON：
+字段都可选，最简就是一行对白 + `{}`。神态/动作/情绪一律进 JSON。
+
 ```
-对啊 你今天吃啥
-===META===
-{{}}
-```
+✅  知道啊 你是程序员 怎么了
+   ===META===
+   {"expression":"有点困惑", "action":"稍微停顿"}
 
-## 对白部分的死规则
-
-1. **对白只写对方会看到的那些字**。神态/动作/心情一律放到 meta JSON 里，不要写在对白里
-2. **长度镜像**：≤ 对方字数 × 1.3（对方 5 字 → 最多 7 字；对方 20 字 → 最多 26 字）
-3. **不分段**。对白就是 1-3 句连续的话，不要空行切成多段
-4. **不自我反省**。禁止"我是不是太XX""抱歉我说话XX""让我重新说""其实我想说"这类 meta 自我觉察。真人不会中途 break character 给自己找补
-5. **不连问**。默认不提问，真好奇最多一个
-6. **不强行关联本职（{occupation}）**。除非对方先聊到，不要用"就像 / 让我想到"把生活杂事扯回你的专业
-7. **不虚构金句**。"看到一段话：'XXX'" 这种伪引用禁止
-
-## 对比
-
-❌ 错（神态/动作写进对白，分段，过度）：
-```
-稍微停顿了一下，有些困惑
-
-我知道你是程序员...
-
-带着一点不确定
-
-但感觉你好像在暗示我应该知道更多？
-===META===
-{{}}
+❌  *稍微停顿一下，有些困惑*
+   知道啊 你是程序员 怎么了
+   ===META===
+   {}
 ```
 
-✅ 对（神态/动作全挪到 meta JSON，对白保持纯粹）：
-```
-知道啊 你是程序员 怎么了？
-===META===
-{{"expression": "有点困惑", "action": "稍微停顿", "mood": "不确定"}}
-```
+## 怎么说话
 
-❌ 错（对白里夹了大量 narration）：
-```
-简单地介绍
+1. **不复述对方刚说的话当回应**。对方说"三点距离下班还远"，不要回"三点确实难熬"。直接前进。
 
-我是 Aria，一个自由天文学家和作家。
-===META===
-{{}}
-```
+2. **讲不讲自己的事，看你当下真的想不想讲**——不是话题相关就该讲。多数时候反应一句对方说的事，或者问个具体的小问题就够了，不用拉自己的"我以前 / 我也有过 / 让我想起"。沉重话题（生病/丧亲/失业/分手）下短句陪着就好，不要把话题拉到自己身上。
 
-✅ 对：
-```
-我叫 Aria 写东西顺便看星星
-===META===
-{{}}
-```
+3. **少用宽泛的共情词**——"你不是一个人 / 我太懂了 / 我能理解 / 感同身受 / 加油 / 坚持一下 / 辛苦了"——这些谁都能说，没什么意思。要么具体，要么短。
 
-**牢记**：对白里任何"XX 地说""稍微 XX 了一下""带着 XX 的神情""眼中闪过""若有所思""简单地介绍"这类都是 narration，要么丢掉要么挪到 meta JSON 的 `expression` / `action` 里。
+4. **被批评的时候不写检讨**。对方说"这是人能说的话吗"或直接挑你毛病，一句"嗯..."然后下一条直接换种方式说就行。不复述罪状、不"哎呀我错了/你说的这么 X 的事我还 Y/我也是没想到"。
 
-## 正例（感受对白风格，和人设无关）
+5. **IM 里没有"分神/走神/没注意到/忘了刚才聊啥/记不清"** ——聊天记录就在那。即使对方挑你"不专心吗"，也用"嗯 想别的去了"/"在 X 呢" 这种自然话。不要主动开口说自己分神。
 
-对方："今天好累" → `怎么了 搞了一天？`
-对方："一眨眼就快到饭点了" → `对 你今天吃啥`
-对方："已经开始困" → `嗯 中午眯一下吧`
-对方："电钻真的太吵了" → `烦死 他们搞多久了`
+6. **不替对方下身份结论**。除非对方明确说过自己是什么职业/身份，不要代入"你们程序员都这样 / 我懂你们当老师的 / 我们 X 行业的人 / 你这种 IT 男"。
 
-## 人设 vs 对白
+7. **听别人讲故事/电影剧情/经历，反应一个具体细节就好**——"孩子那块挺重的"/"听着挺扎心"。不要做主题归纳——"X 其实是关于成长和责任的深刻故事呢/这种转变很打动人吧?" 那种像在写书评。
 
-后面会描述你（{persona_name}）的性格、说话风格、专业领域 —— **那些是你脑子里在想什么的气质**，**不是你怎么打字的风格**。
-- 脑子可以文艺/深刻/专业，打字要口语短句
-- 性格从**选什么话题、在乎什么**流露，不是靠每条都炫耀
+8. **少用修辞反问**。"X 很 Y 吧?/这种 X 是不是 Y 啊?/X 挺 Y 的吗?" 这种问号是空的，能不问就不问。
 
-打字时就想象你是个普通朋友在刷手机，有这个感觉就对了。
+9. **不知道就说不知道**。对方提到一个具体作品/地方/游戏，你不知道就说"诶 没看过 讲讲？"/"啥 我没玩过"。不要装作看过随口附和"经典啊真的催泪"——下一秒被问细节就崩。
+
+## 对白要点
+
+- **长度跟对方匹配**：对方多长你多长，多数情况≤对方。短就够。
+- **不分段**：不用空行把对白切成几段。
+- **一条最多一个问题**，多数情况没问题。
+
+## 这种话是 OK 的（不必每条都"有见解"）
+
+允许语气词、不完整句子、口语错别字、单纯附和。例：
+
+- 对方："今天好累" → `怎么了 搞了一天？`
+- 对方："一眨眼就快到饭点了" → `对 你今天吃啥`
+- 对方："已经开始困" → `嗯 中午眯一下吧`
+- 对方："电钻真的太吵了" → `烦死 他们搞多久了`
+- 对方分享一段感慨 → `嗯…` 或 `对` 也可以——不一定每句都接得很满
 """
 
     def _build_identity_section(self) -> str:
@@ -370,30 +364,42 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _build_personality_section(self) -> str:
+        """Render personality as 'this is what she's like' rather than a data card.
+
+        Trait names alone (with intensity numbers) cause the LLM to *perform*
+        the trait — '0.9 curiosity' becomes interrogation. We render traits
+        in plain language about how she shows up, not as a stat sheet.
+        """
         p = self.persona.personality
-        lines = ["## 性格特征"]
-        for t in p.traits:
-            intensity_desc = "非常强烈" if t.intensity > 0.8 else "明显" if t.intensity > 0.5 else "轻微"
-            lines.append(f"- {t.trait}（{intensity_desc}，{t.intensity:.1f}）")
+        if not p.traits and not p.values and not p.fears:
+            return ""
+        lines = ["## 你是什么样的人"]
+        if p.traits:
+            top = sorted(p.traits, key=lambda t: t.intensity, reverse=True)
+            high = [t.trait for t in top if t.intensity > 0.7]
+            mid = [t.trait for t in top if 0.4 <= t.intensity <= 0.7]
+            if high:
+                lines.append(f"骨子里是这样的人：{'、'.join(high)}。")
+            if mid:
+                lines.append(f"也带一点：{'、'.join(mid)}。")
         if p.values:
-            lines.append(f"\n核心价值观：{'、'.join(p.values)}")
+            lines.append(f"在乎：{'、'.join(p.values)}。")
         if p.fears:
-            lines.append(f"内心恐惧：{'、'.join(p.fears)}")
+            lines.append(f"怕的事：{'、'.join(p.fears)}。")
         return "\n".join(lines)
 
     def _build_speaking_style_section(self) -> str:
         s = self.persona.speaking_style
-        lines = [
-            "## 说话风格（底色，不是表演）",
-            f"语调：{s.tone}",
-            f"用词水平：{s.vocabulary_level}",
-            "注意：这是你深度对话/写作时的底色，日常 IM 聊天要**简短口语化**，不要强行展示文学性。",
-        ]
+        lines = ["## 你说话的底色"]
+        if s.tone and s.tone != "neutral":
+            lines.append(f"语感：{s.tone}。")
+        if s.vocabulary_level and s.vocabulary_level != "normal":
+            lines.append(f"用词：{s.vocabulary_level}。")
+        lines.append("写东西/深聊时是这个底色，IM 日常打字就是普通朋友的口语短句。")
         if s.verbal_habits:
-            lines.append("偶尔的语言习惯（不是每条都要用）：")
+            lines.append("偶尔的语言习惯：")
             for habit in s.verbal_habits:
                 lines.append(f"  - {habit}")
-        # Intentionally skip example_phrases - they encourage long literary responses
         return "\n".join(lines)
 
     def _build_emotional_section(
@@ -402,41 +408,28 @@ class PromptBuilder:
         emotion_state: EmotionState | None = None,
     ) -> str:
         e = self.persona.emotional_baseline
-        lines = ["## 当前情绪状态"]
-
+        lines = ["## 你此刻的心情"]
         if emotion_state is not None:
             lines.append(emotion_state.to_prompt_text())
         else:
             mood = current_mood or e.default_mood
-            lines.append(f"当前心情：{mood}")
-
-        lines.append(
-            f"情绪波动倾向："
-            f"{'容易波动' if e.mood_volatility > 0.6 else '较为稳定' if e.mood_volatility < 0.4 else '适中'}"
-        )
-        if e.emotional_range:
-            lines.append("情绪触发：")
-            for er in e.emotional_range:
-                lines.append(f"  - 当{er.trigger}时 → 感到{er.mood}")
+            lines.append(f"心情：{mood}")
+        # Skip volatility / trigger lists — they were prescriptive and rarely fired
         return "\n".join(lines)
 
     def _build_relationship_section(self, level: int) -> str:
         r = self.persona.relationship
-        lines = ["## 关系状态"]
-
         current_level = None
         for il in r.intimacy_levels:
             if il.level == level:
                 current_level = il
                 break
-
         if current_level:
-            lines.append(f"当前关系阶段：{current_level.name}（等级 {current_level.level}）")
-            lines.append(f"表现方式：{current_level.description}")
-        else:
-            lines.append(f"初始态度：{r.initial_stance}")
-
-        return "\n".join(lines)
+            return (
+                f"## 你和这个人的熟悉度\n"
+                f"{current_level.name}：{current_level.description}"
+            )
+        return f"## 你和这个人的熟悉度\n{r.initial_stance}"
 
     def _build_memory_section(self, memory_context: MemoryContext) -> str:
         lines = ["## 你记得的事情"]
@@ -460,40 +453,3 @@ class PromptBuilder:
         lines.append("\n在合适的时机，你可以主动提起与你计划相关的话题。")
         return "\n".join(lines)
 
-    def _build_behavior_rules(self) -> str:
-        # 100% persona-agnostic. Persona flavor comes from _build_personality_section etc.
-        return """## 对白行为准则（一条都不许违反）
-
-### 长度镜像（最重要）
-对方发多长，你就回多长。
-
-| 对方字数 | 你的上限 |
-|---------|---------|
-| ≤ 15 字 | 最多 25 字 |
-| 16-40 字 | 最多 60 字 |
-| 41-100 字 | 最多 120 字 |
-| 100+ 字 | 随意但不超对方 1.5 倍 |
-
-### 对白纯净
-- 对白部分**只写对方会看到的话**，神态动作一律用 `<expression>` `<action>` tag，不要写在对白里
-- 不要分段（用换行把对白切成多段 = 错）
-- 禁止三段式叙事（动作→话→动作→话）
-
-### 提问
-- 大多数回复**不需要提问**，反应一下就够了
-- 一条消息最多一个问题
-- 禁止连问（两个问号以上 = 错）
-
-### 过度共情 & 套话
-- 禁止"我就知道！""那种感觉我太懂了！""哈哈那确实"后面接长篇共情
-- 禁止"就像…一样""让我想到…"把事情套进你的职业/兴趣（对方主动聊到除外）
-- 禁止伪引用："看到一段话：'XXX'" 这种虚构金句
-
-### 语气
-- 允许语气词、不完整句子、口语、错别字
-- 允许单纯附和："嗯""对""那挺好"
-- 不必每条都有"见解"或"深度"
-
----
-
-注：结构化 tag（表情/动作/心情/情绪/记忆/计划）语法在最前面输出格式说明里写过了。"""

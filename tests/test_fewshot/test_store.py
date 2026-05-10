@@ -143,3 +143,51 @@ async def test_recipient_filter(fewshot_store):
     assert "a" in ids
     assert "g" in ids
     assert "b" not in ids
+
+
+async def test_remove_returns_false_when_chroma_delete_fails(fewshot_store, monkeypatch):
+    """Regression: if chroma delete fails, jsonl backup must NOT be rewritten.
+
+    Previously remove() swallowed chroma exceptions then rewrote jsonl
+    anyway, leaving the vector live but the audit copy gone — sample
+    keeps influencing replies but is no longer visible for cleanup.
+    """
+    s = FewShotSample(
+        id="will-fail", inner_thought="x", corrected_speech="y",
+        context_summary="z", source="seed",
+    )
+    await fewshot_store.add(s, embedding=_fake_embed(s.id, 16))
+
+    # Force chroma delete to raise
+    def _broken_delete(**kwargs):
+        raise RuntimeError("chroma down")
+    monkeypatch.setattr(fewshot_store._collection, "delete", _broken_delete)
+
+    ok = await fewshot_store.remove("will-fail")
+    assert ok is False, "should return False when chroma delete fails"
+
+    # Backup must still contain the sample (jsonl was NOT rewritten)
+    backup = fewshot_store.backup_path
+    assert backup.exists()
+    assert "will-fail" in backup.read_text(encoding="utf-8")
+
+
+async def test_remove_atomic_jsonl_uses_temp_rename(fewshot_store):
+    """Regression: jsonl rewrite must go through .tmp + atomic rename so
+    a crash during rewrite can't truncate the backup.
+    """
+    s = FewShotSample(
+        id="rm-target", inner_thought="x", corrected_speech="y",
+        context_summary="z", source="seed",
+    )
+    await fewshot_store.add(s, embedding=_fake_embed(s.id, 16))
+
+    ok = await fewshot_store.remove("rm-target")
+    assert ok is True
+
+    # No leftover .tmp file after the operation
+    backup = fewshot_store.backup_path
+    tmp = backup.with_suffix(backup.suffix + ".tmp")
+    assert not tmp.exists(), "leftover .tmp file means rewrite was non-atomic"
+    # Sample is gone from backup
+    assert "rm-target" not in backup.read_text(encoding="utf-8")
