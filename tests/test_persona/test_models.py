@@ -58,7 +58,7 @@ class TestPromptBuilder:
 class TestStyleConfig:
     def test_defaults(self):
         cfg = StyleConfig()
-        assert cfg.speech_max_chars == 40
+        assert cfg.speech_max_chars == 60
         # Defaults are mostly empty so forced prefills don't become a tic.
         assert cfg.prefill_openers == ["", "", "", "", "嗯"]
         assert cfg.blacklist_phrases == []
@@ -103,5 +103,5 @@ class TestPersonaConfigNewFields:
             name="T",
             identity=Identity(full_name="T"),
         )
-        assert persona.style.speech_max_chars == 40
+        assert persona.style.speech_max_chars == 60
         assert persona.sampling.temperature == 1.0

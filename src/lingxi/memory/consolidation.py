@@ -164,6 +164,75 @@ class MemoryConsolidator:
         except TypeError:
             return await self.episodic.store_episode(episode)
 
+    async def consolidate_day_narrative(
+        self,
+        narrative: str,
+        date_label: str,
+        embed_fn=None,
+        recipient_key: str = "_global",
+    ) -> str | None:
+        """Consolidate one day of Aria's life (diary + significant events,
+        pre-formatted as `narrative`) into a chroma episode. Returns episode_id.
+
+        This is the bridge between LifeSimulator (which writes daily diary
+        to InnerLifeStore) and the memory layer (chroma episodes that get
+        retrieved via assemble_context). Without this, diary entries were
+        invisible to the conversation engine — Aria couldn't recall what
+        she did 3 days ago even when user asked.
+        """
+        prompt = (
+            f"下面是 {date_label} 这一天 Aria 自己的活动记录"
+            f"（生活模拟器生成，含日程和当天发生的事）。请压成一段简洁的回忆摘要。"
+            f"\n\n记录：\n{narrative}\n\n"
+            "请按以下格式回复：\n"
+            "摘要：<≤80字，用第三人称描述这一天 Aria 经历了什么，不要照搬原文>\n"
+            "情绪：<这一天的整体情绪>\n"
+            "话题：<逗号分隔的关键话题>"
+        )
+        try:
+            response = await self.llm_provider.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.4,
+            )
+        except Exception as e:
+            print(f"[consolidate_day] LLM failed for {date_label}: {e}")
+            return None
+
+        text = response.content
+        summary = text
+        emotional_tone = "neutral"
+        key_topics: list[str] = []
+        for line in text.split("\n"):
+            line = line.strip()
+            if line.startswith("摘要：") or line.startswith("摘要:"):
+                summary = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+            elif line.startswith("情绪：") or line.startswith("情绪:"):
+                emotional_tone = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+            elif line.startswith("话题：") or line.startswith("话题:"):
+                topics_str = line.split("：", 1)[-1].split(":", 1)[-1].strip()
+                key_topics = [t.strip() for t in topics_str.split("，") if t.strip()]
+                if not key_topics:
+                    key_topics = [t.strip() for t in topics_str.split(",") if t.strip()]
+
+        # Tag the date in summary so it's retrievable as "those days"
+        if date_label and date_label not in summary:
+            summary = f"[{date_label}] {summary}"
+
+        episode = EpisodeEntry(
+            summary=summary,
+            emotional_tone=emotional_tone,
+            key_topics=key_topics + [f"life:{date_label}"],
+            turn_count=0,
+        )
+        if embed_fn:
+            episode.embedding = await embed_fn(summary)
+
+        try:
+            return await self.episodic.store_episode(episode, recipient_key=recipient_key)
+        except TypeError:
+            return await self.episodic.store_episode(episode)
+
     @staticmethod
     def _format_conversation(turns: list[ConversationTurn]) -> str:
         lines = []

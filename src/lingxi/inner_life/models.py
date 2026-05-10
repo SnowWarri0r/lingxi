@@ -95,6 +95,9 @@ class InnerState(BaseModel):
     significant_events_reset_date: date | None = None
     # Reactive: when the user actually chats, social_need drops + we mark this
     last_chat_at: datetime | None = None
+    # Idempotency for day-level consolidation: dates whose diary+events have
+    # already been consolidated into a chroma episode. Format YYYY-MM-DD.
+    consolidated_dates: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------

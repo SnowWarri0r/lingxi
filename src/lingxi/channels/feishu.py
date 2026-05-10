@@ -388,13 +388,15 @@ class FeishuBot(OutboundChannel):
                 self._reflection_loop.start(), self._loop
             )
 
-        # Start life simulator (Aria has a life running in the background)
+        # Start life simulator (Aria has a life running in the background).
+        # Pass memory so daily diary auto-consolidates into chroma episodes.
         if self.engine.inner_life_store is not None:
             self._life_simulator = LifeSimulator(
                 persona=self.engine.persona,
                 llm=self.engine.llm,
                 store=self.engine.inner_life_store,
                 tick_interval_minutes=30,
+                memory=self.engine.memory,
             )
             asyncio.run_coroutine_threadsafe(
                 self._life_simulator.start(), self._loop
@@ -1001,11 +1003,7 @@ class FeishuBot(OutboundChannel):
                         turn_id = event.content
 
                     elif event.type == "done":
-                        final = event.content
-                        try:
-                            await card.update_content(final)
-                        except Exception:
-                            pass
+                        final_full = event.content
             except Exception as e:
                 stream_error = e
                 print(f"[feishu] stream raised: {e}", flush=True)
@@ -1016,12 +1014,38 @@ class FeishuBot(OutboundChannel):
                 except Exception:
                     pass
 
+            from lingxi.conversation.response_cleaner import split_into_bubbles
+            bubbles: list[str] = []
+            extras: list[str] = []
+
+            # Stream-error path: keep the explicit error message we just
+            # wrote, do NOT run multi-bubble logic (which would either blank
+            # the card with an empty final_full or stamp a partial answer
+            # over our error text).
+            if stream_error is None:
+                # Multi-bubble split: model can emit speech with `\n\n` breaks
+                # to send 2-3 separate IM messages. First bubble updates the
+                # streaming card; extras send as plain text after.
+                final_speech = locals().get("final_full") or accumulated
+                bubbles = split_into_bubbles(final_speech, max_bubbles=3)
+                first_bubble = bubbles[0] if bubbles else final_speech
+                extras = bubbles[1:] if len(bubbles) > 1 else []
+                if first_bubble:
+                    try:
+                        await card.update_content(first_bubble)
+                    except Exception:
+                        pass
+
             try:
                 await card.finish()
             except Exception as e:
                 print(f"[feishu] finish() failed: {e}", flush=True)
 
-            print(f"[feishu] stream done, turn_id={turn_id!r}, err={stream_error!r}", flush=True)
+            print(
+                f"[feishu] stream done, turn_id={turn_id!r}, err={stream_error!r}, "
+                f"bubbles={len(bubbles)}",
+                flush=True,
+            )
             if turn_id:
                 try:
                     await card.append_elements(
@@ -1029,4 +1053,12 @@ class FeishuBot(OutboundChannel):
                     )
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
+
+            # Send the extra bubbles as separate text messages (only on
+            # success path — error path doesn't send extras).
+            for extra in extras:
+                try:
+                    await self._send_text_async(chat_id, extra)
+                except Exception as e:
+                    print(f"[feishu] extra bubble send failed: {e}", flush=True)
 
