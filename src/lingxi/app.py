@@ -214,6 +214,11 @@ async def create_engine(
         annotation_store = AnnotationStore(data_dir=fewshot_dir)
         fewshot_retriever = FewShotRetriever(store=fewshot_store, embedder=embedding_provider)
 
+    # Per-recipient relational memory store (inside jokes / shared places /
+    # fight patterns / sweet moments etc). Auto-grown by reflection.
+    from lingxi.relational.store import RelationalMemoryStore
+    relational_store = RelationalMemoryStore(data_dir=data_dir)
+
     # Create engine
     engine = ConversationEngine(
         persona=persona,
@@ -227,6 +232,7 @@ async def create_engine(
         fewshot_store=fewshot_store,
         annotation_store=annotation_store,
         fewshot_retriever=fewshot_retriever,
+        relational_store=relational_store,
     )
 
     # Load persisted state
