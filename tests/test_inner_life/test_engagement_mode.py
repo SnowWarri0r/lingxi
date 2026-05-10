@@ -78,18 +78,19 @@ class TestPromptRendering:
 
     def test_full_mode_renders_nothing(self):
         builder = PromptBuilder(self._persona())
-        prompt = builder.build_system_prompt(inner_state=InnerState())
+        # Phase 2: engagement section lives in focus reminder
+        reminder = builder.build_turn_focus_reminder(inner_state=InnerState()) or ""
         # Default state → full → no engagement section
-        assert "CURT 模式" not in prompt
-        assert "WITHDRAWN 模式" not in prompt
+        assert "CURT 模式" not in reminder
+        assert "WITHDRAWN 模式" not in reminder
 
     def test_withdrawn_renders_section(self):
         builder = PromptBuilder(self._persona())
         emotion = EmotionState(dimensions={"悲伤": 0.7})
-        prompt = builder.build_system_prompt(
+        prompt = builder.build_turn_focus_reminder(
             inner_state=InnerState(),
             emotion_state=emotion,
-        )
+        ) or ""
         assert "WITHDRAWN 模式" in prompt
         # Critical phrasings from the section
         assert "沉默是一等选项" in prompt
@@ -98,10 +99,10 @@ class TestPromptRendering:
     def test_curt_renders_section(self):
         builder = PromptBuilder(self._persona())
         emotion = EmotionState(dimensions={"不爽": 0.6})
-        prompt = builder.build_system_prompt(
+        prompt = builder.build_turn_focus_reminder(
             inner_state=InnerState(),
             emotion_state=emotion,
-        )
+        ) or ""
         assert "CURT 模式" in prompt
         assert "不接得圆" in prompt
         assert "WITHDRAWN" not in prompt
@@ -110,8 +111,8 @@ class TestPromptRendering:
         # Make sure modes don't overlap in rendering
         builder = PromptBuilder(self._persona())
         emotion = EmotionState(dimensions={"悲伤": 0.7})
-        prompt = builder.build_system_prompt(
+        prompt = builder.build_turn_focus_reminder(
             inner_state=InnerState(),
             emotion_state=emotion,
-        )
+        ) or ""
         assert "CURT 模式" not in prompt
