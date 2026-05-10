@@ -71,6 +71,25 @@ class TestDerivation:
         state = InnerState(energy=0.7)
         assert derive_engagement_mode(state, emotion) == EngagementMode.FULL
 
+    def test_flustered_emotion_above_threshold(self):
+        emotion = EmotionState(dimensions={"慌乱": 0.5})
+        assert derive_engagement_mode(InnerState(), emotion) == EngagementMode.FLUSTERED
+
+    def test_flustered_overrides_heavy(self):
+        # Both flustered and heavy active — flustered dominates because
+        # it's the most acute reaction shaping output style.
+        emotion = EmotionState(dimensions={"慌乱": 0.6, "悲伤": 0.7})
+        assert derive_engagement_mode(InnerState(), emotion) == EngagementMode.FLUSTERED
+
+    def test_flustered_overrides_provoked(self):
+        emotion = EmotionState(dimensions={"慌乱": 0.5, "不爽": 0.5})
+        assert derive_engagement_mode(InnerState(), emotion) == EngagementMode.FLUSTERED
+
+    def test_flustered_below_threshold_falls_through(self):
+        emotion = EmotionState(dimensions={"慌乱": 0.2, "悲伤": 0.6})
+        # 慌乱 too low → heavy wins
+        assert derive_engagement_mode(InnerState(), emotion) == EngagementMode.WITHDRAWN
+
 
 class TestPromptRendering:
     def _persona(self):
@@ -116,3 +135,17 @@ class TestPromptRendering:
             emotion_state=emotion,
         ) or ""
         assert "CURT 模式" not in prompt
+
+    def test_flustered_renders_section(self):
+        builder = PromptBuilder(self._persona())
+        emotion = EmotionState(dimensions={"慌乱": 0.6, "心虚": 0.4})
+        prompt = builder.build_turn_focus_reminder(
+            inner_state=InnerState(),
+            emotion_state=emotion,
+        ) or ""
+        assert "FLUSTERED 模式" in prompt
+        # Critical anti-composure phrasings
+        assert "句子可以**不完整**" in prompt or "不完整" in prompt
+        assert "重复" in prompt
+        assert "过度解释" in prompt
+        assert "如果回得平静周到，就是错的" in prompt

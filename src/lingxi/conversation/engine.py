@@ -281,6 +281,22 @@ class ConversationEngine:
         )
         self._emotion_state.narrative_label = self._current_mood
 
+        # Confrontation check — accusations like "好敷衍" / "你都不" /
+        # "什么关系" should destabilize Aria. Bump 慌乱/心虚 BEFORE the
+        # focus reminder is built, so engagement_mode derives FLUSTERED
+        # this turn. The rebuke matters most when it happens, and decay
+        # naturally fades it across the next few turns.
+        from lingxi.conversation.turn_focus import detect_confrontation
+        if user_input and detect_confrontation(user_input):
+            self._emotion_state.apply_deltas(
+                {"慌乱": 0.6, "心虚": 0.4},
+                volatility=self.persona.emotional_baseline.mood_volatility,
+            )
+            print(
+                f"[engine] confrontation detected in user_input — fluster bumped",
+                flush=True,
+            )
+
         # Load inner life state / subjective view / agenda (if available)
         inner_state = None
         subjective_view = None
