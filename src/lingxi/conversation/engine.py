@@ -190,6 +190,12 @@ class ConversationEngine:
         # Biography retriever is set up after construction via bootstrap_biography()
         # because embedding the events requires an embedder to be available first.
         self.biography_retriever: "BiographyRetriever | None" = None
+        # CC-style LLM selector — pick events by judgment, not cosine similarity.
+        # Embedding similarity at threshold 0.25 was too loose and leaked
+        # heavy events into wrong turns. The selector uses Haiku to read a
+        # full manifest and pick 0-2 GENUINELY relevant events.
+        from lingxi.persona.biography_selector import BiographySelector
+        self.biography_selector: "BiographySelector | None" = None
         self.biography_addenda_store: "BiographyAddendaStore | None" = None
         self._last_biography_hit: bool = False
 
@@ -379,41 +385,36 @@ class ConversationEngine:
         from lingxi.conversation.turn_focus import detect_confrontation
         is_confrontation = bool(user_input and detect_confrontation(user_input))
 
+        # LLM-based selector (CC-style): give Haiku a manifest of all
+        # biography events + tone hints, let it pick 0-2 GENUINELY
+        # relevant events. Replaces the embedding-similarity retriever.
+        # The selector internally short-circuits to [] on confrontation
+        # and is told to skip heavy events on light queries.
         if (
-            self.biography_retriever is not None
+            self.biography_selector is not None
             and user_input.strip()
-            and not is_heavy_topic
-            and not is_confrontation
         ):
             try:
-                biography_hits = await self.biography_retriever.retrieve(
-                    query=user_input, k=2, threshold=0.25,
+                biography_hits = await self.biography_selector.select(
+                    query=user_input,
+                    is_heavy=is_heavy_topic,
+                    is_confrontation=is_confrontation,
+                    recent_emotion=self._current_mood,
                 )
             except Exception as e:
-                print(f"[biography] retrieve failed: {e}", flush=True)
+                print(f"[biography] selector failed: {e}", flush=True)
                 biography_hits = []
-            # Filter out heavy-content events when the query is light:
-            # embedding similarity is loose enough (0.25 threshold) that
-            # a "想过结束" fragment can match generic queries.
-            if biography_hits and not is_heavy_topic:
-                before = len(biography_hits)
-                biography_hits = [e for e in biography_hits if not _bio_event_is_heavy(e)]
-                dropped = before - len(biography_hits)
-                if dropped:
-                    print(
-                        f"[biography] filtered {dropped} heavy-content events "
-                        f"(query not heavy: {user_input[:30]!r})",
-                        flush=True,
-                    )
             if biography_hits:
                 summary = "; ".join(f"{e.age}岁·{e.content[:18]}..." for e in biography_hits)
-                print(f"[biography] hit {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
+                print(f"[biography] selected {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
             else:
-                print(f"[biography] no hit for {user_input[:20]!r}", flush=True)
-        elif is_heavy_topic:
-            print(f"[biography] suppressed (heavy topic) for {user_input[:30]!r}", flush=True)
-        elif is_confrontation:
-            print(f"[biography] suppressed (confrontation) for {user_input[:30]!r}", flush=True)
+                tone = []
+                if is_heavy_topic:
+                    tone.append("heavy")
+                if is_confrontation:
+                    tone.append("confrontation")
+                tone_str = f" [{','.join(tone)}]" if tone else ""
+                print(f"[biography] no selection for {user_input[:20]!r}{tone_str}", flush=True)
         self._last_biography_hit = bool(biography_hits)
         self._last_is_heavy_topic = is_heavy_topic
 
@@ -1354,6 +1355,18 @@ class ConversationEngine:
 
         self.biography_retriever = BiographyRetriever(events=all_events, embedder=embedder)
         await self.biography_retriever.bootstrap()
+
+        # Also build the LLM selector (CC-style). Uses Haiku for the
+        # selection call (fast + cheap). Selector is the primary path
+        # for biography retrieval; the retriever is kept around as a
+        # fallback / for offline tooling but engine doesn't read from it.
+        from lingxi.persona.biography_selector import BiographySelector
+        selector_llm = self._get_compress_llm()  # Haiku
+        self.biography_selector = BiographySelector(
+            events=all_events,
+            llm=selector_llm,
+        )
+
         return len(all_events)
 
     async def add_biography_event(
@@ -1376,6 +1389,9 @@ class ConversationEngine:
             )
         )
         await self.biography_retriever.append(event)
+        # Keep the selector's event list in sync — engine reads from it
+        if self.biography_selector is not None:
+            self.biography_selector.append(event)
 
     async def bootstrap_fewshot_seeds(
         self,
