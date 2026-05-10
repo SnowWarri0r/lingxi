@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator
+from typing import TYPE_CHECKING, AsyncIterator
 
-from lingxi.conversation.adapters import TextAdapter
+if TYPE_CHECKING:
+    from lingxi.persona.biography_addenda import BiographyAddendaStore
+    from lingxi.persona.biography_retriever import BiographyRetriever
+
 from lingxi.conversation.context import ContextAssembler
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
 from lingxi.conversation.prompt_assembly import (
@@ -26,7 +28,7 @@ from lingxi.persona.prompt_builder import PromptBuilder
 from lingxi.planning.executor import ActionExecutor
 from lingxi.planning.planner import Planner
 from lingxi.planning.scheduler import Scheduler
-from lingxi.providers.base import LLMProvider, StreamChunk
+from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
 from lingxi.temporal.tracker import InteractionTracker
 from lingxi.temporal.relationship import RelationshipEvaluator
@@ -135,6 +137,20 @@ class ConversationEngine:
         self._relationship_level: int = 1
         self._current_recipient_key: str | None = None
         self._last_response_text: str = ""
+
+        # Per-recipient locks: serialize reactive turns for the SAME recipient
+        # so two messages from user A can't interleave through the engine's
+        # singleton mutable state (current_recipient_key / mood / emotion /
+        # short_term active buffer). Cross-recipient turns can still proceed
+        # in parallel — a lock is created on first use per recipient_key.
+        import asyncio as _asyncio
+        self._turn_locks: dict[str, _asyncio.Lock] = {}
+        self._turn_locks_guard: _asyncio.Lock = _asyncio.Lock()
+
+        # In-flight memory_write tasks. fire-and-forget add_fact tasks land
+        # here so end_session() can await them before exit; otherwise quick
+        # shutdowns lose pending Chroma writes.
+        self._pending_memory_tasks: set[_asyncio.Task] = set()
 
         self.fewshot_store = fewshot_store
         self.annotation_store = annotation_store
@@ -682,6 +698,27 @@ class ConversationEngine:
         output = await self.chat_full(user_input, images, channel, recipient_id)
         return output.speech
 
+    async def _lock_for_recipient(self, channel: str | None, recipient_id: str | None):
+        """Get/create the per-recipient turn lock.
+
+        Two reactive turns for the SAME recipient must serialize through
+        engine singleton state (`_current_recipient_key`, `_current_mood`,
+        `_emotion_state`, short_term `_buffer`). Different recipients get
+        different locks and proceed in parallel — but parallel reactive
+        chats from different users still share singleton state, so callers
+        should be aware: in practice the IM channel runs one chat at a
+        time; this lock primarily protects against re-entry from the same
+        user within an in-flight turn (e.g., user double-sends).
+        """
+        import asyncio as _asyncio
+        key = f"{channel or '_'}:{recipient_id or '_'}"
+        async with self._turn_locks_guard:
+            lock = self._turn_locks.get(key)
+            if lock is None:
+                lock = _asyncio.Lock()
+                self._turn_locks[key] = lock
+        return lock
+
     async def chat_full(
         self,
         user_input: str,
@@ -690,6 +727,17 @@ class ConversationEngine:
         recipient_id: str | None = None,
     ) -> TurnOutput:
         """Process a user message. Returns the complete TurnOutput."""
+        lock = await self._lock_for_recipient(channel, recipient_id)
+        async with lock:
+            return await self._chat_full_locked(user_input, images, channel, recipient_id)
+
+    async def _chat_full_locked(
+        self,
+        user_input: str,
+        images: list[dict] | None,
+        channel: str | None,
+        recipient_id: str | None,
+    ) -> TurnOutput:
         system_prompt, messages = await self._prepare_turn(
             user_input, images, channel, recipient_id
         )
@@ -741,6 +789,20 @@ class ConversationEngine:
         recipient_id: str | None = None,
     ) -> AsyncIterator[str]:
         """Stream the persona's response as raw text chunks."""
+        lock = await self._lock_for_recipient(channel, recipient_id)
+        async with lock:
+            async for chunk in self._chat_stream_locked(
+                user_input, images, channel, recipient_id
+            ):
+                yield chunk
+
+    async def _chat_stream_locked(
+        self,
+        user_input: str,
+        images: list[dict] | None,
+        channel: str | None,
+        recipient_id: str | None,
+    ) -> AsyncIterator[str]:
         system_prompt, messages = await self._prepare_turn(
             user_input, images, channel, recipient_id
         )
@@ -801,6 +863,20 @@ class ConversationEngine:
             StreamEvent("plan_update", text)   - per item (at end)
             StreamEvent("done", speech)        - final clean speech
         """
+        lock = await self._lock_for_recipient(channel, recipient_id)
+        async with lock:
+            async for event in self._chat_stream_events_locked(
+                user_input, images, channel, recipient_id
+            ):
+                yield event
+
+    async def _chat_stream_events_locked(
+        self,
+        user_input: str,
+        images: list[dict] | None,
+        channel: str | None,
+        recipient_id: str | None,
+    ) -> AsyncIterator[StreamEvent]:
         from lingxi.conversation.output_schema import META_DELIMITER
 
         system_prompt, messages = await self._prepare_turn(
@@ -972,17 +1048,22 @@ class ConversationEngine:
         if self._current_recipient_key and output.inner_thought:
             self._recent_inner_thoughts[self._current_recipient_key] = output.inner_thought
 
-        # Apply memory writes (scoped to current recipient)
+        # Apply memory writes (scoped to current recipient). Track tasks so
+        # `end_session()` (or process shutdown) can flush before exit —
+        # without this, embedding/Chroma writes that haven't completed get
+        # silently dropped on quick shutdowns or back-to-back consolidate.
         for content in output.memory_writes:
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(
+                task = loop.create_task(
                     self.memory.add_fact(
                         content,
                         importance=0.7,
                         recipient_key=self._current_recipient_key,
                     )
                 )
+                self._pending_memory_tasks.add(task)
+                task.add_done_callback(self._pending_memory_tasks.discard)
             except RuntimeError:
                 pass
 
@@ -1005,12 +1086,33 @@ class ConversationEngine:
         self._last_output = output
         return output
 
+    async def flush_pending_memory_writes(self) -> int:
+        """Await all in-flight memory_write tasks. Call before consolidation
+        or shutdown so add_fact() embeddings + Chroma writes don't get
+        silently dropped on quick exit.
+        """
+        import asyncio as _asyncio
+        pending = list(self._pending_memory_tasks)
+        if not pending:
+            return 0
+        done, _unfinished = await _asyncio.wait(pending, timeout=10.0)
+        for t in done:
+            try:
+                t.result()
+            except Exception as e:
+                print(f"[engine] memory_write task failed: {e}")
+        return len(done)
+
     async def end_session(
         self,
         channel: str | None = None,
         recipient_id: str | None = None,
     ) -> dict:
         """End the current conversation session and consolidate memory."""
+        # Flush in-flight memory writes BEFORE consolidating so the
+        # consolidator sees the latest facts.
+        await self.flush_pending_memory_writes()
+
         recipient_key = (
             f"{channel}:{recipient_id}" if channel and recipient_id else "_global"
         )
