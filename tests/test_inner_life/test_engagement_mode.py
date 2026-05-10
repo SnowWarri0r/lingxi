@@ -145,7 +145,12 @@ class TestPromptRendering:
         ) or ""
         assert "FLUSTERED 模式" in prompt
         # Critical anti-composure phrasings
-        assert "句子可以**不完整**" in prompt or "不完整" in prompt
+        assert "不完整" in prompt
         assert "重复" in prompt
         assert "过度解释" in prompt
-        assert "如果回得平静周到，就是错的" in prompt
+        # Anti-garbled-grammar guard
+        assert "语法不通" in prompt or "乱码" in prompt
+        assert "不完整 ≠ 不通顺" in prompt
+        # Anti-topic-switch guard
+        assert "换话题" in prompt
+        assert "你现在还在工作吗" in prompt or "无关的 follow-up" in prompt
