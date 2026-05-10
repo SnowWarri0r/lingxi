@@ -125,6 +125,18 @@ class PromptBuilder:
 
         sections.append(self._build_emotional_section(current_mood, emotion_state))
 
+        # Engagement mode — derived from emotion + energy. The whole point
+        # is to make non-engagement (单字回 / 沉默 / 不接 follow-up) a
+        # first-class legal output instead of an embarrassing fallback.
+        # Only render when not in default mode; full == invisible.
+        from lingxi.inner_life.models import (
+            EngagementMode,
+            derive_engagement_mode,
+        )
+        mode = derive_engagement_mode(inner_state, emotion_state)
+        if mode != EngagementMode.FULL:
+            sections.append(self._build_engagement_section(mode))
+
         axes_block = self._build_decision_axes_section(inner_state)
         if axes_block:
             sections.append(axes_block)
@@ -518,6 +530,47 @@ class PromptBuilder:
             lines.append(f"心情：{mood}")
         # Skip volatility / trigger lists — they were prescriptive and rarely fired
         return "\n".join(lines)
+
+    def _build_engagement_section(self, mode) -> str:
+        """Render the engagement mode as explicit allow/disallow.
+
+        The architectural point: every prompt rule like "可以敷衍" /
+        "可以走神" we've added before is a SOFT hint. The LLM is trained
+        to be helpful and ignores soft hints when there's any reason to
+        engage. Engagement modes give us a HARD switch — when withdrawn,
+        engaging fully is *the wrong answer*, not "less than ideal".
+
+        The copy below is permission-shaped: enumerate what is FINE and
+        what is NOT NEEDED, so the model isn't reaching for completeness.
+        """
+        from lingxi.inner_life.models import EngagementMode
+
+        if mode == EngagementMode.CURT:
+            return (
+                "## 🪨 你此刻不太想多聊（CURT 模式）\n"
+                "能量低或者被惹了一下——这一轮**短就够，不接得圆**：\n"
+                "- 一句话回完就停，**不问 follow-up**\n"
+                "- 不主动找钩子，不展开自己的事\n"
+                "- 不说『我懂你』那种敷衍式共情\n"
+                "- 单字回（『嗯/对/好』）OK，**直接说事**也行\n"
+                "- 不必每条都『温暖』——平淡也是真的\n"
+                "- 长回 = 错。这一轮的目标不是『接好』，是『按你状态写』。"
+            )
+
+        if mode == EngagementMode.WITHDRAWN:
+            return (
+                "## 🌑 你心里压着事（WITHDRAWN 模式）\n"
+                "悲伤/孤独/压抑那一类情绪在内心，不想费力气聊：\n"
+                "- **沉默是一等选项**——只回『嗯…』一个字就停，**完全 OK**\n"
+                "- 不接对方说的具体内容（不要 echo 他的话题）\n"
+                "- 不问 follow-up，不展开\n"
+                "- 一个 emoji 就完也可以\n"
+                "- **不要**主动起话题、不要给安慰、不要『我懂』\n"
+                "- 实在没话，就让 speech 极短或一两个字\n"
+                "- 这一轮如果回得『完整 / 周到』，就是错的。"
+            )
+
+        return ""
 
     def _build_message_habits_section(self) -> str:
         """Render character-level typing fingerprint (forge-skill L2 lift).
