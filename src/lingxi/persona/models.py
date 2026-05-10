@@ -165,6 +165,9 @@ class EmotionState(BaseModel):
     HIGH_ENERGY_DIMS: ClassVar[frozenset[str]] = frozenset({  # 兴奋 → 多说两句
         "喜悦", "兴奋", "期待", "雀跃", "开心"
     })
+    FLUSTERED_DIMS: ClassVar[frozenset[str]] = frozenset({  # 慌乱 → 句子破碎/重复/过度解释
+        "慌乱", "心虚", "紧张", "无措", "尴尬", "局促"
+    })
 
     def overall_valence(self) -> str:
         """Rough 'positive/negative/neutral' classification based on dimensions."""
@@ -225,6 +228,17 @@ class EmotionState(BaseModel):
         )
         if high >= threshold:
             cues.append("状态在线，自然多说两句，但不是 AI helpful 多。")
+
+        flustered = max(
+            (v for n, v in self.dimensions.items() if n in self.FLUSTERED_DIMS),
+            default=0.0,
+        )
+        if flustered >= threshold:
+            cues.append(
+                "刚被戳到了/被质问了/说错话被指出，**心慌了一下**。"
+                "这一轮**不要写得平静、漂亮**——句子可以不完整，可以重复字，"
+                "可以过度解释，可以承认还慌。真人这时候是**乱的**。"
+            )
 
         return "\n".join(cues)
 
