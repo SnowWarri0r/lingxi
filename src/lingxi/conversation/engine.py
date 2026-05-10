@@ -94,6 +94,32 @@ def _looks_like_heavy_topic(user_input: str) -> bool:
     return any(marker in text for marker in _HEAVY_TOPIC_MARKERS)
 
 
+# Heavy markers IN BIOGRAPHY EVENT CONTENT — events containing these
+# should only surface when the user query itself is on a matching topic.
+# Without this filter, embedding similarity at threshold=0.25 could pull
+# a "想过结束" biography fragment into a turn where the user is just
+# venting / confronting / chatting, and Aria weaves it into her reply
+# inappropriately (production: user said "你在胡说八道些什么", Aria
+# referenced suicidal ideation memories from biography).
+_HEAVY_BIO_CONTENT_MARKERS: tuple[str, ...] = (
+    "想过结束", "想结束", "自杀", "活不下去", "崩溃过", "撑不下",
+    "葬礼", "去世", "离世", "病重", "癌", "重病",
+    "丧", "失去过",
+)
+
+
+def _bio_event_is_heavy(event) -> bool:
+    """True if a biography event's content carries heavy markers.
+
+    Used to filter retrieved bio events: heavy events should only
+    surface when the user query is itself heavy. Otherwise the model
+    treats them as fresh material to share, which feels wrong on
+    light/confrontational turns.
+    """
+    text = (getattr(event, "content", "") or "")
+    return any(m in text for m in _HEAVY_BIO_CONTENT_MARKERS)
+
+
 class ConversationEngine:
     """Orchestrates persona-aware conversation with memory and planning."""
 
@@ -345,7 +371,20 @@ class ConversationEngine:
         # memories in the system prompt biases the model to share them.
         # Better not to put them in front of the model on those turns.
         is_heavy_topic = _looks_like_heavy_topic(user_input)
-        if self.biography_retriever is not None and user_input.strip() and not is_heavy_topic:
+        # Suppress biography retrieval on confrontational turns too —
+        # she's defending herself, not opening up. Heavy bio fragments
+        # weaving into a fluster reply reads as deflection, not genuine
+        # sharing (production: user said "你在胡说八道些什么", Aria
+        # surfaced "想过结束" biography → off-key).
+        from lingxi.conversation.turn_focus import detect_confrontation
+        is_confrontation = bool(user_input and detect_confrontation(user_input))
+
+        if (
+            self.biography_retriever is not None
+            and user_input.strip()
+            and not is_heavy_topic
+            and not is_confrontation
+        ):
             try:
                 biography_hits = await self.biography_retriever.retrieve(
                     query=user_input, k=2, threshold=0.25,
@@ -353,6 +392,19 @@ class ConversationEngine:
             except Exception as e:
                 print(f"[biography] retrieve failed: {e}", flush=True)
                 biography_hits = []
+            # Filter out heavy-content events when the query is light:
+            # embedding similarity is loose enough (0.25 threshold) that
+            # a "想过结束" fragment can match generic queries.
+            if biography_hits and not is_heavy_topic:
+                before = len(biography_hits)
+                biography_hits = [e for e in biography_hits if not _bio_event_is_heavy(e)]
+                dropped = before - len(biography_hits)
+                if dropped:
+                    print(
+                        f"[biography] filtered {dropped} heavy-content events "
+                        f"(query not heavy: {user_input[:30]!r})",
+                        flush=True,
+                    )
             if biography_hits:
                 summary = "; ".join(f"{e.age}岁·{e.content[:18]}..." for e in biography_hits)
                 print(f"[biography] hit {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
@@ -360,6 +412,8 @@ class ConversationEngine:
                 print(f"[biography] no hit for {user_input[:20]!r}", flush=True)
         elif is_heavy_topic:
             print(f"[biography] suppressed (heavy topic) for {user_input[:30]!r}", flush=True)
+        elif is_confrontation:
+            print(f"[biography] suppressed (confrontation) for {user_input[:30]!r}", flush=True)
         self._last_biography_hit = bool(biography_hits)
         self._last_is_heavy_topic = is_heavy_topic
 
