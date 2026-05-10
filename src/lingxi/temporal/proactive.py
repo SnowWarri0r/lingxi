@@ -556,6 +556,9 @@ class ProactiveScheduler:
             last_interaction_time=record.last_interaction,
             emotion_state=emotion_state,
             inner_state=inner_state,
+            recent_proactive_messages=(
+                recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
+            ),
             mode="single",
         )
 
