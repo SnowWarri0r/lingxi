@@ -18,6 +18,45 @@ from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
 
 
+def _time_of_day_label(hour: int) -> str:
+    """Map 0-23 hour to a coarse time-of-day bucket."""
+    if hour < 6:
+        return "凌晨"
+    if hour < 11:
+        return "上午"
+    if hour < 14:
+        return "中午"
+    if hour < 18:
+        return "下午"
+    return "晚上"  # 18-23
+
+
+def _age_label(ts: datetime, now: datetime) -> str:
+    """Render a ts relative to `now` for use in the prompt's recent-events list.
+
+    Uses calendar-day comparison past the first 3 hours, so an event at
+    23:00 yesterday seen from 13:00 today reads as "昨晚" (not the old
+    rolling-24h "今天早些时候" which let the LLM hallucinate "早上看流星雨"
+    by misreading yesterday-evening events as this-morning ones).
+    """
+    delta = now - ts
+    if delta < timedelta(minutes=10):
+        return "刚刚"
+    if delta < timedelta(minutes=60):
+        return f"{int(delta.total_seconds() // 60)}分钟前"
+    if delta < timedelta(hours=3):
+        # Within 3h, "X小时前" reads naturally even across midnight.
+        return f"{int(delta.total_seconds() // 3600)}小时前"
+
+    days_ago = (now.date() - ts.date()).days
+    tod = _time_of_day_label(ts.hour)
+    if days_ago == 0:
+        return f"今天{tod}"
+    if days_ago == 1:
+        return "昨晚" if tod == "晚上" else f"昨天{tod}"
+    return f"{days_ago}天前"
+
+
 class PromptBuilder:
     """Assembles the system prompt that defines the agent's persona in every LLM call."""
 
@@ -135,23 +174,8 @@ class PromptBuilder:
         # treat a 4-day-old event as "just now". Older events live in the
         # store but aren't surfaced as "current" — they belong to episodes.
         if state.recent_events:
-            from datetime import datetime, timedelta
             now = datetime.now()
             cutoff = now - timedelta(hours=24)
-
-            def _age_label(ts):
-                delta = now - ts
-                if delta < timedelta(minutes=10):
-                    return "刚刚"
-                if delta < timedelta(minutes=60):
-                    return f"{int(delta.total_seconds() // 60)}分钟前"
-                if delta < timedelta(hours=6):
-                    return f"{int(delta.total_seconds() // 3600)}小时前"
-                if delta < timedelta(hours=24):
-                    return "今天早些时候"
-                if delta < timedelta(days=2):
-                    return "昨天"
-                return f"{delta.days}天前"
 
             fresh = [
                 e for e in state.recent_events[:8]
@@ -159,12 +183,13 @@ class PromptBuilder:
             ][:5]
             if fresh:
                 lines.append(
-                    "\n最近发生在你身上的事（带时间标签——只有'刚刚/X分钟前'的"
-                    "才能用'刚刚/刚才'起手；'昨天/N天前'的就要用对应措辞）："
+                    "\n最近发生在你身上的事（带时间标签——'刚刚/X分钟前/X小时前'"
+                    "的才能用'刚刚/刚才'起手；'今天上午/今天下午/昨晚/昨天下午'"
+                    "等必须用对应时段措辞，绝对不要把'昨晚'说成'早上/今天'）："
                 )
                 for e in fresh:
                     marker = "📌想说" if e.wants_to_share else "·"
-                    when = _age_label(e.timestamp)
+                    when = _age_label(e.timestamp, now)
                     lines.append(f"  {marker} [{when}] {e.content}")
 
         lines.append(
