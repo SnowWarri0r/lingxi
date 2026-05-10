@@ -76,12 +76,19 @@ class PromptBuilder:
         subjective_view: SubjectiveView | None = None,
         pending_agenda: list[AgendaItem] | None = None,
         biography_hits: list | None = None,
+        recent_proactive_messages: list[str] | None = None,
         mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
 
         biography_hits: LifeEvents retrieved for the current turn, injected as
         "你过去经历过的事" so the persona can naturally share personal history.
+        recent_proactive_messages: messages Aria has already sent to THIS
+        recipient (most recent last). Surfaced inside the inner-state block
+        as "你最近主动跟这位说过的话" so the agent sees its own send-history
+        as part of state and avoids re-pitching the same hook. Without this
+        the agent has no self-awareness of what's been said and reaches for
+        the same fresh-looking event repeatedly.
         mode: "single" (default, current single-call format) or "think"
         (two-call pipeline: output inner_thought + meta, no speech).
         """
@@ -101,7 +108,9 @@ class PromptBuilder:
 
         # Inner state comes right after time — it's "what I'm actually doing right now"
         if inner_state is not None:
-            inner_block = self._build_inner_state_section(inner_state)
+            inner_block = self._build_inner_state_section(
+                inner_state, recent_proactive_messages
+            )
             if inner_block:
                 sections.append(inner_block)
 
@@ -137,7 +146,11 @@ class PromptBuilder:
 
         return "\n\n".join(sections)
 
-    def _build_inner_state_section(self, state: InnerState) -> str:
+    def _build_inner_state_section(
+        self,
+        state: InnerState,
+        recent_proactive_messages: list[str] | None = None,
+    ) -> str:
         """Inject 'what I'm doing right now' so participation level is emergent from state."""
         lines = ["## 🌱 你此刻的生活状态（真实在发生，不是设定）"]
 
@@ -191,6 +204,22 @@ class PromptBuilder:
                     marker = "📌想说" if e.wants_to_share else "·"
                     when = _age_label(e.timestamp, now)
                     lines.append(f"  {marker} [{when}] {e.content}")
+
+        # Self-awareness of what's already been said proactively. Surface
+        # alongside events so the agent treats "I already pitched 银杏叶 to
+        # this person" as part of her own state, not as something hidden
+        # behind a filter. With this block visible, picking the same event
+        # for a fresh hook is an explicit choice the model can avoid.
+        if recent_proactive_messages:
+            lines.append(
+                "\n你最近主动跟这位说过的话（**别再拿同一件事当 fresh hook**——"
+                "上面事件里和这些话题重叠的，可以聊延续/后续/变化，但不要原样重提）："
+            )
+            for m in recent_proactive_messages[-5:]:
+                preview = m.strip().replace("\n", " ")
+                if len(preview) > 80:
+                    preview = preview[:80] + "…"
+                lines.append(f"  - {preview}")
 
         lines.append(
             "\n**参与度由你的状态决定**：你是一个有自己生活的人顺手在聊天。"
