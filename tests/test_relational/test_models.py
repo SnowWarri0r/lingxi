@@ -32,6 +32,10 @@ class TestEmptyMemory:
         m = RelationalMemory(recipient_key="x", relationship_summary="a paragraph")
         assert not m.is_empty()
 
+    def test_with_signature_phrases_not_empty(self):
+        m = RelationalMemory(recipient_key="x", signature_phrases=["懂"])
+        assert not m.is_empty()
+
 
 class TestSubmodelDefaults:
     def test_inside_joke_has_default_timestamp(self):
