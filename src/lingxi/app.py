@@ -219,6 +219,12 @@ async def create_engine(
     from lingxi.relational.store import RelationalMemoryStore
     relational_store = RelationalMemoryStore(data_dir=data_dir)
 
+    # World awareness — daily news briefing fetched by morning scheduler
+    # so Aria isn't living in a sealed simulation. Started by the channel
+    # (needs the LLM provider's api_key for web_search tool calls).
+    from lingxi.world.store import WorldStore
+    world_store = WorldStore(data_dir=data_dir)
+
     # Create engine
     engine = ConversationEngine(
         persona=persona,
@@ -233,6 +239,7 @@ async def create_engine(
         annotation_store=annotation_store,
         fewshot_retriever=fewshot_retriever,
         relational_store=relational_store,
+        world_store=world_store,
     )
 
     # Load persisted state

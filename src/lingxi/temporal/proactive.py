@@ -545,6 +545,15 @@ class ProactiveScheduler:
                 print(f"[relational] proactive load failed: {e}", flush=True)
                 relational_memory = None
 
+        # World awareness — same source as reactive
+        daily_briefing = None
+        if getattr(self.engine, "world_store", None) is not None:
+            try:
+                daily_briefing = await self.engine.world_store.load_today()
+            except Exception as e:
+                print(f"[world] proactive load failed: {e}", flush=True)
+                daily_briefing = None
+
         try:
             relationship_record = self.engine.interaction_tracker.get_record(
                 record.channel, record.recipient_id
@@ -571,6 +580,7 @@ class ProactiveScheduler:
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),
             relational_memory=relational_memory,
+            daily_briefing=daily_briefing,
             mode="single",
         )
 
