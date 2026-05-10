@@ -1,18 +1,14 @@
-"""Build a `<system-reminder>` user message for high-recency context.
+"""Detect the most recent assistant question in conversation history.
 
-Pattern lifted from Claude Code (src/utils/api.ts:449 prependUserContext +
-attachments.ts <system-reminder> surfacer). Their insight: dynamic /
-attention-needed context goes via the USER-message channel, not the
-system prompt — recency weighting puts it close to the actual user
-message and competes for the same attention slot.
+Used by engine.chat_full + temporal.proactive to feed
+PromptBuilder.build_turn_focus_reminder, which assembles all dynamic
+per-turn state (time, current activity, recent events, emotion, mode,
+news, recent proactive messages, last question) into a `<system-
+reminder>` user message embedded right before the user's actual reply.
 
-Concretely solves the "你刚问了 X，对方短句回答 → 你切到通用劝慰"
-class of bugs (Rule 15) by making the question Aria just asked a
-prominent, structurally-flagged block right before the user's reply.
-
-Phase 1: only carries last_assistant_question. As we observe the
-pattern's effect, more dynamic state (time/activity/recent events)
-can migrate from the system prompt into this reminder.
+Pattern lifted from Claude Code (src/utils/api.ts:449 prependUserContext
++ attachments.ts surfacer). System prompt holds stable persona + rules;
+this channel holds turn-relevant dynamic state.
 """
 
 from __future__ import annotations
@@ -88,41 +84,3 @@ def detect_last_assistant_question(
             # Cap length so it doesn't bloat the reminder
             return bubble[:200]
     return None
-
-
-def build_turn_focus_reminder(
-    last_assistant_question: str | None = None,
-) -> str | None:
-    """Assemble the `<system-reminder>` content for this turn.
-
-    Returns None when there's nothing dynamic to surface — caller skips
-    prepending the reminder entirely so we don't add noise to chats that
-    don't need it (first message, no prior question, etc).
-    """
-    sections: list[str] = []
-
-    if last_assistant_question:
-        sections.append(
-            f"## 🎯 你刚问了对方\n"
-            f"「{last_assistant_question}」\n\n"
-            f"对方接下来这条**很可能是在回答这个问题**——先看清楚他说的"
-            f"内容是不是回答你刚问的，然后**接住答覆里的具体状态**。\n"
-            f"- 短句答覆（'还不在' / '还没' / '不是' / '在' / '加班'）→ "
-            f"对那个具体状态直接给反应（'啊还在加班?' / '都几点了' / "
-            f"'怎么 太忙?'）\n"
-            f"- **不要**用 '对 / 嗯' 起头当低 conviction 胶水\n"
-            f"- **不要**切到通用劝慰（'早点休息' / '好好放松'）\n"
-            f"- **不要**跳回 2 轮前的旧话题装关心\n"
-            f"- **不要**忽略他的回答直接换话题"
-        )
-
-    if not sections:
-        return None
-
-    body = "\n\n".join(sections)
-    return (
-        f"<system-reminder>\n"
-        f"{body}\n\n"
-        f"IMPORTANT: 这是状态提醒，对方真正的话才是要回应的。\n"
-        f"</system-reminder>"
-    )
