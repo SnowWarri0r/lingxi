@@ -98,6 +98,11 @@ class InnerState(BaseModel):
     # Idempotency for day-level consolidation: dates whose diary+events have
     # already been consolidated into a chroma episode. Format YYYY-MM-DD.
     consolidated_dates: list[str] = Field(default_factory=list)
+    # Short-term modulation on persona's decision axes — derived from current
+    # energy/mood/social_need each tick, capped at ±2 per axis. Renders as
+    # "right now you're shifted toward X" on top of the baseline persona axes.
+    # axis_name (one of DecisionAxes.AXIS_NAMES) -> int delta in [-2, 2]
+    axis_modulation: dict[str, int] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
