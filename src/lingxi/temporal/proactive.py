@@ -221,7 +221,40 @@ def _validate_proactive_opener(message: str) -> str | None:
     if _looks_like_self_report_opener(stripped):
         return "self_report_opener"
 
+    if _looks_like_phatic_checkin(stripped):
+        return "phatic_checkin"
+
     return None
+
+
+_PHATIC_CHECKIN_REGEXES: tuple[str, ...] = (
+    # All match the ENTIRE stripped message — only blocks when the
+    # whole message is just one of these (no other content).
+    r"^你?(现在)?睡了吗[?？]?$",
+    r"^你?睡了没[?？]?$",
+    r"^你?(现在)?回家了吗[?？]?$",
+    r"^你?回家了没[?？]?$",
+    r"^你?(现在)?下班了吗[?？]?$",
+    r"^你?下班了没[?？]?$",
+    r"^你?吃饭了吗[?？]?$",
+    r"^你?吃了吗[?？]?$",
+    r"^你?到家了吗[?？]?$",
+    r"^你?到了吗[?？]?$",
+    r"^你?在干嘛(呢)?[?？]?$",
+)
+
+
+def _looks_like_phatic_checkin(message: str) -> bool:
+    """True if message is a bare check-in question with no specific hook.
+
+    'X 了吗' style yes/no questions read as filler when sent without
+    a concrete reason. Production trace at 23:00: '你现在睡了吗' →
+    reads like AI fishing for engagement. Block at validator unless
+    the message carries additional content suggesting context.
+    """
+    if not message:
+        return False
+    return any(re.match(pat, message) for pat in _PHATIC_CHECKIN_REGEXES)
 
 
 # Self-report opener patterns. User reported: "今天就一直在刷手机" —
@@ -653,6 +686,12 @@ class ProactiveScheduler:
             "要分享就说**具体一件事**（『刚才路过一只猫蹲在车顶』），不是泛报状态。\n"
             "- 同理不要『我刚 X』『我在 Y』当唯一内容——叙述自己的状态作为开头是 AI 套路。"
             "真人 proactive 是**带着具体的事/想法/问题/情绪**来的，不是来打卡的。\n"
+            "- **不要问『X 了吗』当空 check-in 钩子**——『睡了吗 / 回家了吗 / 下班了吗 / 吃饭了吗』"
+            "这种 yes/no 问题在没有**具体证据**时就是变形的『你还好吗』，AI 味很重。\n"
+            "  - 时段不对的问题尤其奇怪：23:00 之前问『睡了吗』读起来像在催睡（多数成人 23:30 后才睡）；"
+            "20:00 问『下班了吗』读起来像在催回家\n"
+            "  - 真要问就基于**具体证据**：用户上次说要熬夜赶报告 → 深夜了才合理问『还在搞那个吗』；"
+            "用户上次说要出差 → 现在才合理问『落地了吗』。**没具体钩子就不发**。\n"
         )
         if force:
             style = random.choice(_MESSAGE_STYLES)
