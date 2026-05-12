@@ -443,7 +443,7 @@ class ProactiveScheduler:
         # she'd forgotten what she just said).
         try:
             await self.engine.memory.short_term.append_for_recipient(
-                rec_key, "assistant", message,
+                key, "assistant", message,
             )
         except Exception as e:
             print(f"[proactive] short_term append failed: {e}", flush=True)
