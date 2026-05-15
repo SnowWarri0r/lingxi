@@ -162,6 +162,7 @@ class PromptBuilder:
         self,
         *,
         last_assistant_question: str | None = None,
+        last_assistant_statement: str | None = None,
         current_time: datetime | None = None,
         last_interaction_time: datetime | None = None,
         inner_state: "InnerState | None" = None,
@@ -218,6 +219,12 @@ class PromptBuilder:
         # last in the reminder so it's closest to the user's actual reply.
         if last_assistant_question:
             sections.append(self._build_question_focus_block(last_assistant_question))
+        elif last_assistant_statement:
+            # Statement-shaped anchor for ambiguous short replies. Without
+            # this, "Aria 泡面加蛋好香" + "User 给我吃" reads the user's
+            # short msg as an isolated cold opener and Aria asks "你也在
+            # 吃泡面?" instead of engaging with "share your noodles".
+            sections.append(self._build_statement_focus_block(last_assistant_statement))
 
         if not sections:
             return None
@@ -229,6 +236,30 @@ class PromptBuilder:
             f"IMPORTANT: 上面是你此刻的状态/上一句你说过什么/今天扫到的事——这些是状态提醒，"
             f"对方真正发的话才是要回应的。\n"
             f"</system-reminder>"
+        )
+
+    def _build_statement_focus_block(self, statement: str) -> str:
+        """Render the 'you just said X' block for non-question prior turns.
+
+        Production trace: Aria proactive '泡面加蛋好香', user reply '给我吃',
+        Aria response '诶 你也在吃泡面?' — she misread the user's short msg
+        as if user reported eating, instead of as a 'share with me' ask.
+        Surfacing the prior statement at high attention re-anchors the
+        model so short user replies get read as responses to it.
+        """
+        return (
+            f"## 🎯 你刚说的话（**对方现在的话很可能在回应这句**）\n"
+            f"「{statement}」\n\n"
+            f"对方接下来这条**默认放在『你刚说了这个』的上下文里解读**——不要当成"
+            f"孤立新话题：\n"
+            f"- 短句（『给我吃』『我也是』『好啊』『真的吗』『懂』）→ 必须代入"
+            f"你上一句话才能理解他意思\n"
+            f"- 例：你刚说『泡面加蛋好香』+ 对方『给我吃』→ 意思是『分我一点』"
+            f"或『馋了』，**不是**他在报告自己在吃东西。别问『你也在吃泡面?』\n"
+            f"- 例：你刚说『今天好烦』+ 对方『嗯』→ 是在陪你/听，**不是**他烦"
+            f"- **不要**反问对方一个你刚说过的事（你已经说了你在吃泡面，不要问"
+            f"『你也在吃泡面?』）\n"
+            f"- 如果对方真的换话题了（说了完全不相关的事），那再脱离这个 anchor"
         )
 
     def _build_question_focus_block(self, question: str) -> str:
