@@ -201,13 +201,13 @@ _RESPONSE_TOKEN_PREFIXES = (
 def _validate_proactive_opener(message: str) -> str | None:
     """Code-side check that a proactive message looks like an opener, not a reply.
 
-    Only one constraint here: opener must NOT start with a response token
-    (嗯/对/啊/哈…) which signals "I'm continuing what was just said".
-
-    The earlier "must have a relational hook (你/?/吗/邀请词)" check was
-    removed because it conflicts with valid opener forms allowed by the
-    prompt — pure first-person observations like "刚发现冰箱酸奶过期一周
-    了" are perfectly natural openers and shouldn't be filtered.
+    Constraints:
+    1. Must NOT start with a response token (嗯/对/啊/哈…) — signals
+       "I'm continuing what was just said".
+    2. Must NOT be a self-report ("今天就一直在刷手机" / "一天都在写
+       东西") without any outward-facing element — that reads as
+       answering an unasked "你今天怎么样?" question. Reactive-shape
+       in proactive context.
     """
     if not message:
         return "empty"
@@ -218,7 +218,34 @@ def _validate_proactive_opener(message: str) -> str | None:
         if stripped.startswith(tok):
             return f"opens_with_response_token:{tok}"
 
+    if _looks_like_self_report_opener(stripped):
+        return "self_report_opener"
+
     return None
+
+
+# Self-report opener patterns. User reported: "今天就一直在刷手机" —
+# reads like Aria answering "你今天干了啥". Conservative regex; matches
+# only when message has no outward-facing element (你/吗/?/呢).
+_SELF_REPORT_OPENER_PREFIXES: tuple[str, ...] = (
+    "今天就", "今天一直", "今天没怎么", "今天没",
+    "一天都在", "一天都没", "我今天", "我一天",
+)
+
+
+def _looks_like_self_report_opener(message: str) -> bool:
+    """True if message reads as a self-report answer to an unasked question."""
+    if not message:
+        return False
+    if not any(message.startswith(p) for p in _SELF_REPORT_OPENER_PREFIXES):
+        return False
+    # If there IS something outward-facing (a question, "你", emoji-like),
+    # treat it as a valid opener that happens to start with self-state
+    if any(c in message for c in ("?", "？", "吗", "呢")):
+        return False
+    if "你" in message:
+        return False
+    return True
 
 
 class ProactiveScheduler:
@@ -620,6 +647,12 @@ class ProactiveScheduler:
             "宽泛问候。要么问具体的事（『奶奶今天吃得下吗』），要么不问只是说一件事，"
             "要么干脆别发。\n"
             "- **跟人发消息那种短句**，不是写信开头\n"
+            "- **不要写『我+今天的状态』那种 self-report 句式**——『今天就一直在刷"
+            "手机』『今天没怎么干活』『一天都在写东西』——**这是回答没被问的问题**，"
+            "读起来像在 reactive 回复。对方没问『你今天怎么样』，**你不需要主动汇报**。"
+            "要分享就说**具体一件事**（『刚才路过一只猫蹲在车顶』），不是泛报状态。\n"
+            "- 同理不要『我刚 X』『我在 Y』当唯一内容——叙述自己的状态作为开头是 AI 套路。"
+            "真人 proactive 是**带着具体的事/想法/问题/情绪**来的，不是来打卡的。\n"
         )
         if force:
             style = random.choice(_MESSAGE_STYLES)
