@@ -78,9 +78,14 @@ goals:
 # 双通道（think → compress）：disabled. 切回单调用以减少 confabulation
 # 表面积——compress 看不到 chat_history，只能盲信 think 输出的 inner_thought，
 # 一旦 think 编了"他问我 X"，compress 没法核对。回到 single-call。
+#
+# 注：main chat 走 single-call 直接是 Sonnet（顶级 llm provider）。
+# compress_model 这条字段当前只影响 biography_selector 等内部"子任务"调用
+# (通过 _get_compress_llm()). 升级到 Sonnet 是为了让 bio selector 等任务
+# 也用强模型，避免 Haiku 理解力不够导致的选择错误。
 compression:
   enabled: false
-  compress_model: "claude-haiku-4-5-20251001"
+  compress_model: "claude-sonnet-4-20250514"
   compress_max_tokens: 200
   compress_temperature: 0.9
 

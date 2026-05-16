@@ -724,6 +724,21 @@ class ConversationEngine:
         if self._last_is_heavy_topic:
             max_chars = min(max_chars, 25)
 
+        # Pull Aria's most recent assistant turn from short_term as anchor
+        # for compress. Without this, short user replies like '给我吃'
+        # have no context (compress doesn't see history) and the model
+        # misreads them. detect_last_assistant_turn skips trailing user
+        # messages so we get the right anchor even after retries.
+        previous_assistant_msg = ""
+        try:
+            from lingxi.conversation.turn_focus import detect_last_assistant_turn
+            history = self.memory.short_term.get_history()
+            turn_info = detect_last_assistant_turn(history)
+            if turn_info is not None:
+                previous_assistant_msg = turn_info[0]
+        except Exception:
+            pass
+
         prompt_text = build_compress_prompt(
             persona_name=self.persona.name,
             voice_hint=self._persona_voice_hint(),
@@ -732,6 +747,7 @@ class ConversationEngine:
             fewshots_block=render_fewshots_for_compress(seeds),
             max_chars=max_chars,
             blacklist="、".join(blacklist_phrases),
+            previous_assistant_msg=previous_assistant_msg,
         )
         return prompt_text, [{"role": "user", "content": prompt_text}]
 

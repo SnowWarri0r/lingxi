@@ -121,12 +121,23 @@ def detect_last_assistant_turn(
     if not content:
         return None
 
-    # Multi-bubble: pick the FIRST substantial bubble (usually the topic
-    # anchor; later bubbles are continuations / acknowledgments)
+    # Multi-bubble: pick the most substantial bubble as the topic anchor.
+    # Priority order:
+    #   1. First bubble that's a question (matches what user is most likely
+    #      answering — same priority as detect_last_assistant_question)
+    #   2. Longest bubble (filler bubbles like "嗯" / "啊" alone shouldn't
+    #      become the anchor if there's a real content bubble alongside)
     bubbles = [b.strip() for b in re.split(r"\n\s*\n", content) if b.strip()]
-    chosen = bubbles[0] if bubbles else content
-    is_question = _looks_like_question(chosen)
-    return (chosen[:200], is_question)
+    if not bubbles:
+        return None
+
+    for bubble in bubbles:
+        if _looks_like_question(bubble):
+            return (bubble[:200], True)
+
+    # No question found — pick the longest bubble
+    chosen = max(bubbles, key=len)
+    return (chosen[:200], False)
 
 
 # Aria-directed accusations / challenges. Each entry is a substring that
