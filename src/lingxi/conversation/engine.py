@@ -456,12 +456,26 @@ class ConversationEngine:
         # + rules; this carries every dynamic per-turn signal: time, current
         # activity, recent events, emotion + engagement mode, today's news
         # briefing, the question Aria just asked.
-        from lingxi.conversation.turn_focus import detect_last_assistant_question
-        last_question = detect_last_assistant_question(
-            self.memory.short_term.get_history()
+        from lingxi.conversation.turn_focus import (
+            detect_last_assistant_question,
+            detect_last_assistant_turn,
         )
+        history_for_focus = self.memory.short_term.get_history()
+        last_question = detect_last_assistant_question(history_for_focus)
+        last_statement: str | None = None
+        if not last_question:
+            # Only surface statement-anchor when there's no question
+            # already in flight (question takes precedence — it's about
+            # what the user is answering, statement is about what context
+            # anchors a short reply).
+            turn_info = detect_last_assistant_turn(history_for_focus)
+            if turn_info is not None:
+                content, is_question = turn_info
+                if not is_question:
+                    last_statement = content
         focus_reminder = self.prompt_builder.build_turn_focus_reminder(
             last_assistant_question=last_question,
+            last_assistant_statement=last_statement,
             current_time=datetime.now(),
             last_interaction_time=last_interaction_time,
             inner_state=inner_state,
