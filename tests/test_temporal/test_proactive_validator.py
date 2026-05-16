@@ -77,6 +77,41 @@ class TestValidatorRejectsSelfReportOpener:
         assert _validate_proactive_opener("今天吃了泡面") is None
 
 
+class TestValidatorRejectsPhaticCheckin:
+    """User: '11点问我睡了没' — proactive 'X 了吗' bare check-in
+    reads as AI fishing for engagement. Block when message is JUST
+    one such question with no concrete hook."""
+
+    def test_rejects_睡了吗(self):
+        assert _validate_proactive_opener("你现在睡了吗") == "phatic_checkin"
+        assert _validate_proactive_opener("睡了吗") == "phatic_checkin"
+        assert _validate_proactive_opener("你睡了没") == "phatic_checkin"
+
+    def test_rejects_回家了吗(self):
+        assert _validate_proactive_opener("你回家了吗") == "phatic_checkin"
+        assert _validate_proactive_opener("你现在回家了吗") == "phatic_checkin"
+
+    def test_rejects_下班了吗(self):
+        assert _validate_proactive_opener("下班了吗") == "phatic_checkin"
+
+    def test_rejects_吃饭了吗(self):
+        assert _validate_proactive_opener("你吃饭了吗?") == "phatic_checkin"
+        assert _validate_proactive_opener("吃了吗") == "phatic_checkin"
+
+    def test_rejects_在干嘛(self):
+        assert _validate_proactive_opener("你在干嘛") == "phatic_checkin"
+        assert _validate_proactive_opener("在干嘛呢") == "phatic_checkin"
+
+    def test_question_with_concrete_hook_passes(self):
+        # Has context beyond the bare check-in
+        assert _validate_proactive_opener("奶奶今天吃得下东西吗") is None
+
+    def test_compound_question_passes(self):
+        # Multi-clause messages are valid (has concrete content)
+        assert _validate_proactive_opener("你那个报告交了吗") is None
+        assert _validate_proactive_opener("还在搞那个项目吗") is None
+
+
 class TestShouldSendCoercion:
     """Direct unit-level: simulate the meta parsing branch that picks
     whether to send. Mirrors the logic in _ask_llm without mocking the
