@@ -425,9 +425,16 @@ class PromptBuilder:
         elif 19 <= hour < 22:
             tod_label = "晚上"
             tod_hint = "下班后的个人时间"
-        else:  # 22-24
+        elif 22 <= hour < 24:
+            tod_label = "夜晚"
+            tod_hint = (
+                "工作日多数人 23:00-24:30 之间才睡，**这个时段对方大概率还醒着**。"
+                "不要假设对方该睡了——不要问'睡了吗'、不要催'早点休息'，"
+                "除非对方自己说要睡了。"
+            )
+        else:  # 24+ (technically unreachable, time wraps at 0)
             tod_label = "深夜"
-            tod_hint = "该睡觉了。对方还在聊天属于熬夜"
+            tod_hint = "对方还在聊天属于熬夜"
 
         lines = [
             "## ⏰ 当前真实时间（必须遵守，不能想象成别的时段）",
