@@ -167,6 +167,69 @@ class ShortTermMemory:
                 continue
         return out
 
+    async def append_for_recipient(
+        self,
+        recipient_key: str,
+        role: str,
+        content: str,
+        **metadata: object,
+    ) -> None:
+        """Atomically append a turn to `recipient_key`'s buffer without
+        switching the singleton active recipient.
+
+        Used by the proactive scheduler to record its own outgoing
+        message in the recipient's short-term history so the very NEXT
+        chat turn sees the proactive message as conversational context.
+        Without this the user's reply to a proactive arrives with no
+        preceding assistant turn in scope, so the model treats it as a
+        cold opener (production trace: proactive 'super cat 记得我', user
+        '怎么说' → Aria '怎么了?' because she didn't 'see' her own
+        proactive in history).
+        """
+        async with self._lock:
+            new_turn = ConversationTurn(
+                role=role, content=content, metadata=dict(metadata)
+            )
+            # If this IS the active recipient, mutate the buffer and save
+            if self._current_recipient == recipient_key:
+                self._buffer.append(new_turn)
+                await self._save_to_disk(recipient_key)
+                return
+
+            # Non-active: read existing file, append, write back atomically
+            path = self._path_for(recipient_key)
+            if path is None:
+                return
+            existing: list[ConversationTurn] = []
+            if path.exists():
+                try:
+                    data = await asyncio.to_thread(
+                        lambda: json.loads(path.read_text(encoding="utf-8"))
+                    )
+                    for t_dict in data.get("turns", []):
+                        try:
+                            existing.append(ConversationTurn.model_validate(t_dict))
+                        except Exception:
+                            continue
+                except (json.JSONDecodeError, OSError):
+                    pass
+            existing.append(new_turn)
+            if self.max_turns and len(existing) > self.max_turns:
+                existing = existing[-self.max_turns:]
+            data = {
+                "recipient": recipient_key,
+                "turns": [t.model_dump(mode="json") for t in existing],
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+
+            def _write():
+                with open(tmp, "w", encoding="utf-8") as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+                tmp.rename(path)
+
+            await asyncio.to_thread(_write)
+
     async def write_for_recipient(
         self, recipient_key: str, turns: list[ConversationTurn]
     ) -> None:
