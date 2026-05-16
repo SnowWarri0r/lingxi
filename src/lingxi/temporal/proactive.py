@@ -435,6 +435,19 @@ class ProactiveScheduler:
             print(f"[proactive] send failed: {e}")
             return {"key": key, "status": "send_failed", "error": str(e)}
 
+        # Record the proactive message in the recipient's short-term buffer
+        # as an assistant turn. Without this, the next user reply has no
+        # preceding assistant turn in history, and Aria treats user's "怎么说"
+        # as a cold opener (production trace fixed: proactive sent "超市门口
+        # 那只橘猫居然记得我", user said "怎么说", Aria replied "怎么了?" —
+        # she'd forgotten what she just said).
+        try:
+            await self.engine.memory.short_term.append_for_recipient(
+                rec_key, "assistant", message,
+            )
+        except Exception as e:
+            print(f"[proactive] short_term append failed: {e}", flush=True)
+
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
