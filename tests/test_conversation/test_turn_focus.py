@@ -197,16 +197,31 @@ class TestDetectLastAssistantTurn:
         assert result is not None
         assert result[0] == "泡面加蛋好香"
 
-    def test_multi_bubble_picks_first_substantial(self):
+    def test_multi_bubble_prefers_question(self):
+        # When multi-bubble has a question + statements, the question
+        # wins as anchor — it's what the user is most likely answering.
         from lingxi.conversation.turn_focus import detect_last_assistant_turn
         history = [
             _t("assistant", "今天上海要下雨\n\n带伞了吗\n\n出门小心"),
-            _t("user", "知道了"),
+            _t("user", "带了"),
         ]
         result = detect_last_assistant_turn(history)
         assert result is not None
-        # First bubble is a statement; that's the topic anchor
-        assert result[0] == "今天上海要下雨"
+        assert result[0] == "带伞了吗"
+        assert result[1] is True
+
+    def test_multi_bubble_no_question_picks_longest(self):
+        # No question in any bubble — pick the longest (most substantive)
+        # so filler bubbles like "嗯" don't become the anchor when there's
+        # a real content bubble alongside.
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [
+            _t("assistant", "嗯\n\n泡面加蛋好香 还放了葱花和蛋黄"),
+            _t("user", "给我吃"),
+        ]
+        result = detect_last_assistant_turn(history)
+        assert result is not None
+        assert result[0] == "泡面加蛋好香 还放了葱花和蛋黄"
         assert result[1] is False
 
     def test_no_assistant_returns_none(self):
