@@ -151,6 +151,97 @@ class TestReminderBuilding:
         assert "对方真正的话" in result or "状态提醒" in result
 
 
+class TestDetectLastAssistantTurn:
+    """detect_last_assistant_turn returns (content, is_question) for any
+    recent assistant utterance — broader than question detection. Used
+    to anchor short ambiguous user replies in the context of what Aria
+    just said (production trace: 'Aria: 泡面加蛋好香' + 'User: 给我吃'
+    needed the statement as anchor)."""
+
+    def test_empty_history(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        assert detect_last_assistant_turn([]) is None
+
+    def test_statement_returns_not_question(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [
+            _t("assistant", "泡面加蛋好香"),
+            _t("user", "给我吃"),
+        ]
+        result = detect_last_assistant_turn(history)
+        assert result is not None
+        content, is_question = result
+        assert content == "泡面加蛋好香"
+        assert is_question is False
+
+    def test_question_returns_is_question(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [
+            _t("assistant", "你回家了吗"),
+            _t("user", "还不在"),
+        ]
+        result = detect_last_assistant_turn(history)
+        assert result is not None
+        content, is_question = result
+        assert content == "你回家了吗"
+        assert is_question is True
+
+    def test_skips_trailing_user_messages(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [
+            _t("assistant", "泡面加蛋好香"),
+            _t("user", "给我吃"),
+            _t("user", "我也想吃"),  # current
+        ]
+        result = detect_last_assistant_turn(history)
+        assert result is not None
+        assert result[0] == "泡面加蛋好香"
+
+    def test_multi_bubble_picks_first_substantial(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [
+            _t("assistant", "今天上海要下雨\n\n带伞了吗\n\n出门小心"),
+            _t("user", "知道了"),
+        ]
+        result = detect_last_assistant_turn(history)
+        assert result is not None
+        # First bubble is a statement; that's the topic anchor
+        assert result[0] == "今天上海要下雨"
+        assert result[1] is False
+
+    def test_no_assistant_returns_none(self):
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+        history = [_t("user", "hello")]
+        assert detect_last_assistant_turn(history) is None
+
+
+class TestStatementFocusBlockRendering:
+    def test_statement_block_renders(self):
+        builder = _builder()
+        result = builder.build_turn_focus_reminder(
+            last_assistant_statement="泡面加蛋好香",
+        )
+        assert result is not None
+        assert "你刚说的话" in result
+        assert "泡面加蛋好香" in result
+        # Production-trace example included
+        assert "给我吃" in result
+        # Anti-pattern guard
+        assert "你也在吃泡面" in result
+
+    def test_question_takes_precedence_over_statement(self):
+        # If both are passed, question block wins (engine logic also picks
+        # one or the other, but builder shouldn't render both regardless).
+        builder = _builder()
+        result = builder.build_turn_focus_reminder(
+            last_assistant_question="你回家了吗",
+            last_assistant_statement="泡面加蛋好香",
+        )
+        assert result is not None
+        assert "你刚问了对方" in result
+        assert "你刚说的话" not in result
+
+
 class TestConfrontationDetection:
     def test_empty_text_returns_false(self):
         from lingxi.conversation.turn_focus import detect_confrontation
