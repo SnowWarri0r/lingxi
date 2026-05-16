@@ -41,6 +41,42 @@ class TestValidatorRejectsResponseTokenOpener:
         assert _validate_proactive_opener("对了 想问你").startswith("opens_with_response_token")
 
 
+class TestValidatorRejectsSelfReportOpener:
+    """User reported: Aria proactively sent '今天就一直在刷手机' — reads
+    like answering an unasked '你今天怎么样?'. Self-state report as
+    opener is reactive-shape in proactive context."""
+
+    def test_rejects_今天就_prefix(self):
+        # The exact production trace
+        assert _validate_proactive_opener("今天就一直在刷手机") == "self_report_opener"
+
+    def test_rejects_今天一直_prefix(self):
+        assert _validate_proactive_opener("今天一直没干活") == "self_report_opener"
+
+    def test_rejects_今天没_prefix(self):
+        assert _validate_proactive_opener("今天没怎么休息") == "self_report_opener"
+
+    def test_rejects_一天都_prefix(self):
+        assert _validate_proactive_opener("一天都在写东西") == "self_report_opener"
+
+    def test_rejects_我今天_prefix(self):
+        assert _validate_proactive_opener("我今天有点累") == "self_report_opener"
+
+    def test_self_report_with_question_passes(self):
+        # If there's an outward-facing question, opener is valid
+        # ("我今天没怎么休息 你呢?")
+        assert _validate_proactive_opener("我今天没怎么休息 你呢?") is None
+
+    def test_self_report_with_你_passes(self):
+        # If "你" is in the message, treat as outward-facing
+        assert _validate_proactive_opener("我今天没怎么休息 你那边怎么样") is None
+
+    def test_specific_event_not_blocked(self):
+        # "今天吃了泡面" doesn't match the prefixes (just "今天 V 了")
+        # — only the lingering / continuous self-state patterns get caught
+        assert _validate_proactive_opener("今天吃了泡面") is None
+
+
 class TestShouldSendCoercion:
     """Direct unit-level: simulate the meta parsing branch that picks
     whether to send. Mirrors the logic in _ask_llm without mocking the
