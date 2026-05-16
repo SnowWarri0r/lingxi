@@ -86,6 +86,49 @@ def detect_last_assistant_question(
     return None
 
 
+def detect_last_assistant_turn(
+    history: list[ConversationTurn],
+) -> tuple[str, bool] | None:
+    """Return (content, is_question) for the most recent assistant turn.
+
+    Skips trailing user turns (the current message we're about to reply to)
+    to find the assistant utterance the user is most likely responding to.
+    Used to ALWAYS surface "what you just said" — not just questions —
+    so short / ambiguous user replies ("给我吃" / "我也是" / "懂") get
+    read in the context of Aria's last utterance, not as cold openers.
+
+    Returns None when:
+    - history empty
+    - no assistant turn found
+    - assistant turn has empty content
+    """
+    if not history:
+        return None
+
+    last_assistant: ConversationTurn | None = None
+    for turn in reversed(history):
+        if turn.role == "user":
+            continue
+        if turn.role == "assistant":
+            last_assistant = turn
+            break
+        return None
+
+    if last_assistant is None:
+        return None
+
+    content = (last_assistant.content or "").strip()
+    if not content:
+        return None
+
+    # Multi-bubble: pick the FIRST substantial bubble (usually the topic
+    # anchor; later bubbles are continuations / acknowledgments)
+    bubbles = [b.strip() for b in re.split(r"\n\s*\n", content) if b.strip()]
+    chosen = bubbles[0] if bubbles else content
+    is_question = _looks_like_question(chosen)
+    return (chosen[:200], is_question)
+
+
 # Aria-directed accusations / challenges. Each entry is a substring that
 # strongly indicates the user is calling Aria out (cold reply / not
 # caring / says something hurtful). Conservative: better to miss a
