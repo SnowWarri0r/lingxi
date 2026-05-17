@@ -61,6 +61,18 @@ def main() -> None:
         quiet_hours_end=get_nested(cfg, "proactive", "quiet_hours_end", default=8),
     )
 
+    # Optional: desktop pet state endpoint. Runs in daemon thread on
+    # localhost so the pet process can poll Aria's current state.
+    pet_enabled = get_nested(cfg, "pet", "enabled", default=True)
+    pet_port = int(get_nested(cfg, "pet", "port", default=7891))
+    if pet_enabled:
+        try:
+            from lingxi.pet.state_endpoint import start_pet_endpoint_in_thread
+            start_pet_endpoint_in_thread(engine, port=pet_port)
+            print(f"[pet] state endpoint on http://127.0.0.1:{pet_port}/pet/state")
+        except Exception as e:
+            print(f"[pet] failed to start endpoint (non-fatal): {e}")
+
     # Step 2: Start bot (blocking, SDK manages its own event loop)
     from lingxi.channels.feishu import FeishuBot
 
