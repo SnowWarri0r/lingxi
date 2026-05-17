@@ -135,10 +135,11 @@ class TestReminderBuilding:
 
     def test_reminder_includes_anti_pattern_warnings(self):
         result = build_turn_focus_reminder(last_assistant_question="你回家了吗")
-        # Critical anti-patterns explicitly called out
-        assert "胶水" in result          # 不要用'对'起头当胶水
-        assert "通用劝慰" in result      # 不要切到通用劝慰
-        assert "旧话题" in result        # 不要跳回旧话题
+        # Behavioral guards abstracted (no literal bad-output strings planted —
+        # see feedback memory on attention bias from in-prompt bad strings).
+        assert "具体反应" in result      # positive directive on how to start
+        assert "通用劝慰" in result      # abstract: don't pivot to generic comfort
+        assert "旧话题" in result        # abstract: don't dredge prior topics
 
     def test_reminder_includes_concrete_good_examples(self):
         result = build_turn_focus_reminder(last_assistant_question="你回家了吗")
@@ -239,10 +240,11 @@ class TestStatementFocusBlockRendering:
         assert result is not None
         assert "你刚说的话" in result
         assert "泡面加蛋好香" in result
-        # Production-trace example included
+        # Production-trace example included (positive demonstration)
         assert "给我吃" in result
-        # Anti-pattern guard
-        assert "你也在吃泡面" in result
+        # Abstracted behavioral guard (don't plant the literal bad question —
+        # see feedback memory on attention bias from in-prompt bad strings).
+        assert "不需要再问对方一遍" in result or "不是在报告自己" in result
 
     def test_question_takes_precedence_over_statement(self):
         # If both are passed, question block wins (engine logic also picks
