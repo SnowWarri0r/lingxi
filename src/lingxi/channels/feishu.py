@@ -368,11 +368,18 @@ class FeishuBot(OutboundChannel):
 
         # Start proactive scheduler on our dedicated loop
         if self._proactive_config.enabled and self.engine.interaction_tracker:
+            # Pass the memory data_dir so anti-repetition history persists
+            # across restarts (otherwise Aria forgets what she just sent)
+            data_dir = (
+                getattr(self.engine.memory, "data_dir", None)
+                or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
+            )
             self._proactive_scheduler = ProactiveScheduler(
                 config=self._proactive_config,
                 tracker=self.engine.interaction_tracker,
                 channel_registry=self._channel_registry,
                 engine=self.engine,
+                data_dir=str(data_dir),
             )
             asyncio.run_coroutine_threadsafe(
                 self._proactive_scheduler.start(), self._loop
