@@ -956,6 +956,7 @@ class ConversationEngine:
                 temperature=self.persona.sampling.temperature,
                 top_p=self.persona.sampling.top_p,
                 prefill=prefill,
+                _debug_purpose="chat_full",
             )
             output = self._process_response(result.content)
         output.turn_id = str(uuid.uuid4())
