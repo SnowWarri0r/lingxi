@@ -192,6 +192,37 @@ def _empty_deltas() -> dict[str, Any]:
     }
 
 
+def _normalize(text: str) -> str:
+    """Strip punctuation/quotes/parens for fuzzy comparison."""
+    return "".join(c for c in text if c.isalnum())
+
+
+def _is_near_dup(new_text: str, existing_texts: set[str]) -> bool:
+    """True when new_text is functionally the same as an existing one.
+
+    Heuristic: alphanum-normalized comparison. Either (a) one is fully
+    contained in the other (and both have ≥8 alnum chars), or (b) the
+    first 12 alnum chars match exactly. Catches the common case where
+    an LLM extracts the same memory in slightly different wordings
+    ("用户觉得Aria回应敷衍" vs "用户觉得Aria回应敷衍（'嗯'、'对'等短回复）").
+    """
+    norm_new = _normalize(new_text)
+    if not norm_new:
+        return False
+    for ex in existing_texts:
+        norm_ex = _normalize(ex)
+        if not norm_ex:
+            continue
+        if len(norm_new) >= 8 and len(norm_ex) >= 8:
+            shorter, longer = sorted((norm_new, norm_ex), key=len)
+            if shorter in longer:
+                return True
+        if len(norm_new) >= 12 and len(norm_ex) >= 12:
+            if norm_new[:12] == norm_ex[:12]:
+                return True
+    return False
+
+
 def merge_deltas_into_memory(
     memory: RelationalMemory,
     deltas: dict[str, Any],
@@ -248,6 +279,8 @@ def merge_deltas_into_memory(
         trigger = (raw.get("trigger") or "").strip()
         if not trigger or trigger in existing_triggers:
             continue
+        if _is_near_dup(trigger, existing_triggers):
+            continue
         memory.fight_patterns.append(
             FightPattern(
                 trigger=trigger,
@@ -265,6 +298,8 @@ def merge_deltas_into_memory(
             continue
         content = (raw.get("content") or "").strip()
         if not content or content in existing_moments:
+            continue
+        if _is_near_dup(content, existing_moments):
             continue
         weight = raw.get("weight", "medium")
         if weight not in ("high", "medium", "low"):
