@@ -705,6 +705,7 @@ class ProactiveScheduler:
             recent_proactive_messages=(
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),
+            proactive_mode=True,
         )
 
         # Recipient-scoped read path: do NOT mutate the singleton active
