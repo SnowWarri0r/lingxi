@@ -453,6 +453,20 @@ class MemoryManager:
         except Exception:
             pass
 
+        # Filter out reflection-tagged facts from the turn-time prompt.
+        # Reflections describe Aria's OWN past behavior ("我注意到我连续
+        # 五次追问健康") — injecting them turn-time creates a feedback
+        # loop where the model reads its pattern and continues it. They
+        # stay in storage for analytics/training; just not for chat.
+        def _is_reflection(f) -> bool:
+            tags = (f.metadata or {}).get("tags") if hasattr(f, "metadata") else None
+            if isinstance(tags, list) and "reflection" in tags:
+                return True
+            content = getattr(f, "content", "") or ""
+            return content.startswith("[反思]")
+
+        long_term_facts = [f for f in long_term_facts if not _is_reflection(f)]
+
         return MemoryContext(
             short_term_turns=short_term_turns,
             long_term_facts=long_term_facts,
