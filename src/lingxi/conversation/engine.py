@@ -293,14 +293,19 @@ class ConversationEngine:
             recipient_key=recipient_key,
         )
 
+        # NOTE: per-turn planner.check_proactive_action disabled.
+        # The injected `[内心想法：你想要X，因为Y]` nudge was the source of
+        # the "AI 硬扯话题" feel — production trace 2026-05-20: user asked
+        # "你不看那些教人做菜的短视频么", planner suggested "...就像观星其实
+        # 也有很多小窍门..." because goal "[0.9] 与他人分享天文学的美" was
+        # still loaded from stale plans.json. Even with goals cleaned, the
+        # framing "是否有合适的时机主动提起某个话题" systematically biases
+        # the model toward forcing a topic transition every turn. Real
+        # friends don't agenda-plan each reply.
+        # Proactive *outreach* (silence-threshold-based reach-out) lives
+        # in temporal/proactive.py and is a separate, correctly-shaped
+        # path. Per-turn goal nudging is just AI-tell amplification.
         proactive_nudge = ""
-        if self.planner:
-            action_info = await self.planner.check_proactive_action(memory_context)
-            if action_info and action_info.get("should_act"):
-                proactive_nudge = (
-                    f"\n[内心想法：你想要{action_info.get('content', '')}，"
-                    f"因为{action_info.get('reason', '')}。如果合适，自然地融入你的回复中。]"
-                )
 
         triggered = self.scheduler.check_event_triggers(user_input or "")
         if triggered:
