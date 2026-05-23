@@ -99,9 +99,10 @@ class TestPromptRendering:
         builder = PromptBuilder(self._persona())
         # Phase 2: engagement section lives in focus reminder
         reminder = builder.build_turn_focus_reminder(inner_state=InnerState()) or ""
-        # Default state → full → no engagement section
-        assert "CURT 模式" not in reminder
-        assert "WITHDRAWN 模式" not in reminder
+        # Default state → full → no engagement section (no mode-specific headers)
+        assert "不太想多聊" not in reminder
+        assert "心里压着事" not in reminder
+        assert "心慌了一下" not in reminder
 
     def test_withdrawn_renders_section(self):
         builder = PromptBuilder(self._persona())
@@ -110,10 +111,9 @@ class TestPromptRendering:
             inner_state=InnerState(),
             emotion_state=emotion,
         ) or ""
-        assert "WITHDRAWN 模式" in prompt
-        # Critical phrasings from the section
+        assert "心里压着事" in prompt
         assert "沉默是一等选项" in prompt
-        assert "完整 / 周到" in prompt or "完整" in prompt
+        assert "完整周到" in prompt
 
     def test_curt_renders_section(self):
         builder = PromptBuilder(self._persona())
@@ -122,9 +122,9 @@ class TestPromptRendering:
             inner_state=InnerState(),
             emotion_state=emotion,
         ) or ""
-        assert "CURT 模式" in prompt
-        assert "不接得圆" in prompt
-        assert "WITHDRAWN" not in prompt
+        assert "不太想多聊" in prompt
+        assert "短就够" in prompt
+        assert "心里压着事" not in prompt  # don't bleed into withdrawn copy
 
     def test_withdrawn_excludes_curt_text(self):
         # Make sure modes don't overlap in rendering
@@ -134,7 +134,7 @@ class TestPromptRendering:
             inner_state=InnerState(),
             emotion_state=emotion,
         ) or ""
-        assert "CURT 模式" not in prompt
+        assert "不太想多聊" not in prompt  # CURT header
 
     def test_flustered_renders_section(self):
         builder = PromptBuilder(self._persona())
@@ -143,17 +143,15 @@ class TestPromptRendering:
             inner_state=InnerState(),
             emotion_state=emotion,
         ) or ""
-        assert "FLUSTERED 模式" in prompt
+        assert "心慌了一下" in prompt
         # Critical anti-composure phrasings
         assert "不完整" in prompt
-        assert "重复" in prompt
+        assert "字重复" in prompt
         assert "过度解释" in prompt
-        # Anti-garbled-grammar guard
-        assert "语法不通" in prompt or "乱码" in prompt
-        assert "不完整 ≠ 不通顺" in prompt
+        # Anti-garbled-grammar guard (carbon vs garbled distinction)
+        assert "乱码不通" in prompt
+        assert "通顺" in prompt
         # Anti-topic-switch guard
-        assert "换话题" in prompt
-        assert "你现在还在工作吗" in prompt or "无关的 follow-up" in prompt
-        # Anti-fabrication guard (don't invent times/numbers as filler)
-        assert "凭空塞" in prompt or "编个事实" in prompt
-        assert "快五点了" in prompt
+        assert "无关问题转移焦点" in prompt or "无关问题" in prompt
+        # Anti-fabrication guard (look at system-reminder facts, don't invent)
+        assert "时间/天气/具体数字" in prompt or "不知道就别说" in prompt
