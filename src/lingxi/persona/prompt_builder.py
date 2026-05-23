@@ -170,6 +170,7 @@ class PromptBuilder:
         current_mood: str | None = None,
         daily_briefing: "DailyBriefing | None" = None,
         recent_proactive_messages: list[str] | None = None,
+        proactive_mode: bool = False,
     ) -> str | None:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
@@ -194,7 +195,8 @@ class PromptBuilder:
 
         if inner_state is not None:
             inner_block = self._build_inner_state_section(
-                inner_state, recent_proactive_messages, daily_briefing
+                inner_state, recent_proactive_messages, daily_briefing,
+                proactive_mode=proactive_mode,
             )
             if inner_block:
                 sections.append(inner_block)
@@ -282,6 +284,8 @@ class PromptBuilder:
         state: InnerState,
         recent_proactive_messages: list[str] | None = None,
         daily_briefing: "DailyBriefing | None" = None,
+        *,
+        proactive_mode: bool = False,
     ) -> str:
         """Inject 'what I'm doing right now' so participation level is emergent from state."""
         lines = ["## 🌱 你此刻的生活状态（真实在发生，不是设定）"]
@@ -322,9 +326,20 @@ class PromptBuilder:
             now = datetime.now()
             cutoff = now - timedelta(hours=24)
 
+            # In proactive_mode (deciding what to reach out about), HIDE
+            # events that have already been voiced — wants_to_share is
+            # flipped to False after any successful proactive send via
+            # _mark_event_shared, so any False here means "已经对某个对话
+            # 提过这事". Without this filter, the same event leaks to a
+            # different recipient — production trace: 壁虎 sent to group,
+            # wants_to_share→False, but private chat's proactive cycle
+            # still saw 壁虎 in inner_state and pitched it again.
+            # Reactive chat path keeps all events visible so Aria can
+            # reference them naturally when topic comes up.
             fresh = [
                 e for e in state.recent_events[:8]
                 if e.significance >= 0.3 and e.timestamp >= cutoff
+                and (not proactive_mode or e.wants_to_share)
             ][:5]
             if fresh:
                 lines.append(
