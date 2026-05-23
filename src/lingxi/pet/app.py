@@ -61,6 +61,11 @@ def main() -> None:
 
     window = PetWindow(sprite_dir=sprite_dir, pos_file=pos_file)
     window.show()
+    # On macOS, raise_() after show() is what actually pulls the window
+    # to the top of its level. Without this, StaysOnTopHint is "best effort"
+    # and the OS sometimes parks it underneath the focused app.
+    window.raise_()
+    window.activateWindow()
 
     poller = StatePoller(url=state_url)
     poller.state_changed.connect(

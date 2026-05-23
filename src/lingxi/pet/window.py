@@ -33,14 +33,17 @@ class PetWindow(QWidget):
         self._drag_offset = None
         self._current_sprite: str | None = None
 
-        # Frameless + transparent + always on top. Tool flag avoids a dock
-        # icon on macOS (pet shouldn't appear in cmd-tab).
+        # Frameless + transparent + always on top.
+        # Note: NO Tool flag on macOS — it conflicts with WindowStaysOnTopHint
+        # under Frameless, causing the window to drop behind other windows.
+        # Trade-off: pet shows in cmd-tab / dock, but stays reliably on top.
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Bypass any app-level blur/effects that some macOS WMs apply
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
 
         self.resize(*size)
 
