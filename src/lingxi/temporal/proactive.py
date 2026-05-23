@@ -13,6 +13,7 @@ import random
 import re
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
@@ -290,6 +291,7 @@ class ProactiveScheduler:
         tracker: InteractionTracker,
         channel_registry: ChannelRegistry,
         engine: ConversationEngine,
+        data_dir: str | None = None,
     ):
         self.config = config
         self.tracker = tracker
@@ -297,9 +299,44 @@ class ProactiveScheduler:
         self.engine = engine
         self._task: asyncio.Task | None = None
         self._running = False
-        # Per-recipient recent proactive messages (to avoid repetition)
+        # Per-recipient recent proactive messages (to avoid repetition).
+        # Persisted to disk — process restart MUST NOT wipe it, otherwise
+        # Aria forgets what she just sent and re-pitches the same hook.
+        # Production trace (2026-05-19): "昨晚又看了一遍那个电影" sent at
+        # 08:04 and again at 11:05 to same recipient because in-memory
+        # dict was cleared by intervening service restart.
         self._recent_proactive: dict[str, list[str]] = {}
-        self._max_recent_proactive = 5
+        self._max_recent_proactive = 10
+        self._history_path: Path | None = None
+        if data_dir:
+            self._history_path = Path(data_dir) / "proactive_history.json"
+            self._load_history()
+
+    def _load_history(self) -> None:
+        if self._history_path is None or not self._history_path.exists():
+            return
+        try:
+            raw = json.loads(self._history_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                self._recent_proactive = {
+                    k: [str(m) for m in v][-self._max_recent_proactive:]
+                    for k, v in raw.items()
+                    if isinstance(v, list)
+                }
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[proactive] history load failed (non-fatal): {e}")
+
+    def _save_history(self) -> None:
+        if self._history_path is None:
+            return
+        try:
+            self._history_path.parent.mkdir(parents=True, exist_ok=True)
+            self._history_path.write_text(
+                json.dumps(self._recent_proactive, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            print(f"[proactive] history save failed (non-fatal): {e}")
 
     async def start(self) -> None:
         if self._task is not None:
@@ -451,11 +488,13 @@ class ProactiveScheduler:
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
-        # Remember for anti-repetition
+        # Remember for anti-repetition (in-memory + persisted to disk so
+        # process restart doesn't wipe; see _load_history docstring)
         recent = self._recent_proactive.setdefault(key, [])
         recent.append(message)
         if len(recent) > self._max_recent_proactive:
             del recent[: len(recent) - self._max_recent_proactive]
+        self._save_history()
 
         # Clear wants_to_share on whichever recent event this message
         # actually voiced — content-match by character n-gram overlap.
