@@ -111,21 +111,15 @@ class ContextAssembler:
             })
 
         for turn in included_older + guaranteed:
-            # Layered rendering:
-            # - turn.timestamp >= l2_cutoff (recent) → full content
-            # - turn.timestamp < l2_cutoff AND turn.summary set → summary line
-            # - turn.timestamp < l2_cutoff AND no summary yet → fall back to content
-            if turn.timestamp >= l2_cutoff or not turn.summary:
-                result_messages.append({"role": turn.role, "content": turn.content})
-            else:
-                stamp = turn.timestamp.strftime("%H:%M")
-                # Render summarized turn as a compact attributed line.
-                # Wrap in a system-style user message so the model knows it's
-                # condensed, not a literal new utterance.
-                result_messages.append({
-                    "role": turn.role,
-                    "content": f"[{stamp} 摘要] {turn.summary}",
-                })
+            # Always render verbatim content. Older third-person summary
+            # rendering ("[HH:MM 摘要] 我询问对方身体...") was poisoning
+            # the chat history — model read its own past as third-person
+            # action narration ("我询问 / 我追问") and copied that as a
+            # behavioral pattern, generating MORE asking-about-X turns.
+            # Long-term coverage lives in episode summaries (rendered in
+            # the system prompt's memory block), not in chat history.
+            # turn.summary is kept on disk for analytics but never shown.
+            result_messages.append({"role": turn.role, "content": turn.content})
 
         return result_messages
 
