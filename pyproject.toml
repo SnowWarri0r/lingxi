@@ -39,11 +39,15 @@ feishu = [
 embeddings = [
     "sentence-transformers>=3.0.0",
 ]
+pet = [
+    "PyQt6>=6.7.0",
+]
 
 [project.scripts]
 lingxi = "lingxi.app:main"
 lingxi-server = "lingxi.web.server:main"
 lingxi-feishu = "lingxi.channels.feishu_cli:main"
+lingxi-pet = "lingxi.pet.app:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lingxi"]
