@@ -25,7 +25,7 @@ class PetWindow(QWidget):
         self,
         sprite_dir: Path,
         pos_file: Path,
-        size: tuple[int, int] = (200, 300),
+        size: tuple[int, int] = (240, 270),
     ):
         super().__init__()
         self.sprite_dir = sprite_dir
@@ -49,6 +49,7 @@ class PetWindow(QWidget):
 
         self.label = QLabel(self)
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setScaledContents(False)  # we scale manually with DPR
         self.label.resize(*size)
         # Important: label background must be transparent so the parent's
         # translucency shows through the empty alpha regions.
@@ -69,11 +70,18 @@ class PetWindow(QWidget):
         pix = QPixmap(str(path))
         if pix.isNull():
             return
+        # HiDPI / Retina: render the pixmap at native pixel resolution
+        # but tell Qt to display it at the logical size. Otherwise Qt
+        # renders at logical size (e.g. 320x360) and the compositor
+        # upscales to physical (640x720), giving the "看着糊" look.
+        ratio = self.devicePixelRatioF()
+        target = self.size() * ratio
         scaled = pix.scaled(
-            self.size(),
+            target,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
+        scaled.setDevicePixelRatio(ratio)
         self.label.setPixmap(scaled)
         self._current_sprite = name
 
