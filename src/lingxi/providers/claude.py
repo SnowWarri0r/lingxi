@@ -209,12 +209,16 @@ class ClaudeProvider(LLMProvider):
         temperature: float = 0.7,
         top_p: float | None = None,
         prefill: str = "",
+        _debug_purpose: str = "unknown",
         **kwargs,
     ) -> CompletionResult:
         body = self._build_body(messages, system, max_tokens, temperature, top_p, prefill)
         url = f"{API_BASE}?beta=true" if self._is_oauth else API_BASE
 
+        import time as _time
+        _t0 = _time.perf_counter()
         response = await self._request_with_auto_refresh(url, body)
+        _dur_ms = int((_time.perf_counter() - _t0) * 1000)
 
         data = response.json()
 
@@ -227,13 +231,30 @@ class ClaudeProvider(LLMProvider):
         if prefill:
             content = prefill + content
 
+        usage = {
+            "input_tokens": data.get("usage", {}).get("input_tokens", 0),
+            "output_tokens": data.get("usage", {}).get("output_tokens", 0),
+        }
+
+        # Full-fidelity debug log — only when LINGXI_DEBUG_LLM is on
+        try:
+            from lingxi.debug.request_log import log_request
+            log_request(
+                system=system,
+                messages=messages,
+                response_text=content,
+                model=data.get("model", self.model),
+                usage=usage,
+                duration_ms=_dur_ms,
+                purpose=_debug_purpose,
+            )
+        except Exception:
+            pass  # debug failure must not break the chat path
+
         return CompletionResult(
             content=content,
             model=data.get("model", self.model),
-            usage={
-                "input_tokens": data.get("usage", {}).get("input_tokens", 0),
-                "output_tokens": data.get("usage", {}).get("output_tokens", 0),
-            },
+            usage=usage,
             finish_reason=data.get("stop_reason", ""),
         )
 
