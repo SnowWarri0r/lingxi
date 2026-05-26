@@ -90,7 +90,9 @@ async def test_style_preamble_prepended_to_user_message(persona, memory):
         text = content
     assert "[本轮" in text
     assert "≤30" in text
-    assert "据说" in text  # persona blacklist merged
+    # blacklist is no longer planted in preamble (reverse-attention anti-pattern)
+    assert "据说" not in text
+    assert "避用词" not in text
     assert "你今天吃啥" in text
 
 

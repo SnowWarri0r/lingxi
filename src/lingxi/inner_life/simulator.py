@@ -132,6 +132,49 @@ HOURLY_MICROEVENT_PROMPT = """你是 {persona_name}，现在正在【{current_ac
 }}"""
 
 
+def _normalize_event_text(text: str) -> str:
+    """Strip whitespace/punctuation/discourse particles for near-dup compare."""
+    drop = set(" 的了吧呢吗啊哦嗯着也就还又都才把被让请要会能可与和、，。！？：；…—\n\t\r")
+    return "".join(c for c in text if c not in drop and c.isprintable())
+
+
+def _is_near_duplicate_event(new_content: str, recent_events: list) -> bool:
+    """True when new_content overlaps an existing event enough to be a redo.
+
+    Catches LLM regenerating the same beat in slightly different wording.
+    Three signals (ANY trips dedup):
+    - Substring containment (one is fully inside the other)
+    - Identical opening 10+ normalized chars (same subject+action prefix)
+    - Character bigram Jaccard ≥ 0.4
+    """
+    norm_new = _normalize_event_text(new_content)
+    if len(norm_new) < 6:
+        return False
+    new_bigrams = {norm_new[i:i+2] for i in range(len(norm_new) - 1)}
+    for ev in recent_events:
+        existing = getattr(ev, "content", "") or ""
+        norm_ex = _normalize_event_text(existing)
+        if len(norm_ex) < 6:
+            continue
+        # 1. Substring containment either direction
+        shorter, longer = sorted((norm_new, norm_ex), key=len)
+        if shorter in longer and len(shorter) >= 8:
+            return True
+        # 2. Same opening — same subject+action means same event
+        if (
+            len(norm_new) >= 12 and len(norm_ex) >= 12
+            and norm_new[:10] == norm_ex[:10]
+        ):
+            return True
+        # 3. Bigram Jaccard overlap
+        ex_bigrams = {norm_ex[i:i+2] for i in range(len(norm_ex) - 1)}
+        inter = len(new_bigrams & ex_bigrams)
+        union = len(new_bigrams | ex_bigrams)
+        if union > 0 and inter / union >= 0.4:
+            return True
+    return False
+
+
 class LifeSimulator:
     """Background life simulator for Aria."""
 
@@ -684,6 +727,15 @@ class LifeSimulator:
         from_pending = bool(event_data.get("from_pending", False))
         if from_pending and state.today_plan and state.today_plan.pending_events:
             state.today_plan.pending_events.pop(0)
+
+        # Skip near-duplicate of the most recent ~8 events. Without this,
+        # the LLM regenerates the same event in slightly different wording
+        # ("打电话给外婆 她说腿疼得厉害" vs "给外婆打电话 她腿疼严重了")
+        # and both pile into recent_events — the chat-time prompt then
+        # shows two near-identical bullets back-to-back.
+        if _is_near_duplicate_event(event.content, state.recent_events[:8]):
+            print(f"[life] event skipped (near-dup): {event.content[:50]}")
+            return
 
         # Prepend + bound
         state.recent_events.insert(0, event)
