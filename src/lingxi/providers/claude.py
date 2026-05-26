@@ -330,6 +330,7 @@ class ClaudeProvider(LLMProvider):
         temperature: float = 0.7,
         top_p: float | None = None,
         prefill: str = "",
+        _debug_purpose: str = "unknown",
         **kwargs,
     ) -> AsyncIterator[StreamChunk]:
         body = self._build_body(messages, system, max_tokens, temperature, top_p, prefill)
@@ -339,6 +340,15 @@ class ClaudeProvider(LLMProvider):
         # Emit prefill as the first chunk so downstream sees complete text
         if prefill:
             yield StreamChunk(content=prefill)
+
+        # Accumulate response text + usage so we can log the full transcript
+        # at message_stop. Same shape as complete()'s log entry so the
+        # inspector treats both paths identically.
+        import time as _time
+        _t0 = _time.perf_counter()
+        _captured_text = prefill or ""
+        _captured_usage = {"input_tokens": 0, "output_tokens": 0}
+        _captured_model = self.model
 
         # One loop handles both 401-refresh and transient transport-error retry.
         # Transport retry is only safe BEFORE any content chunk has been yielded
@@ -388,13 +398,43 @@ class ClaudeProvider(LLMProvider):
                         except json.JSONDecodeError:
                             continue
                         event_type = event.get("type", "")
-                        if event_type == "content_block_delta":
+                        if event_type == "message_start":
+                            msg = event.get("message", {})
+                            _captured_model = msg.get("model", _captured_model)
+                            u = msg.get("usage") or {}
+                            _captured_usage["input_tokens"] = u.get(
+                                "input_tokens", _captured_usage["input_tokens"]
+                            )
+                            _captured_usage["output_tokens"] = u.get(
+                                "output_tokens", _captured_usage["output_tokens"]
+                            )
+                        elif event_type == "content_block_delta":
                             delta = event.get("delta", {})
                             if delta.get("type") == "text_delta":
                                 content_yielded_this_attempt = True
-                                yield StreamChunk(content=delta.get("text", ""))
+                                text_piece = delta.get("text", "")
+                                _captured_text += text_piece
+                                yield StreamChunk(content=text_piece)
+                        elif event_type == "message_delta":
+                            u = event.get("usage") or {}
+                            if "output_tokens" in u:
+                                _captured_usage["output_tokens"] = u["output_tokens"]
                         elif event_type == "message_stop":
                             break
+                    _dur_ms = int((_time.perf_counter() - _t0) * 1000)
+                    try:
+                        from lingxi.debug.request_log import log_request
+                        log_request(
+                            system=system,
+                            messages=messages,
+                            response_text=_captured_text,
+                            model=_captured_model,
+                            usage=_captured_usage,
+                            duration_ms=_dur_ms,
+                            purpose=_debug_purpose,
+                        )
+                    except Exception:
+                        pass  # debug failure must not break the chat path
                     yield StreamChunk(content="", is_final=True)
                     return
             except (httpx.RemoteProtocolError, httpx.ReadError, httpx.ConnectError) as e:
