@@ -137,6 +137,29 @@ HOURLY_MICROEVENT_PROMPT = """你是 {persona_name}，现在正在【{current_ac
 }}"""
 
 
+_LEADING_TIME_ANCHORS = (
+    "刚刚", "刚才", "现在", "今早", "今天早上", "今天上午", "今天中午",
+    "今天下午", "今天晚上", "今晚", "昨晚", "今天",
+)
+
+
+def _strip_leading_time_anchor(content: str) -> str:
+    """LLM keeps writing '刚才/现在/今早...' at the start of event content
+    even when prompt says to skip time anchors. The system rendering adds
+    its own [刚刚]/[昨晚] tag at render time, so an embedded leading
+    anchor reads as duplicated and (worse) conflicting time info.
+
+    Strip those leading anchors from content. We only touch the very
+    start — mid-sentence references are usually meaningful.
+    """
+    s = content.lstrip()
+    for prefix in sorted(_LEADING_TIME_ANCHORS, key=len, reverse=True):
+        if s.startswith(prefix):
+            rest = s[len(prefix):].lstrip(" ，,。")
+            return rest if rest else s
+    return s
+
+
 def _normalize_event_text(text: str) -> str:
     """Strip whitespace/punctuation/discourse particles for near-dup compare."""
     drop = set(" 的了吧呢吗啊哦嗯着也就还又都才把被让请要会能可与和、，。！？：；…—\n\t\r")
@@ -712,8 +735,9 @@ class LifeSimulator:
             return
 
         try:
+            content_raw = str(event_data.get("content", ""))[:200]
             event = LifeEvent(
-                content=str(event_data.get("content", ""))[:200],
+                content=_strip_leading_time_anchor(content_raw),
                 significance=float(event_data.get("significance", 0.3)),
                 emotional_impact=dict(event_data.get("emotional_impact", {})),
                 wants_to_share=bool(event_data.get("wants_to_share", False)),
