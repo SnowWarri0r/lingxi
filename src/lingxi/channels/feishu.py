@@ -457,6 +457,7 @@ class FeishuBot(OutboundChannel):
                 graph=self.engine.social_graph,
                 store=self.engine.social_store,
                 on_event_written=promoter_hook,
+                npc_writer=self.engine.npc_writer,
             )
             asyncio.run_coroutine_threadsafe(
                 self._social_scheduler.start(), self._loop
