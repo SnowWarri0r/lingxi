@@ -1021,3 +1021,22 @@ class PromptBuilder:
         lines.append("\n在合适的时机，你可以主动提起与你计划相关的话题。")
         return "\n".join(lines)
 
+
+def build_persona_block(persona: PersonaConfig) -> str:
+    """Standalone persona section: identity + personality + style + habits.
+
+    This is the static, cache-friendly portion of the system prompt. Used
+    by the new brain.renderer as the persona prefix; the dynamic facts
+    blocks are appended after.
+    """
+    pb = PromptBuilder(persona)
+    sections = [
+        pb._build_format_preamble(),
+        pb._build_identity_section(),
+        pb._build_personality_section(),
+        pb._build_speaking_style_section(),
+    ]
+    habits = pb._build_message_habits_section()
+    if habits:
+        sections.append(habits)
+    return "\n\n".join(sections)
