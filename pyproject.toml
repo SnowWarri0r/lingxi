@@ -42,6 +42,9 @@ embeddings = [
 pet = [
     "PyQt6>=6.7.0",
 ]
+microbrain = [
+    "mlx-lm>=0.31.3",
+]
 
 [project.scripts]
 lingxi = "lingxi.app:main"

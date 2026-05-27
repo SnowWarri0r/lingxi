@@ -37,6 +37,11 @@ class ProactiveConfig(BaseModel):
         default_factory=lambda: {1: 72, 2: 24, 3: 6, 4: 3}
     )
     cooldown_hours: float = 12.0
+    # Hard cap on proactive messages sent without user reply in between.
+    # IM register: a real friend who notices silence might reach out once,
+    # maybe twice tops. After that you wait for them. Without this cap, a
+    # 24h user silence at cooldown=3h yields 8 proactives — stalkery.
+    max_consecutive_proactive: int = 2
     quiet_hours_start: int = 23  # inclusive
     quiet_hours_end: int = 8  # exclusive
 
@@ -415,6 +420,19 @@ class ProactiveScheduler:
                         self.config.cooldown_hours - since_last_proactive.total_seconds() / 3600
                     ),
                 }
+
+        # Consecutive cap: a real friend who notices silence reaches out
+        # once, maybe twice — then waits. Spamming 4 proactives during a
+        # long user silence reads as needy/AI.
+        if (
+            not force
+            and record.consecutive_proactive_count >= self.config.max_consecutive_proactive
+        ):
+            return {
+                "key": key, "status": "skipped_consecutive_cap",
+                "sent_without_reply": record.consecutive_proactive_count,
+                "cap": self.config.max_consecutive_proactive,
+            }
 
         # Channel must be available
         channel = self.channels.get(record.channel)

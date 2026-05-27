@@ -54,7 +54,17 @@ class SocialPromoter:
         """Called from scheduler's on_event_written hook.
 
         Returns True if the event was promoted (for logging/tests).
+
+        Only `aria_interaction` events get promoted. Pure `life` events
+        about the NPC alone (Echo seeing a sticky note at her desk;
+        xiaomin's lab struggle in private) belong in the "身边的人" pull
+        block as background-knowledge — they're things Aria HEARS ABOUT,
+        not lived through. Putting them in Aria.recent_events caused her
+        to narrate them as her own ("看完桌上的便利贴才想起..."), since
+        recent_events is rendered as "你过去 24h 里发生的事".
         """
+        if event.type != "aria_interaction":
+            return False
         if event.significance < self._threshold:
             return False
         if event.promoted_to_aria:
