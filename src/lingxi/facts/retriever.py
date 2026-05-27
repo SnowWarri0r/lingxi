@@ -32,7 +32,7 @@ class FactRetriever:
     async def fetch(self, query: FactQuery) -> list[Fact]:
         if query.semantic:
             # FTS5 path: search content, then filter by subject/type in Python.
-            # FTS5 index doesn't span structured fields cheaply.
+            # FTS5 doesn't span structured fields cheaply.
             candidates = await self._store.search_fts(
                 query.semantic, limit=query.limit * 4
             )
@@ -42,7 +42,12 @@ class FactRetriever:
                 and (query.type is None or f.type == query.type)
                 and (query.since is None or f.ts >= query.since)
             ]
-            return filtered[: query.limit]
+            if filtered:
+                return filtered[: query.limit]
+            # Fall through to recency query when semantic returns 0 — the
+            # orchestrator wanted facts about this subject/type, the
+            # semantic hint was just a preference. Returning empty would
+            # leave the dynamic block empty for no good reason.
 
         return await self._store.query(
             subject=query.subject,
