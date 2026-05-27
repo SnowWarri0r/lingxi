@@ -144,6 +144,10 @@ class ConversationEngine:
         social_graph=None,
         social_store=None,
         fact_retriever=None,
+        life_writer=None,
+        npc_writer=None,
+        inference_writer=None,
+        world_writer=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -156,6 +160,10 @@ class ConversationEngine:
         self.social_graph = social_graph
         self.social_store = social_store
         self.fact_retriever = fact_retriever
+        self.life_writer = life_writer
+        self.npc_writer = npc_writer
+        self.inference_writer = inference_writer
+        self.world_writer = world_writer
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)

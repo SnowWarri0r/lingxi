@@ -406,6 +406,7 @@ class FeishuBot(OutboundChannel):
                 store=self.engine.inner_life_store,
                 tick_interval_minutes=30,
                 memory=self.engine.memory,
+                life_writer=self.engine.life_writer,
             )
             asyncio.run_coroutine_threadsafe(
                 self._life_simulator.start(), self._loop
