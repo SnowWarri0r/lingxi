@@ -662,7 +662,7 @@ class ConversationEngine:
 
         # 5. Messages still come from context_assembler (existing path)
         memory_context = await self.memory.assemble_context(
-            user_input=user_input, recipient_key=recipient_key,
+            query=user_input, recipient_key=recipient_key,
         )
         messages = self.context_assembler.assemble_messages(memory_context)
 
