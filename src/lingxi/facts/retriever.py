@@ -8,6 +8,7 @@ matching semantic keyword K".
 
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
@@ -30,31 +31,50 @@ class FactRetriever:
         self._store = store
 
     async def fetch(self, query: FactQuery) -> list[Fact]:
-        if query.semantic:
-            # FTS5 path: search content, then filter by subject/type in Python.
-            # FTS5 doesn't span structured fields cheaply.
-            candidates = await self._store.search_fts(
-                query.semantic, limit=query.limit * 4
-            )
-            filtered = [
-                f for f in candidates
-                if f.subject == query.subject
-                and (query.type is None or f.type == query.type)
-                and (query.since is None or f.ts >= query.since)
-            ]
-            if filtered:
-                return filtered[: query.limit]
-            # Fall through to recency query when semantic returns 0 — the
-            # orchestrator wanted facts about this subject/type, the
-            # semantic hint was just a preference. Returning empty would
-            # leave the dynamic block empty for no good reason.
+        """Return up to query.limit facts ranked by 3D scoring:
 
-        return await self._store.query(
+        score = 0.5 * recency_decay(hours_old)
+              + 0.3 * (importance / 10)
+              + 0.2 * fts_rank
+
+        recency_decay(h) = exp(-0.01 * h)
+
+        fts_rank is 0.0 when no semantic query is given; 1.0 for the best
+        FTS5 match when one is given (normalized across candidates).
+
+        After returning, last_accessed is stamped on each returned fact.
+        """
+        candidates = await self._store.query(
             subject=query.subject,
             type=query.type,
             since=query.since,
-            limit=query.limit,
+            limit=query.limit * 8,
         )
+        if not candidates:
+            return []
+
+        if query.semantic:
+            fts_ranks = await self._store.fts_rank(
+                query.semantic, [c.id for c in candidates]
+            )
+        else:
+            fts_ranks = {c.id: 0.0 for c in candidates}
+
+        now = datetime.now()
+        scored: list[tuple[float, Fact]] = []
+        for fact in candidates:
+            hours_old = max(0.0, (now - fact.ts).total_seconds() / 3600)
+            recency = math.exp(-0.01 * hours_old)
+            importance = (fact.importance if fact.importance is not None else 5) / 10.0
+            relevance = fts_ranks.get(fact.id, 0.0)
+            score = 0.5 * recency + 0.3 * importance + 0.2 * relevance
+            scored.append((score, fact))
+
+        scored.sort(key=lambda x: -x[0])
+        top = [f for _, f in scored[: query.limit]]
+        if top:
+            await self._store.update_last_accessed([f.id for f in top], now)
+        return top
 
     async def fetch_by_id(self, fact_id: str) -> Fact | None:
         """Return a single Fact by ID, or None if not found."""
