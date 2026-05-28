@@ -428,14 +428,14 @@ class FeishuBot(OutboundChannel):
         # Skip silently if no api_key available (e.g. dev/test config).
         api_key_for_world = getattr(self.engine.llm, "_api_key", "") or ""
         if (
-            getattr(self.engine, "world_store", None) is not None
+            getattr(self.engine, "world_writer", None) is not None
             and api_key_for_world
         ):
             from lingxi.world.scheduler import WorldScheduler
             self._world_scheduler = WorldScheduler(
                 api_key=api_key_for_world,
-                store=self.engine.world_store,
                 world_writer=self.engine.world_writer,
+                fact_retriever=getattr(self.engine, "fact_retriever", None),
             )
             asyncio.run_coroutine_threadsafe(
                 self._world_scheduler.start(), self._loop

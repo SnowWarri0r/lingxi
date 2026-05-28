@@ -142,7 +142,6 @@ class ConversationEngine:
         annotation_store: AnnotationStore | None = None,
         fewshot_retriever: FewShotRetriever | None = None,
         relational_store=None,
-        world_store=None,
         social_graph=None,
         social_store=None,
         fact_retriever=None,
@@ -159,7 +158,6 @@ class ConversationEngine:
         self.agenda_engine = agenda_engine
         self.subjective_layer = subjective_layer
         self.relational_store = relational_store
-        self.world_store = world_store
         self.social_graph = social_graph
         self.social_store = social_store
         self.fact_retriever = fact_retriever
@@ -381,15 +379,6 @@ class ConversationEngine:
                 print(f"[relational] load failed: {e}", flush=True)
                 relational_memory = None
 
-        # World awareness: today's news briefing (if generated)
-        daily_briefing = None
-        if self.world_store is not None:
-            try:
-                daily_briefing = await self.world_store.load_today()
-            except Exception as e:
-                print(f"[world] load failed: {e}", flush=True)
-                daily_briefing = None
-
         # Social graph: load fresh NPC states on each turn. Cheap — small
         # files, capped at 30 days of events per NPC. Renderer will pick
         # top-4 relevant NPCs to keep prompt budget bounded.
@@ -519,7 +508,6 @@ class ConversationEngine:
             inner_state=inner_state,
             emotion_state=self._emotion_state,
             current_mood=self._current_mood,
-            daily_briefing=daily_briefing,
         )
 
         # If there are images, inject them into the last user message as multimodal blocks
