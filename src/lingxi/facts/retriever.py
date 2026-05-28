@@ -63,7 +63,10 @@ class FactRetriever:
         now = datetime.now()
         scored: list[tuple[float, Fact]] = []
         for fact in candidates:
-            hours_old = max(0.0, (now - fact.ts).total_seconds() / 3600)
+            # Existing rows may have tz-aware ts (legacy data); new writes from
+            # this codebase are naive. Normalize to naive for subtraction.
+            fact_ts = fact.ts.replace(tzinfo=None) if fact.ts.tzinfo else fact.ts
+            hours_old = max(0.0, (now - fact_ts).total_seconds() / 3600)
             recency = math.exp(-0.01 * hours_old)
             importance = (fact.importance if fact.importance is not None else 5) / 10.0
             relevance = fts_ranks.get(fact.id, 0.0)
