@@ -141,7 +141,6 @@ class ConversationEngine:
         fewshot_store: FewShotStore | None = None,
         annotation_store: AnnotationStore | None = None,
         fewshot_retriever: FewShotRetriever | None = None,
-        relational_store=None,
         social_graph=None,
         social_store=None,
         fact_retriever=None,
@@ -157,7 +156,6 @@ class ConversationEngine:
         self.inner_life_store = inner_life_store
         self.agenda_engine = agenda_engine
         self.subjective_layer = subjective_layer
-        self.relational_store = relational_store
         self.social_graph = social_graph
         self.social_store = social_store
         self.fact_retriever = fact_retriever
@@ -370,15 +368,6 @@ class ConversationEngine:
                 except Exception:
                     pass
 
-        # Relational memory: per-recipient between-us texture
-        relational_memory = None
-        if recipient_key and self.relational_store is not None:
-            try:
-                relational_memory = await self.relational_store.load(recipient_key)
-            except Exception as e:
-                print(f"[relational] load failed: {e}", flush=True)
-                relational_memory = None
-
         # Social graph: load fresh NPC states on each turn. Cheap — small
         # files, capped at 30 days of events per NPC. Renderer will pick
         # top-4 relevant NPCs to keep prompt budget bounded.
@@ -460,7 +449,6 @@ class ConversationEngine:
             subjective_view=subjective_view,
             pending_agenda=pending_agenda,
             biography_hits=biography_hits,
-            relational_memory=relational_memory,
             social_graph=self.social_graph,
             social_states=social_states,
             mode=prompt_mode,
