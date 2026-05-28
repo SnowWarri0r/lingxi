@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS facts (
     confidence REAL NOT NULL,
     expires_at TEXT,
     tags_json TEXT NOT NULL DEFAULT '[]',
-    supersedes TEXT
+    supersedes TEXT,
+    importance INTEGER,
+    last_accessed TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_facts_subject_ts
@@ -41,6 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_facts_source ON facts (source);
 CREATE INDEX IF NOT EXISTS idx_facts_type ON facts (type);
 CREATE INDEX IF NOT EXISTS idx_facts_expires ON facts (expires_at);
 CREATE INDEX IF NOT EXISTS idx_facts_supersedes ON facts (supersedes);
+CREATE INDEX IF NOT EXISTS idx_facts_importance
+    ON facts (importance) WHERE importance IS NOT NULL;
 
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
     USING fts5(content, tags, content='facts', content_rowid='rowid',
@@ -49,6 +53,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
 
 
 def _row_to_fact(row: sqlite3.Row) -> Fact:
+    keys = row.keys()
     return Fact(
         id=row["id"],
         subject=row["subject"],
@@ -63,6 +68,11 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
         ),
         tags=json.loads(row["tags_json"]),
         supersedes=row["supersedes"],
+        importance=row["importance"] if "importance" in keys else None,
+        last_accessed=(
+            datetime.fromisoformat(row["last_accessed"])
+            if "last_accessed" in keys and row["last_accessed"] else None
+        ),
     )
 
 
@@ -84,6 +94,16 @@ class FactStore:
         def _setup():
             c = self._conn()
             c.executescript(_SCHEMA)
+            # Schema migration: add importance + last_accessed if missing (existing DBs)
+            cols = {row[1] for row in c.execute("PRAGMA table_info(facts)")}
+            if "importance" not in cols:
+                c.execute("ALTER TABLE facts ADD COLUMN importance INTEGER")
+            if "last_accessed" not in cols:
+                c.execute("ALTER TABLE facts ADD COLUMN last_accessed TEXT")
+            c.execute(
+                "CREATE INDEX IF NOT EXISTS idx_facts_importance "
+                "ON facts (importance) WHERE importance IS NOT NULL"
+            )
             c.commit()
             c.close()
 
@@ -95,8 +115,9 @@ class FactStore:
             c.execute(
                 """INSERT INTO facts
                    (id, subject, content, source, type, ts, written_at,
-                    confidence, expires_at, tags_json, supersedes)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    confidence, expires_at, tags_json, supersedes,
+                    importance, last_accessed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     fact.id, fact.subject, fact.content,
                     fact.source.value, fact.type.value,
@@ -105,6 +126,8 @@ class FactStore:
                     fact.expires_at.isoformat() if fact.expires_at else None,
                     json.dumps(fact.tags, ensure_ascii=False),
                     fact.supersedes,
+                    fact.importance,
+                    fact.last_accessed.isoformat() if fact.last_accessed else None,
                 ),
             )
             # Mirror into FTS5
