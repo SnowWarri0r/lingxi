@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 from lingxi.conversation.context import ContextAssembler
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
+from lingxi.facts.models import FactType
+from lingxi.facts.retriever import FactQuery
 from lingxi.conversation.prompt_assembly import (
     build_style_preamble,
     pick_prefill,
@@ -629,8 +631,8 @@ class ConversationEngine:
                 )[:3]
             ) if inner_state else "",
             last_lived=[
-                e.content[:50] for e in (
-                    inner_state.recent_events[:3] if inner_state else []
+                f.content[:50] for f in await self.fact_retriever.fetch(
+                    FactQuery(subject="aria", type=FactType.EVENT, limit=3)
                 )
             ],
         )
