@@ -1,91 +1,69 @@
-"""Push significant NPC events into Aria's inner_state.recent_events.
+"""Promote significant NPC events into Aria's facts + share-intent queue.
 
-When the scheduler writes an event with significance ≥ threshold,
-this hook flips it from background-knowledge (pull, rendered in social
-section) to foreground (push, eligible for proactive opener).
+Was: write LifeEvent(wants_to_share=True) into inner_state.recent_events.
+Now: write Fact(subject="aria", tags=[...]) via LifeWriter + ShareIntentStore.queue().
 
-Two safeguards against firehose:
-- per-NPC cooldown: once a 24h window, max 1 push per NPC
-- promoted_to_aria flag on the NPCEvent — idempotent if hook re-fires
-
-The push writes a LifeEvent with wants_to_share=True so the existing
-proactive_mode filter (recent_events with wants_to_share) surfaces it
-for one outgoing message and then clears.
+The two safeguards (per-NPC cooldown, idempotency via NPCEvent.promoted_to_aria)
+remain. Cooldown lives in ShareIntentStore now.
 """
 
 from __future__ import annotations
 
-import asyncio
-import json
-from datetime import datetime, timedelta
-from pathlib import Path
-from typing import Any
-
-from lingxi.inner_life.models import LifeEvent
-from lingxi.inner_life.store import InnerLifeStore
+from lingxi.facts.models import Fact, FactType, Source
+from lingxi.facts.writers.life import LifeWriter
+from lingxi.proactive.share_intent import ShareIntentStore
 from lingxi.social.models import NPC, NPCEvent
-from lingxi.social.store import SocialStore
 
 
 DEFAULT_THRESHOLD = 0.6
-COOLDOWN = timedelta(hours=24)
 
 
 class SocialPromoter:
-    """Promote NPC events to Aria's recent_events with cooldown + threshold."""
-
     def __init__(
         self,
-        inner_store: InnerLifeStore,
-        social_store: SocialStore,
-        data_dir: Path | str,
+        life_writer: LifeWriter,
+        share_intent_store: ShareIntentStore,
         *,
         threshold: float = DEFAULT_THRESHOLD,
-        cooldown: timedelta = COOLDOWN,
+        social_store=None,  # optional, for marking NPCEvent.promoted_to_aria
     ):
-        self._inner = inner_store
-        self._social = social_store
+        self._life_writer = life_writer
+        self._share_intent = share_intent_store
         self._threshold = threshold
-        self._cooldown = cooldown
-        self._cooldown_path = Path(data_dir) / "social" / "recent_promotions.json"
-        self._lock = asyncio.Lock()
+        self._social = social_store
 
     async def maybe_promote(self, npc: NPC, event: NPCEvent) -> bool:
-        """Called from scheduler's on_event_written hook.
-
-        Returns True if the event was promoted (for logging/tests).
-
-        Only `aria_interaction` events get promoted. Pure `life` events
-        about the NPC alone (Echo seeing a sticky note at her desk;
-        xiaomin's lab struggle in private) belong in the "身边的人" pull
-        block as background-knowledge — they're things Aria HEARS ABOUT,
-        not lived through. Putting them in Aria.recent_events caused her
-        to narrate them as her own ("看完桌上的便利贴才想起..."), since
-        recent_events is rendered as "你过去 24h 里发生的事".
-        """
         if event.type != "aria_interaction":
             return False
         if event.significance < self._threshold:
             return False
         if event.promoted_to_aria:
             return False
-        if await self._is_in_cooldown(npc.id):
+        if await self._share_intent.is_in_cooldown(npc.id):
             return False
 
-        content = _format_for_inner_state(npc, event)
-        life_event = LifeEvent(
+        content = _format_for_aria_pov(npc, event)
+        fact = Fact(
+            subject="aria",
             content=content,
-            significance=event.significance,
-            wants_to_share=True,
+            source=Source.NPC_TICKER,
+            type=FactType.EVENT,
+            ts=event.ts,
+            tags=[
+                f"from_npc:{npc.id}",
+                f"significance:{event.significance:.2f}",
+            ],
         )
-
-        def _mutate(state):
-            state.recent_events.insert(0, life_event)
-            state.recent_events = state.recent_events[:30]
-
-        await self._inner.update_state(_mutate)
-        await self._social.mark_event_promoted(npc.id, event.ts)
-        await self._record_promotion(npc.id, datetime.now())
+        await self._life_writer.write(fact)
+        queued = await self._share_intent.queue(fact.id, npc.id, event.significance)
+        if not queued:
+            # cooldown race — fact already written, just skip the intent
+            return False
+        if self._social is not None:
+            try:
+                await self._social.mark_event_promoted(npc.id, event.ts)
+            except Exception as e:
+                print(f"[promoter] mark_event_promoted failed: {e}", flush=True)
         print(
             f"[social.promoter] +push {npc.id} sig={event.significance:.2f}: "
             f"{content[:50]}...",
@@ -93,74 +71,15 @@ class SocialPromoter:
         )
         return True
 
-    async def _is_in_cooldown(self, npc_id: str) -> bool:
-        recent = await self._load_recent_promotions()
-        last = recent.get(npc_id)
-        if last is None:
-            return False
-        try:
-            last_dt = datetime.fromisoformat(last)
-        except Exception:
-            return False
-        return (datetime.now() - last_dt) < self._cooldown
 
-    async def _record_promotion(self, npc_id: str, ts: datetime) -> None:
-        async with self._lock:
-            recent = await self._load_recent_promotions()
-            recent[npc_id] = ts.isoformat()
-            # Drop expired entries — keeps file small
-            cutoff = datetime.now() - self._cooldown
-            recent = {
-                k: v for k, v in recent.items()
-                if _parse_or_min(v) >= cutoff
-            }
-            await self._save_recent_promotions(recent)
-
-    async def _load_recent_promotions(self) -> dict[str, str]:
-        if not self._cooldown_path.exists():
-            return {}
-        try:
-            data = await asyncio.to_thread(
-                lambda: json.loads(self._cooldown_path.read_text(encoding="utf-8"))
-            )
-            return data if isinstance(data, dict) else {}
-        except Exception:
-            return {}
-
-    async def _save_recent_promotions(self, data: dict[str, str]) -> None:
-        self._cooldown_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = self._cooldown_path.with_suffix(".tmp")
-
-        def _write():
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            tmp.rename(self._cooldown_path)
-
-        await asyncio.to_thread(_write)
-
-
-def _parse_or_min(s: str) -> datetime:
-    try:
-        return datetime.fromisoformat(s)
-    except Exception:
-        return datetime.min
-
-
-def _format_for_inner_state(npc: NPC, event: NPCEvent) -> str:
-    """Render NPC event from Aria's first-person POV.
-
-    - life: prefix with NPC name (it's something happening to them)
-    - aria_interaction: substitute "Aria" → "你" so it reads as Aria's memory
-    """
+def _format_for_aria_pov(npc: NPC, event: NPCEvent) -> str:
+    """Render NPC event from Aria's first-person POV."""
     raw = event.content.strip()
     if event.type == "aria_interaction":
-        # Generator was instructed to use "Aria" by name; swap to second-person
         swapped = raw.replace("Aria", "你")
         if swapped == raw:
-            # Generator didn't use the name explicitly — prefix the NPC name
             return f"{npc.name}{raw}"
         return swapped
-    # life event — prefix with NPC name as subject if not already there
     if raw.startswith(npc.name):
         return raw
     return f"{npc.name}{raw}"
