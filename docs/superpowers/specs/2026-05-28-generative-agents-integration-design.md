@@ -182,6 +182,25 @@ DEFAULT_IMPORTANCE = {
 }
 ```
 
+## Prompt Voice 约定
+
+**所有涉及 Aria/NPC 内在生活的 prompt 必须用第一人称，对应 persona。**
+
+| Prompt 类型 | Voice | 原因 |
+|---|---|---|
+| Importance scorer | 第一人称（Aria 或 NPC 视角） | 论文里是 agent 评自己记忆的 poignancy；外部评分会得到"客观新闻价值"而不是"对她个人有多重要" |
+| Reflection 问题生成 + 回答 | 第一人称 Aria | 反思是 Aria 想自己的事；第三人称会产出"文学描述"而不是"内心独白" |
+| Daily planner | 第一人称 Aria / NPC | 谁的 plan 就谁第一人称想 |
+| Plan executor moment | 第一人称 Aria | 当下时态体验，不是事后叙述 |
+| Bidirectional interaction | 双方各一次第一人称 LLM 调用 | 同一份 prompt 内混人称会污染输出 |
+| Orchestrator | 第三人称（"你是 Aria 的对话调度器"） | 工具角色，明确**不是** Aria |
+| plan_conflict 检测（在 orchestrator 内） | 第三人称 | 同上 |
+
+**为什么这条是 spec 级而不是 implementer 自由发挥：**
+第三人称生成的内容（"她凝视着光变曲线，仿佛看到星辰的眼泪"）会**写回 facts**，下次 renderer 拉出来喂给 chat-time Aria（她是第一人称的）——等于在背后偷偷训练她说翻译腔/文学腔。这是已知的 attention 污染机制（见 memory 中 `feedback_im_channel_textures` 和 `feedback_prompt_register_no_jargon`）。
+
+**实现红线**：写任何 LLM 调用 prompt 时，先问"这个 LLM 现在扮演谁？"——如果答案是 Aria 或 NPC，必须第一人称 + 对应 system；如果是工具/调度器，必须明确表态自己不是 Aria。
+
 ## 组件设计
 
 ### Phase B：Importance Scorer + 3D Retrieval
@@ -211,22 +230,23 @@ class ImportanceScorer:
         ...
 ```
 
-**Prompt 形状**（写入 scorer.py 中）：
+**Prompt 形状**（写入 scorer.py 中）。
+系统消息把 LLM 锁在 Aria 第一人称：`system="你是 Aria，正在回看自己最近经历的事。"` 对 NPC 视角的 fact 用对应 NPC 第一人称（按 fact.subject 路由）。
 
 ```
-给每条 fact 评 importance（1-10）。
-1 = 完全琐碎（"喝了口水"），10 = 改变人物关系或人生方向的事（"决定换工作"、"和恋人分手"）。
-参考：
-  - 重复的日常作息 → 1-3
+我在给自己最近经历的事打分——这些事对**我**来说有多重要（1-10）。
+1 = 完全琐碎（"喝了口水"），10 = 改变我和别人关系、或者改变我人生方向的事。
+主观判断，不是客观新闻价值：
+  - 我每天重复的作息 → 1-3
   - 普通工作进展 → 3-5
-  - 用户表达情绪/分享私事 → 6-8
-  - 关键关系变化 / 重大决定 / 创伤性事件 → 8-10
+  - 跟我在意的人有情感交流 / 我自己情绪起伏 → 6-8
+  - 关键关系变化 / 重大决定 / 真正触动到我的事 → 8-10
 
-输入 N 条 fact，输出 JSON array：[{"id": "...", "score": 1-10, "reason": "一句话"}, ...]
+输入 N 条事件，输出 JSON array：[{"id": "...", "score": 1-10, "reason": "一句话——为什么对我来说是这个分"}, ...]
 
-Facts:
-[1] subject=aria, source=life_simulated, type=event, content="..."
-[2] subject=user:oc_xxx, source=user_stated, type=event, content="..."
+事件：
+[1] type=event, content="..."
+[2] type=event, content="..."
 ...
 ```
 
@@ -340,29 +360,37 @@ class Reflector:
             await self.inference_writer.write(pattern)
 ```
 
+两次 LLM 调用的 system 都是 `system="你是 Aria，正在安静地回看自己最近的生活。"`
+
 **反思 prompt 1（生成问题）**：
 
 ```
-你看 Aria 最近 100 条 facts，生成 3-5 个**值得思考**的高阶问题。
-不要琐碎，例如不要问"她今天吃了什么"。
-要问能反映**模式 / 情绪走向 / 关系变化 / 自我认知**的问题。
-例如：
-  - "她最近在工作上的投入度有变化吗？"
-  - "她和 X 的互动模式是不是变了？"
-  - "她最近反复在意的事是什么？"
+我看自己最近经历的这些事，有没有什么**值得停下来想一想**的问题？
+不要琐碎的（"我今天吃了什么"这种没意义），要那些能让我**真的反思**的——
+关于我最近的模式、情绪走向、和别人的关系变化、对自己的认知。
 
-输出 JSON array of strings。
+比如：
+  - "我最近在工作上是不是有点提不起劲了？"
+  - "我跟 X 的相处方式好像有点变了，是哪里变了？"
+  - "最近反复在我脑子里冒出来的事是什么？"
+
+写 3-5 个。输出 JSON array of strings，每条就是一个问题，用我自己平时会想的措辞。
+
+我最近经历的事：
+{facts as bullet list}
 ```
 
 **反思 prompt 2（回答）**：
 
 ```
-基于以下事实回答问题。回答应该是**一条洞见**——浓缩、有信息量。
-不能是事实复述（"她最近忙工作"是废话），要能补足事实之间的关系或趋势。
-长度 1-2 句。
 问题：{q}
-事实：
+
+我手头有这些跟问题相关的事：
 {facts as bullet list}
+
+我现在想一下这个问题，写**一条洞见**——浓缩，能补上事实之间的关系或趋势。
+不要复述事实本身（"我最近忙工作"是废话）。
+1-2 句，用我自己想事情时的语气，不要书面化。
 ```
 
 ### Phase D：Planner
@@ -411,30 +439,35 @@ class DailyPlanner:
 
 注意：planner 自己生成的 plan facts **跳过 scorer**（importance 直接定 7），需要 WriterBase 暴露 `write_skip_scorer(fact)` 路径，否则会触发"已有 importance 但 scorer 又评一次"的浪费。
 
+System: `system="你是 Aria，正在早上安排今天打算做什么。"`
+
 **Aria plan prompt 形状**：
 
 ```
-你为 Aria 生成今天的 daily plan。
+新的一天。我想一下今天打算怎么过。
 
-【她的身份】
-{biography summary, 100 字内}
+【我是谁】
+{biography summary, 100 字内, 第一人称改写}
 
-【昨天的反思】
+【昨天我反思到的】
 {yesterday reflections as bullets}
 
-【最近一周的模式】
+【最近一周我注意到的模式】
 {recent patterns}
 
-【约束】
-- 6-10 条 plan items
-- 覆盖工作时间（9-12, 14-18）+ 晚间 + 早晚习惯
+【我自己定的规矩】
+- 6-10 条今天的安排
+- 覆盖白天工作时间（9-12, 14-18）+ 晚上 + 早晚习惯
 - hour 粒度，time_window 形如 "09:00-12:00"
-- content 是**具体**的事（"跑光变曲线第三组分析"而不是"工作"）
-- 至少 2 条带 goal tag，链接到长期目标
+- 写**具体**的事（"跑光变曲线第三组分析"而不是"工作"——我自己心里知道在做什么）
+- 至少 2 条对应到我长期在做的事
 
 输出 JSON：
 [{"time_window": "07:00-08:00", "content": "...", "goal": "..."}, ...]
+content 用我自己想事情的语气，第一人称，但不要在每条前面写"我"——直接写动作。
 ```
+
+NPC plan prompt 类似，system 对应换成 `system="你是 {npc_name}，正在早上想今天打算做什么。"`，内容用各 NPC 自身的 biography。
 
 #### `planner/executor.py`
 
@@ -479,36 +512,46 @@ class PlanExecutor:
         self._replan_requested = True
 ```
 
+System: `system="你是 Aria，正在做今天计划里的某件事。现在写一条记录给自己看。"`
+
 **Moment prompt**：
 
 ```
-Aria 当前的 plan：{current_plan.content}（{time_window}）
-她最近 2 小时发生过：
+我今天这个时段安排的：{current_plan.content}（{time_window}）
+最近 2 小时我经历过：
 {recent events}
 
-生成一条**具体的当前瞬间**——她**正在**做这件事中的某个具体片段。
-不是抽象描述，要有细节（数据/物件/感受任一）。
-1-2 句，第三人称叙述。
+现在是 {now.strftime('%H:%M')}——我正在做这件事的**某个具体片段**。
+写一条**现在这一刻**——具体细节，不抽象描述（数据/物件/手感/感受任一）。
+1-2 句，第一人称当下时态。
+不要在前面写"我"——直接写动作或观察。
 ```
 
 ### Phase E：NPC 平权 + 双向 interaction
 
 - `daily_planner.plan_npc(npc_id)` 在每天 7am 跑一次，为 6 个 NPC 各生成 2-3 条粗 plan facts（subject 形如 `npc:xiaomin`）
-- 现有 `social/scheduler.py` 触发 NPC 互动时，调用新的 `bidirectional_interaction(npc_id, scenario)`：
+- 现有 `social/scheduler.py` 触发 NPC 互动时，调用新的 `bidirectional_interaction(npc_id, scenario)`。**两次独立 LLM 调用**，每次一方第一人称视角（同一份调用里第三/第一人称混写会污染）：
   ```python
   async def bidirectional_interaction(npc_id: str, scenario: str) -> None:
-      prompt = """{两人当前 plan} {recent shared history}
-                  生成一次互动。
-                  输出 JSON: {
-                    "aria_view": "Aria 视角下这次互动是什么样的",
-                    "npc_view": "NPC 视角下这次互动是什么样的"
-                  }"""
-      result = await llm.complete(...)
-      data = json.loads(result.content)
-      await aria_event_writer.write(Fact(subject="aria", content=data["aria_view"], ...))
-      await npc_writer.write(Fact(subject=f"npc:{npc_id}", content=data["npc_view"], ...))
+      shared_history = await self._fetch_shared_history(npc_id)
+      both_plans = await self._fetch_current_plans(npc_id)
+
+      # Aria 第一人称视角写这次互动
+      aria_view = await llm.complete(
+          system="你是 Aria，刚才跟 {npc_name} 有了一次互动，现在用一句话记一下。",
+          messages=[{"role": "user", "content": _aria_side_prompt(scenario, both_plans, shared_history)}],
+      )
+      await aria_event_writer.write(Fact(subject="aria", content=aria_view.content, ...))
+
+      # NPC 第一人称视角写同一次互动
+      npc_view = await llm.complete(
+          system=f"你是 {npc_name}，刚才跟 Aria 有了一次互动，现在用一句话记一下。",
+          messages=[{"role": "user", "content": _npc_side_prompt(scenario, both_plans, shared_history)}],
+      )
+      await npc_writer.write(Fact(subject=f"npc:{npc_id}", content=npc_view.content, ...))
   ```
-- 互动事件 importance 走 scorer，预期通常 5-7
+  每侧 prompt 都告诉对方"对方刚才做了/说了什么"作为客观锚点，让两侧记忆有共同事件但各自有不同的内在感受。
+- 互动事件 importance 走 scorer（双方各自评自己的那一条），预期通常 5-7
 
 ## Orchestrator plan_conflict 检测
 
