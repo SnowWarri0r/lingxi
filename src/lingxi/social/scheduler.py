@@ -48,6 +48,7 @@ class SocialScheduler:
         npc_writer=None,
         life_writer=None,
         retriever=None,
+        fact_retriever=None,
     ):
         self._llm = llm
         self._graph = graph
@@ -63,6 +64,8 @@ class SocialScheduler:
         # Bidirectional interaction deps (aria_interaction events)
         self._life_writer = life_writer
         self._retriever = retriever
+        # For arc advancement: reads event history from facts table
+        self._fact_retriever = fact_retriever
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -136,7 +139,6 @@ class SocialScheduler:
         )
         bumped_arcs: set[str] = set()
         for ev in events:
-            await self._store.append_event(ev)
             if ev.type == "aria_interaction" and (
                 self._life_writer is not None
                 and self._retriever is not None
@@ -196,6 +198,7 @@ class SocialScheduler:
                 await advance_npc_arcs(
                     self._llm, npc, self._store,
                     now=now, model=self._model,
+                    fact_retriever=self._fact_retriever,
                 )
             except Exception as e:
                 print(f"[social] arc advance failed for {npc.id}: {e}", flush=True)
