@@ -144,6 +144,40 @@ async def test_count_by_subject(store):
 
 
 @pytest.mark.asyncio
+async def test_fts_rank_returns_normalized_scores(tmp_path):
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.models import Fact, Source, FactType
+    from datetime import datetime
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    f1 = Fact(subject="aria", content="光变曲线 数据分析", source=Source.LIFE_SIMULATED,
+              type=FactType.EVENT, ts=datetime.now())
+    f2 = Fact(subject="aria", content="喝咖啡", source=Source.LIFE_SIMULATED,
+              type=FactType.EVENT, ts=datetime.now())
+    await store.write(f1)
+    await store.write(f2)
+    ranks = await store.fts_rank("光变曲线", [f1.id, f2.id])
+    assert ranks[f1.id] > ranks[f2.id]
+    assert all(0.0 <= v <= 1.0 for v in ranks.values())
+
+
+@pytest.mark.asyncio
+async def test_update_last_accessed_writes_timestamp(tmp_path):
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.models import Fact, Source, FactType
+    from datetime import datetime, timedelta
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    f = Fact(subject="aria", content="x", source=Source.LIFE_SIMULATED,
+             type=FactType.EVENT, ts=datetime.now())
+    await store.write(f)
+    new_ts = datetime.now() + timedelta(hours=1)
+    await store.update_last_accessed([f.id], new_ts)
+    rows = await store.query(subject="aria", limit=1)
+    assert abs((rows[0].last_accessed - new_ts).total_seconds()) < 1
+
+
+@pytest.mark.asyncio
 async def test_store_persists_importance_and_last_accessed(tmp_path):
     from lingxi.facts.store import FactStore
     from lingxi.facts.models import Fact, Source, FactType
