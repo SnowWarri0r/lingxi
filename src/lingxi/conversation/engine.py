@@ -150,6 +150,7 @@ class ConversationEngine:
         npc_writer=None,
         inference_writer=None,
         world_writer=None,
+        plan_executor=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -166,6 +167,7 @@ class ConversationEngine:
         self.npc_writer = npc_writer
         self.inference_writer = inference_writer
         self.world_writer = world_writer
+        self.plan_executor = plan_executor
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -671,6 +673,9 @@ class ConversationEngine:
             f"anchor={decision.topic_anchor[:30]!r}",
             flush=True,
         )
+
+        if decision.plan_conflict and self.plan_executor is not None:
+            self.plan_executor.request_replan()
 
         # Persist thread_summary for next turn
         if decision.thread_summary:
