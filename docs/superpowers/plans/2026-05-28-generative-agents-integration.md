@@ -71,30 +71,613 @@ Before committing any task with an LLM call: grep the prompt for `她|他|"为 A
 
 ---
 
-## Phase A: P7 Cleanup (prerequisite)
+## Phase 0: Share Intent Migration (new — added after A.1 surfaced plan flaw)
 
-Goal: eliminate dual-write paths so Phases B–E can build on a clean substrate. After this phase, only `facts/*` writes exist; no old store still receives writes.
+Goal: move `wants_to_share` semantic off `inner_state.recent_events` into a sibling `ShareIntentStore`, so Phase A can delete old stores without breaking proactive opener.
 
-### Task A.1: Drop recent_events methods from inner_life/store.py
+After this phase: `promoter` writes via `LifeWriter` + `ShareIntentStore`; `proactive` reads from `ShareIntentStore` + `FactRetriever.fetch_by_id`. `recent_events` becomes simulator's private write buffer (no external readers), and dies naturally when simulator is replaced in D.7.
+
+### Task 0.1: Add FactRetriever.fetch_by_id()
 
 **Files:**
-- Modify: `src/lingxi/inner_life/store.py`
+- Modify: `src/lingxi/facts/retriever.py`
+- Modify: `src/lingxi/facts/store.py` (add `get_by_id`)
+- Test: `tests/facts/test_retriever_by_id.py`
 
-- [ ] **Step 1:** Read current `inner_life/store.py` to identify `recent_events` add/get/clear methods + the SQLite table itself.
+- [ ] **Step 1: Write failing test**
 
-- [ ] **Step 2:** Delete every method that touches `recent_events`. Keep methods for inner state that isn't yet migrated (mood, energy, agenda).
+```python
+import pytest
+from datetime import datetime
+from lingxi.facts.store import FactStore
+from lingxi.facts.retriever import FactRetriever
+from lingxi.facts.models import Fact, Source, FactType
 
-- [ ] **Step 3:** Remove the `CREATE TABLE recent_events ...` line from the `init()` method. Leave a one-line comment `# recent_events migrated to facts table (see facts/models.py FactType.EVENT)`.
 
-- [ ] **Step 4:** Grep `recent_events` across the codebase: `grep -rn recent_events src/ tests/`. For every remaining hit, either (a) update to use `FactRetriever.fetch(FactQuery(subject="aria", type=FactType.EVENT, ...))`, or (b) delete the call if it's dead since the facts migration.
+@pytest.mark.asyncio
+async def test_fetch_by_id_returns_fact(tmp_path):
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    f = Fact(subject="aria", content="x", source=Source.LIFE_SIMULATED,
+             type=FactType.EVENT, ts=datetime.now())
+    await store.append(f)
+    r = FactRetriever(store)
+    found = await r.fetch_by_id(f.id)
+    assert found is not None
+    assert found.id == f.id
 
-- [ ] **Step 5:** Run: `pytest tests/inner_life -v`. Expected: PASS (or modify tests to match).
 
-- [ ] **Step 6:** Commit:
-```bash
-git add src/lingxi/inner_life/store.py tests/inner_life
-git commit -m "P7: drop recent_events from inner_life store (now in facts)"
+@pytest.mark.asyncio
+async def test_fetch_by_id_returns_none_for_missing(tmp_path):
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    r = FactRetriever(store)
+    found = await r.fetch_by_id("nonexistent")
+    assert found is None
 ```
+
+- [ ] **Step 2:** Run. Expected: FAIL.
+
+- [ ] **Step 3: Implement**
+
+In `FactStore`:
+```python
+async def get_by_id(self, fact_id: str) -> Fact | None:
+    rows = await self._conn.execute_fetchall(
+        "SELECT * FROM facts WHERE id = ?", (fact_id,)
+    )
+    if not rows:
+        return None
+    return self._row_to_fact(rows[0])
+```
+
+In `FactRetriever`:
+```python
+async def fetch_by_id(self, fact_id: str) -> Fact | None:
+    return await self._store.get_by_id(fact_id)
+```
+
+- [ ] **Step 4:** Run. Expected: PASS.
+
+- [ ] **Step 5: Commit**
+```bash
+git add src/lingxi/facts/retriever.py src/lingxi/facts/store.py tests/facts/test_retriever_by_id.py
+git commit -m "facts: add FactRetriever.fetch_by_id() for share intent path"
+```
+
+### Task 0.2: Create ShareIntentStore
+
+**Files:**
+- Create: `src/lingxi/proactive/__init__.py`
+- Create: `src/lingxi/proactive/share_intent.py`
+- Create: `tests/proactive/__init__.py`
+- Create: `tests/proactive/test_share_intent.py`
+
+- [ ] **Step 1: Create dirs**
+```bash
+mkdir -p src/lingxi/proactive tests/proactive
+touch src/lingxi/proactive/__init__.py tests/proactive/__init__.py
+```
+
+- [ ] **Step 2: Write failing tests**
+
+```python
+import pytest
+from datetime import datetime, timedelta
+
+
+@pytest.mark.asyncio
+async def test_queue_and_pending(tmp_path):
+    from lingxi.proactive.share_intent import ShareIntentStore
+    s = ShareIntentStore(tmp_path)
+    queued = await s.queue("fact1", "xiaomin", 0.7)
+    assert queued is True
+    pending = await s.pending()
+    assert len(pending) == 1
+    assert pending[0].fact_id == "fact1"
+    assert pending[0].source_npc == "xiaomin"
+    assert pending[0].significance == 0.7
+
+
+@pytest.mark.asyncio
+async def test_queue_respects_cooldown(tmp_path):
+    from lingxi.proactive.share_intent import ShareIntentStore
+    s = ShareIntentStore(tmp_path, cooldown_hours=24)
+    assert await s.queue("fact1", "xiaomin", 0.7) is True
+    # Same NPC, immediately retry — cooldown blocks
+    assert await s.queue("fact2", "xiaomin", 0.8) is False
+    # Different NPC — allowed
+    assert await s.queue("fact3", "echo", 0.7) is True
+
+
+@pytest.mark.asyncio
+async def test_consume_removes_from_pending(tmp_path):
+    from lingxi.proactive.share_intent import ShareIntentStore
+    s = ShareIntentStore(tmp_path)
+    await s.queue("fact1", "xiaomin", 0.7)
+    await s.queue("fact2", "echo", 0.6)
+    await s.consume("fact1")
+    pending = await s.pending()
+    assert len(pending) == 1
+    assert pending[0].fact_id == "fact2"
+
+
+@pytest.mark.asyncio
+async def test_persists_across_instances(tmp_path):
+    from lingxi.proactive.share_intent import ShareIntentStore
+    s1 = ShareIntentStore(tmp_path)
+    await s1.queue("fact1", "xiaomin", 0.7)
+    s2 = ShareIntentStore(tmp_path)
+    pending = await s2.pending()
+    assert len(pending) == 1
+```
+
+- [ ] **Step 3:** Run. Expected: FAIL.
+
+- [ ] **Step 4: Implement**
+
+`src/lingxi/proactive/share_intent.py`:
+```python
+"""Transient share-intent queue for proactive opener.
+
+Separated from Fact storage because Facts are immutable observations
+while share intent is a mutable decision-with-lifecycle (queued →
+voiced → consumed). Cooldown lives here too — natural pairing.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from dataclasses import dataclass, asdict
+from datetime import datetime, timedelta
+from pathlib import Path
+
+
+@dataclass
+class ShareIntent:
+    fact_id: str
+    source_npc: str
+    significance: float
+    queued_at: datetime
+
+
+class ShareIntentStore:
+    def __init__(self, data_dir: Path | str, cooldown_hours: int = 24):
+        self._path = Path(data_dir) / "proactive" / "share_intents.json"
+        self._cooldown = timedelta(hours=cooldown_hours)
+        self._lock = asyncio.Lock()
+
+    async def queue(self, fact_id: str, source_npc: str, significance: float) -> bool:
+        """Add intent. Returns False if source_npc is in cooldown."""
+        async with self._lock:
+            data = await self._load()
+            cooldown_at_iso = data.get("cooldown_at", {}).get(source_npc)
+            if cooldown_at_iso:
+                try:
+                    last = datetime.fromisoformat(cooldown_at_iso)
+                    if datetime.now() - last < self._cooldown:
+                        return False
+                except ValueError:
+                    pass
+            now = datetime.now()
+            data.setdefault("pending", []).append({
+                "fact_id": fact_id,
+                "source_npc": source_npc,
+                "significance": significance,
+                "queued_at": now.isoformat(),
+            })
+            data.setdefault("cooldown_at", {})[source_npc] = now.isoformat()
+            await self._save(data)
+            return True
+
+    async def pending(self) -> list[ShareIntent]:
+        data = await self._load()
+        items = data.get("pending", [])
+        result = []
+        for item in items:
+            try:
+                result.append(ShareIntent(
+                    fact_id=item["fact_id"],
+                    source_npc=item["source_npc"],
+                    significance=float(item["significance"]),
+                    queued_at=datetime.fromisoformat(item["queued_at"]),
+                ))
+            except (KeyError, ValueError):
+                continue
+        return result
+
+    async def consume(self, fact_id: str) -> None:
+        async with self._lock:
+            data = await self._load()
+            data["pending"] = [
+                p for p in data.get("pending", [])
+                if p.get("fact_id") != fact_id
+            ]
+            await self._save(data)
+
+    async def is_in_cooldown(self, source_npc: str) -> bool:
+        data = await self._load()
+        cooldown_at_iso = data.get("cooldown_at", {}).get(source_npc)
+        if not cooldown_at_iso:
+            return False
+        try:
+            last = datetime.fromisoformat(cooldown_at_iso)
+        except ValueError:
+            return False
+        return datetime.now() - last < self._cooldown
+
+    async def _load(self) -> dict:
+        if not self._path.exists():
+            return {"pending": [], "cooldown_at": {}}
+        try:
+            text = await asyncio.to_thread(self._path.read_text, encoding="utf-8")
+            data = json.loads(text)
+            return data if isinstance(data, dict) else {"pending": [], "cooldown_at": {}}
+        except Exception:
+            return {"pending": [], "cooldown_at": {}}
+
+    async def _save(self, data: dict) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self._path.with_suffix(".tmp")
+
+        def _write():
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            tmp.replace(self._path)
+
+        await asyncio.to_thread(_write)
+```
+
+- [ ] **Step 5:** Run: `pytest tests/proactive -v`. Expected: PASS.
+
+- [ ] **Step 6: Commit**
+```bash
+git add src/lingxi/proactive tests/proactive
+git commit -m "proactive: ShareIntentStore (replaces wants_to_share semantic)"
+```
+
+### Task 0.3: Refactor SocialPromoter to use facts + ShareIntentStore
+
+**Files:**
+- Modify: `src/lingxi/social/promoter.py`
+- Modify: `tests/social/test_promoter.py` (if exists; adjust)
+
+- [ ] **Step 1: Read current promoter** at `src/lingxi/social/promoter.py` to confirm shape (constructor, `maybe_promote` body).
+
+- [ ] **Step 2: Write failing test**
+
+```python
+import pytest
+from datetime import datetime
+from lingxi.facts.store import FactStore
+from lingxi.facts.retriever import FactRetriever
+from lingxi.facts.writers.life import LifeWriter
+from lingxi.facts.models import FactType
+
+
+@pytest.mark.asyncio
+async def test_promoter_writes_fact_and_queues_intent(tmp_path):
+    from lingxi.social.promoter import SocialPromoter
+    from lingxi.social.models import NPC, NPCEvent
+    from lingxi.proactive.share_intent import ShareIntentStore
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    life_writer = LifeWriter(store, scorer=None)
+    intent_store = ShareIntentStore(tmp_path)
+    promoter = SocialPromoter(life_writer, intent_store, threshold=0.6)
+
+    npc = NPC(id="xiaomin", name="小敏")
+    event = NPCEvent(
+        type="aria_interaction",
+        content="Aria 给我加油打气了",
+        significance=0.7,
+        ts=datetime.now(),
+        promoted_to_aria=False,
+    )
+    promoted = await promoter.maybe_promote(npc, event)
+    assert promoted is True
+
+    facts = await store.query(subject="aria", type=FactType.EVENT, limit=5)
+    assert len(facts) == 1
+    assert "小敏" in facts[0].content or "你" in facts[0].content
+    assert any(t.startswith("from_npc:xiaomin") for t in facts[0].tags)
+
+    intents = await intent_store.pending()
+    assert len(intents) == 1
+    assert intents[0].fact_id == facts[0].id
+
+
+@pytest.mark.asyncio
+async def test_promoter_respects_cooldown(tmp_path):
+    from lingxi.social.promoter import SocialPromoter
+    from lingxi.social.models import NPC, NPCEvent
+    from lingxi.proactive.share_intent import ShareIntentStore
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    promoter = SocialPromoter(
+        LifeWriter(store, scorer=None),
+        ShareIntentStore(tmp_path),
+        threshold=0.6,
+    )
+    npc = NPC(id="xiaomin", name="小敏")
+    e1 = NPCEvent(type="aria_interaction", content="Aria a", significance=0.7,
+                  ts=datetime.now(), promoted_to_aria=False)
+    e2 = NPCEvent(type="aria_interaction", content="Aria b", significance=0.7,
+                  ts=datetime.now(), promoted_to_aria=False)
+    assert await promoter.maybe_promote(npc, e1) is True
+    assert await promoter.maybe_promote(npc, e2) is False
+```
+
+- [ ] **Step 3:** Run. Expected: FAIL.
+
+- [ ] **Step 4: Implement**
+
+Rewrite `src/lingxi/social/promoter.py`:
+```python
+"""Promote significant NPC events into Aria's facts + share-intent queue.
+
+Was: write LifeEvent(wants_to_share=True) into inner_state.recent_events.
+Now: write Fact(subject="aria", tags=[...]) via LifeWriter + ShareIntentStore.queue().
+
+The two safeguards (per-NPC cooldown, idempotency via NPCEvent.promoted_to_aria)
+remain. Cooldown lives in ShareIntentStore now.
+"""
+
+from __future__ import annotations
+
+from lingxi.facts.models import Fact, FactType, Source
+from lingxi.facts.writers.life import LifeWriter
+from lingxi.proactive.share_intent import ShareIntentStore
+from lingxi.social.models import NPC, NPCEvent
+
+
+DEFAULT_THRESHOLD = 0.6
+
+
+class SocialPromoter:
+    def __init__(
+        self,
+        life_writer: LifeWriter,
+        share_intent_store: ShareIntentStore,
+        *,
+        threshold: float = DEFAULT_THRESHOLD,
+        social_store=None,  # optional, for marking NPCEvent.promoted_to_aria
+    ):
+        self._life_writer = life_writer
+        self._share_intent = share_intent_store
+        self._threshold = threshold
+        self._social = social_store
+
+    async def maybe_promote(self, npc: NPC, event: NPCEvent) -> bool:
+        if event.type != "aria_interaction":
+            return False
+        if event.significance < self._threshold:
+            return False
+        if event.promoted_to_aria:
+            return False
+        if await self._share_intent.is_in_cooldown(npc.id):
+            return False
+
+        content = _format_for_aria_pov(npc, event)
+        fact = Fact(
+            subject="aria",
+            content=content,
+            source=Source.NPC_TICKER,
+            type=FactType.EVENT,
+            ts=event.ts,
+            tags=[
+                f"from_npc:{npc.id}",
+                f"significance:{event.significance:.2f}",
+            ],
+        )
+        await self._life_writer.write(fact)
+        queued = await self._share_intent.queue(fact.id, npc.id, event.significance)
+        if not queued:
+            # cooldown race — fact already written, just skip the intent
+            return False
+        if self._social is not None:
+            try:
+                await self._social.mark_event_promoted(npc.id, event.ts)
+            except Exception as e:
+                print(f"[promoter] mark_event_promoted failed: {e}", flush=True)
+        print(
+            f"[social.promoter] +push {npc.id} sig={event.significance:.2f}: "
+            f"{content[:50]}...",
+            flush=True,
+        )
+        return True
+
+
+def _format_for_aria_pov(npc: NPC, event: NPCEvent) -> str:
+    """Render NPC event from Aria's first-person POV."""
+    raw = event.content.strip()
+    if event.type == "aria_interaction":
+        swapped = raw.replace("Aria", "你")
+        if swapped == raw:
+            return f"{npc.name}{raw}"
+        return swapped
+    if raw.startswith(npc.name):
+        return raw
+    return f"{npc.name}{raw}"
+```
+
+- [ ] **Step 5:** Update `src/lingxi/channels/feishu.py` and any other constructor sites:
+- Grep: `grep -n "SocialPromoter(" src/`
+- Change construction from `SocialPromoter(inner_store, social_store, data_dir)` to `SocialPromoter(life_writer, share_intent_store, social_store=social_store)`. App bootstrap (in `app.py` and `channels/feishu.py`) needs to construct `share_intent_store = ShareIntentStore(data_dir)` and pass `life_writer` (which is already built per facts refactor).
+
+- [ ] **Step 6:** Run: `pytest tests/social -v` and `pytest tests/proactive -v`. Expected: PASS.
+
+- [ ] **Step 7: Commit**
+```bash
+git add src/lingxi/social/promoter.py src/lingxi/channels/feishu.py src/lingxi/app.py tests/social tests/proactive
+git commit -m "social/promoter: write to facts + ShareIntentStore (no more inner_state.recent_events)"
+```
+
+### Task 0.4: Refactor proactive.py to read ShareIntentStore
+
+**Files:**
+- Modify: `src/lingxi/temporal/proactive.py`
+- Modify: tests if existing tests reference `wants_to_share`
+
+- [ ] **Step 1: Read current proactive.py** sections that touch `recent_events` / `wants_to_share`. Confirmed earlier: lines 517–573 (`_mark_event_shared`), and read sites around `prompt_builder` integration that filter events for proactive selection.
+
+- [ ] **Step 2:** Grep all proactive-side reads:
+```bash
+grep -n "recent_events\|wants_to_share" src/lingxi/temporal/proactive.py src/lingxi/persona/prompt_builder.py
+```
+
+- [ ] **Step 3: Write failing test**
+
+```python
+import pytest
+from datetime import datetime
+from lingxi.facts.store import FactStore
+from lingxi.facts.retriever import FactRetriever
+from lingxi.facts.writers.life import LifeWriter
+from lingxi.facts.models import Fact, Source, FactType
+from lingxi.proactive.share_intent import ShareIntentStore
+
+
+@pytest.mark.asyncio
+async def test_proactive_picks_pending_intent(tmp_path):
+    """Find_pending_intent returns the highest-significance queued intent."""
+    from lingxi.temporal.proactive import find_pending_share  # extract function
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    life_writer = LifeWriter(store, scorer=None)
+    intent_store = ShareIntentStore(tmp_path)
+    retriever = FactRetriever(store)
+
+    f1 = Fact(subject="aria", content="低 sig 事件", source=Source.NPC_TICKER,
+              type=FactType.EVENT, ts=datetime.now())
+    f2 = Fact(subject="aria", content="高 sig 事件", source=Source.NPC_TICKER,
+              type=FactType.EVENT, ts=datetime.now())
+    await life_writer.write(f1)
+    await life_writer.write(f2)
+    await intent_store.queue(f1.id, "echo", 0.6)
+    await intent_store.queue(f2.id, "xiaomin", 0.9)
+
+    result = await find_pending_share(intent_store, retriever)
+    assert result is not None
+    intent, fact = result
+    assert fact.id == f2.id
+
+
+@pytest.mark.asyncio
+async def test_consume_after_voiced(tmp_path):
+    from lingxi.temporal.proactive import find_pending_share
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    life_writer = LifeWriter(store, scorer=None)
+    intent_store = ShareIntentStore(tmp_path)
+    retriever = FactRetriever(store)
+
+    f = Fact(subject="aria", content="测试事件", source=Source.NPC_TICKER,
+             type=FactType.EVENT, ts=datetime.now())
+    await life_writer.write(f)
+    await intent_store.queue(f.id, "xiaomin", 0.7)
+
+    # voicing — consume
+    await intent_store.consume(f.id)
+    result = await find_pending_share(intent_store, retriever)
+    assert result is None
+```
+
+- [ ] **Step 4:** Run. Expected: FAIL (function missing).
+
+- [ ] **Step 5: Implement**
+
+Extract a top-level helper in `src/lingxi/temporal/proactive.py`:
+```python
+async def find_pending_share(
+    intent_store: ShareIntentStore,
+    retriever: FactRetriever,
+) -> tuple[ShareIntent, Fact] | None:
+    intents = await intent_store.pending()
+    if not intents:
+        return None
+    intents.sort(key=lambda i: -i.significance)
+    for intent in intents:
+        fact = await retriever.fetch_by_id(intent.fact_id)
+        if fact is not None:
+            return (intent, fact)
+        # stale intent (fact deleted) — clean up
+        await intent_store.consume(intent.fact_id)
+    return None
+```
+
+Refactor existing `_mark_event_shared` to:
+```python
+async def _mark_event_shared(self, message: str) -> None:
+    """Find the queued intent whose fact content overlaps with message,
+    consume it. Replaces the recent_events / wants_to_share mutation path.
+    """
+    if self.share_intent_store is None or not message:
+        return
+    pending = await self.share_intent_store.pending()
+    best_id: str | None = None
+    best_score = 0
+    for intent in pending:
+        fact = await self.fact_retriever.fetch_by_id(intent.fact_id)
+        if fact is None:
+            continue
+        score = _content_overlap(fact.content, message.strip())
+        if score >= 4 and score > best_score:
+            best_score = score
+            best_id = intent.fact_id
+    if best_id:
+        await self.share_intent_store.consume(best_id)
+        print(f"[proactive] consumed share intent for fact={best_id[:8]}...",
+              flush=True)
+```
+
+Update the proactive opener's "pick what to say" path to call `find_pending_share` instead of filtering `state.recent_events`. The exact integration depends on the existing `_maybe_reach_out` / `_ask_llm` flow — the rule is: where it used to read `recent_events` filtered by `wants_to_share`, now call `find_pending_share`; use the returned `fact.content` as the source text.
+
+Update `ProactiveOpener.__init__` to take `share_intent_store: ShareIntentStore` and `fact_retriever: FactRetriever`. Pass through from `app.py` / `feishu.py` construction.
+
+Remove references to `engine.inner_life_store.update_state` / `state.recent_events` / `wants_to_share` from proactive.py.
+
+Also: `persona/prompt_builder.py` reads `state.recent_events[:8]` for proactive mode (per earlier grep). This must change to read from the queued intents — i.e., the renderer for "what proactive event Aria is voicing" pulls from `find_pending_share`. Or pass the chosen fact's content directly into the prompt builder via the caller.
+
+For Phase 0 simplicity, the prompt_builder proactive section becomes: caller (proactive opener) resolves the share via `find_pending_share`, formats the fact content, passes to prompt_builder as a parameter rather than prompt_builder reading the store. This requires:
+1. `PromptBuilder.build_proactive(...)` takes a `pending_share: Fact | None` arg
+2. In its body, replace `state.recent_events[:8]` reads with rendering of the passed fact
+3. Caller in `proactive.py` resolves once and passes
+
+- [ ] **Step 6:** Run: `pytest tests/proactive tests/temporal -v`. Expected: PASS.
+
+- [ ] **Step 7: Commit**
+```bash
+git add src/lingxi/temporal/proactive.py src/lingxi/persona/prompt_builder.py src/lingxi/app.py src/lingxi/channels/feishu.py tests/
+git commit -m "proactive: read from ShareIntentStore (drop recent_events/wants_to_share reads)"
+```
+
+---
+
+## Phase A: P7 Cleanup (revised — Phase 0 already moved share intent off recent_events)
+
+After Phase 0, `recent_events` is simulator's private write buffer with no external readers. The simulator itself is deleted in D.7 — at which point `recent_events` becomes orphaned in `InnerState`. We can leave the field in place during Phase A and let D.7 do the final removal, since it's harmless.
+
+Tasks A.2–A.10 below proceed as originally written.
+
+### Task A.1: (no-op) Verify share intent migration left no recent_events readers
+
+**Files:** (none modified)
+
+- [ ] **Step 1:** Grep for any remaining `recent_events` reads outside `inner_life/simulator.py`:
+```bash
+grep -rn "recent_events" src/lingxi/ tests/ \
+  | grep -v "inner_life/simulator.py" \
+  | grep -v "inner_life/models.py"
+```
+
+- [ ] **Step 2:** Expected: empty (or only comments). If hits exist (e.g. `prompt_builder.py` still has `state.recent_events[:8]`), they must be migrated to read facts or the share intent — re-open Task 0.4 and finish.
+
+- [ ] **Step 3:** No commit (no changes).
 
 ### Task A.2: Delete relational module
 

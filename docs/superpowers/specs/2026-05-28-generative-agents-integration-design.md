@@ -50,14 +50,134 @@
 
 ### Prerequisite
 
-**P7 cleanup 必须先于本 spec 实施。** 当前 refactor/facts-arch 分支仍有 dual-write（旧 store + 新 facts），不清就上新机制会变三重写，调试地狱。P7 cleanup 范围：
-- 删 `inner_life/store.py` 的 recent_events 部分
-- 删 `relational/store.py`、`social/store.py`、`social/promoter.py`、`world/store.py`
-- 删 PromptBuilder 中残余 dynamic section 方法
-- 解除 simulator/scheduler/reflection 中的 dual-write 路径
-- 删 `tools/migrate_to_facts.py`（一次性脚本）
+**P7 cleanup 必须先于本 spec 实施。** 当前 refactor/facts-arch 分支仍有 dual-write（旧 store + 新 facts），不清就上新机制会变三重写。
 
-P7 cleanup 是独立工作，单独的 plan。本 spec 假设 P7 已完成。
+**关键发现（P7 实施时浮现）**：`inner_state.recent_events` 上的 `wants_to_share: bool` 是 proactive opener 的核心信号——`SocialPromoter` 把 significance≥0.6 的 NPC event 推进 Aria 的 recent_events 并标 `wants_to_share=True`，`proactive.py` 按这个 flag 决定开口说什么，voice 后 `_mark_event_shared` 清回 False。Fact model **不能**直接吸收这个语义（fact 是不可变观察，share intent 是带 cooldown 的瞬时决策）。
+
+**解法**：Phase A 之前新增 Phase 0（"share intent 迁移"）：
+- 新模块 `lingxi/proactive/share_intent.py`：JSON-based 小 store，记录 `[{fact_id, source_npc, ts}]` 列表 + per-NPC cooldown timestamps
+- 改 `social/promoter.py`：写 facts（`LifeWriter` 落 subject="aria" 的"Aria 听说 X"事件）+ 同步往 `ShareIntentStore` 加一条
+- 改 `temporal/proactive.py`：opener 决策从 "读 `inner_state.recent_events`" 改为 "读 `ShareIntentStore.pending()` → 拿 fact_id → `FactRetriever` 取 fact 内容"；voiced 后调 `ShareIntentStore.consume(fact_id)` 删除
+- 然后才能安全删 `inner_state.recent_events`
+
+Phase A 实施顺序：
+1. **Phase 0**：share intent 迁移（新）→ 4 个 task
+2. **Phase A**：原 P7 cleanup（删旧 store、解 dual-write、trim PromptBuilder、删迁移脚本）
+
+P7 cleanup 在本 spec 内执行，不再"独立 plan"。其余 Phase B/C/D/E 假设 Phase 0+A 完成。
+
+## Share Intent 设计（Phase 0）
+
+**职责分离原则**：
+- `Fact` = 不可变观察记录（"听小敏说她答辩了"）
+- `ShareIntentStore` = 瞬时决策（"这条 fact 还没说给用户、应该说"）+ 防火墙（cooldown、idempotency）
+
+### `lingxi/proactive/share_intent.py` 接口
+
+```python
+@dataclass
+class ShareIntent:
+    fact_id: str          # 指向 facts 表
+    source_npc: str       # 触发来源（cooldown key）
+    significance: float   # 原 NPCEvent.significance
+    queued_at: datetime
+
+class ShareIntentStore:
+    """File-based: data/proactive/share_intents.json"""
+
+    async def queue(self, fact_id: str, source_npc: str, significance: float) -> bool:
+        """Add intent if not in cooldown. Returns True if queued."""
+
+    async def pending(self) -> list[ShareIntent]:
+        """All un-consumed intents, newest first."""
+
+    async def consume(self, fact_id: str) -> None:
+        """Mark as voiced; remove from pending."""
+
+    async def is_in_cooldown(self, source_npc: str) -> bool:
+        """24h cooldown per NPC. Reads from cooldown_at[npc_id]."""
+```
+
+数据布局：
+```json
+{
+  "pending": [
+    {"fact_id": "abc123", "source_npc": "xiaomin", "significance": 0.7,
+     "queued_at": "2026-05-28T10:30:00"}
+  ],
+  "cooldown_at": {
+    "xiaomin": "2026-05-28T10:30:00"
+  }
+}
+```
+
+### 改 `social/promoter.py`
+
+```python
+class SocialPromoter:
+    def __init__(self, life_writer, share_intent_store, ...):
+        self._life_writer = life_writer
+        self._share_intent = share_intent_store
+        # 删 self._inner
+
+    async def maybe_promote(self, npc, event) -> bool:
+        # 现有的过滤 (type/threshold/promoted_to_aria) 保留
+        if await self._share_intent.is_in_cooldown(npc.id):
+            return False
+
+        content = _format_for_aria_pov(npc, event)
+        fact = Fact(
+            subject="aria",
+            content=content,
+            source=Source.NPC_TICKER,  # NPC 是原始来源
+            type=FactType.EVENT,
+            ts=event.ts,
+            tags=[f"from_npc:{npc.id}", f"significance:{event.significance:.2f}"],
+        )
+        await self._life_writer.write(fact)
+        await self._share_intent.queue(fact.id, npc.id, event.significance)
+        # 还要标 NPCEvent.promoted_to_aria=True（原 social 流程，不动）
+        return True
+```
+
+### 改 `temporal/proactive.py`
+
+```python
+# 原：state.recent_events 过滤 wants_to_share
+# 改：
+async def _find_pending_intent(self):
+    intents = await self.share_intent.pending()
+    if not intents:
+        return None
+    # 取最高 significance 的那条
+    intents.sort(key=lambda i: -i.significance)
+    top = intents[0]
+    fact = await self.fact_retriever.fetch_by_id(top.fact_id)
+    if fact is None:
+        # 数据漂移，清掉这条 intent
+        await self.share_intent.consume(top.fact_id)
+        return None
+    return (top, fact)
+
+# voiced 后：
+async def _mark_event_shared(self, message: str):
+    # 原 content 模糊匹配换成精确 fact_id 匹配
+    intents = await self.share_intent.pending()
+    for intent in intents:
+        fact = await self.fact_retriever.fetch_by_id(intent.fact_id)
+        if fact and _content_overlap(fact.content, message) >= 4:
+            await self.share_intent.consume(intent.fact_id)
+            return
+```
+
+`FactRetriever.fetch_by_id(fact_id)` 是新增方法，单 fact 查找。
+
+### 为什么这样切
+
+- **Fact 保持纯净**：永远不需要回头改一个 fact 的 tag，避免 mutation
+- **Share intent 自包含**：cooldown、idempotency、清理全在一个文件里
+- **可调试性**：share_intents.json 一打开就能看到现在有什么待说
+- **拆解干净**：Phase 0 完成后 inner_state.recent_events 没人读了，Phase A 删除是无害的
 
 ## Architecture
 
