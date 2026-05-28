@@ -292,6 +292,17 @@ async def create_engine(
     reflector = Reflector(llm_provider, fact_retriever, inference_writer)
     trigger_holder.set(ReflectionTrigger(reflector))
 
+    # Daily planner + plan executor (D.7)
+    # DailyPlanner: generates Aria's daily task plan as Facts at 7am.
+    # PlanExecutor: runs every 30min to execute plan steps, replans on conflict.
+    from lingxi.planner.daily_planner import DailyPlanner
+    from lingxi.planner.executor import PlanExecutor
+
+    daily_planner = DailyPlanner(llm_provider, fact_retriever, life_writer)
+    plan_executor = PlanExecutor(
+        llm_provider, fact_retriever, life_writer, planner=daily_planner
+    )
+
     # Create engine
     engine = ConversationEngine(
         persona=persona,
@@ -314,7 +325,10 @@ async def create_engine(
         npc_writer=npc_writer,
         inference_writer=inference_writer,
         world_writer=world_writer,
+        plan_executor=plan_executor,
     )
+    # Expose daily_planner on engine so the channel's start() can schedule loops.
+    engine.daily_planner = daily_planner
 
     # Load persisted state
     await engine.load_state()
