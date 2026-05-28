@@ -5,6 +5,8 @@ Two tables:
 - subjective/<recipient_key>.json — per-recipient subjective views
 - agenda/<recipient_key>.json — per-recipient agenda items
 - diary/<YYYY-MM-DD>.json — daily diary archive
+
+# recent_events migrated to facts table (see facts/models.py FactType.EVENT)
 """
 
 from __future__ import annotations
