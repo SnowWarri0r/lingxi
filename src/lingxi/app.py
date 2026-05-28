@@ -253,14 +253,44 @@ async def create_engine(
     from lingxi.facts.writers.npc import NPCWriter
     from lingxi.facts.writers.inference import InferenceWriter
     from lingxi.facts.writers.world import WorldWriter
+    from lingxi.facts.writers.user_statement import UserStatementWriter
+    from lingxi.facts.reflector import Reflector
+    from lingxi.facts.reflection_trigger import ReflectionTrigger
+
     facts_store = FactStore(Path(data_dir).parent / "facts.db")
     await facts_store.init()
     fact_retriever = FactRetriever(facts_store)
     importance_scorer = ImportanceScorer(llm_provider)
-    life_writer = LifeWriter(facts_store, scorer=importance_scorer)
+
+    # _LazyTrigger breaks the init cycle: writers need a trigger ref, but the
+    # real ReflectionTrigger needs a Reflector, which needs InferenceWriter first.
+    # The holder is populated after all writers are built.
+    class _LazyTrigger:
+        """Forwards observe() to the real ReflectionTrigger once it's set.
+        Calls before set() are silently dropped (only possible during boot)."""
+        def __init__(self) -> None:
+            self._target: ReflectionTrigger | None = None
+
+        def set(self, trigger: ReflectionTrigger) -> None:
+            self._target = trigger
+
+        async def observe(self, n: int) -> None:
+            if self._target is not None:
+                await self._target.observe(n)
+
+    trigger_holder = _LazyTrigger()
+
+    # Aria-side writers receive the trigger holder (life, user_statement, inference).
+    # NPC + world writers are background writers — Aria doesn't reflect on those.
+    life_writer = LifeWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
+    user_statement_writer = UserStatementWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
+    inference_writer = InferenceWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
     npc_writer = NPCWriter(facts_store, scorer=importance_scorer)
-    inference_writer = InferenceWriter(facts_store, scorer=importance_scorer)
     world_writer = WorldWriter(facts_store, scorer=importance_scorer)
+
+    # Build reflector + real trigger, then wire into the holder.
+    reflector = Reflector(llm_provider, fact_retriever, inference_writer)
+    trigger_holder.set(ReflectionTrigger(reflector))
 
     # Create engine
     engine = ConversationEngine(
