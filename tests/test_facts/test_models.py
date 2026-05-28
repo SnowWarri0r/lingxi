@@ -64,3 +64,32 @@ class TestFact:
             supersedes=old.id,
         )
         assert new.supersedes == old.id
+
+    def test_fact_has_importance_field_optional(self):
+        from lingxi.facts.models import Fact, Source, FactType
+        from datetime import datetime
+        f = Fact(
+            subject="aria",
+            content="test",
+            source=Source.LIFE_SIMULATED,
+            type=FactType.EVENT,
+            ts=datetime.now(),
+        )
+        assert f.importance is None
+        assert f.last_accessed is None
+
+    def test_fact_accepts_importance_and_last_accessed(self):
+        from lingxi.facts.models import Fact, Source, FactType
+        from datetime import datetime
+        now = datetime.now()
+        f = Fact(
+            subject="aria",
+            content="test",
+            source=Source.LIFE_SIMULATED,
+            type=FactType.EVENT,
+            ts=now,
+            importance=7,
+            last_accessed=now,
+        )
+        assert f.importance == 7
+        assert f.last_accessed == now

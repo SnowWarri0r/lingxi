@@ -62,6 +62,8 @@ class Fact(BaseModel):
     ts: datetime
     written_at: datetime = Field(default_factory=datetime.now)
     confidence: float | None = None
+    importance: int | None = None
+    last_accessed: datetime | None = None
     expires_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     supersedes: str | None = None
