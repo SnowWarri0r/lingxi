@@ -367,20 +367,31 @@ class FeishuBot(OutboundChannel):
         loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         loop_thread.start()
 
+        # Shared data_dir for proactive + social schedulers
+        data_dir = (
+            getattr(self.engine.memory, "data_dir", None)
+            or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
+        )
+
+        # Build share_intent_store early so both ProactiveScheduler and
+        # SocialPromoter share the same queue (promoter writes, proactive reads).
+        _share_intent_store = None
+        if getattr(self.engine, "life_writer", None) is not None:
+            from lingxi.proactive.share_intent import ShareIntentStore
+            _share_intent_store = ShareIntentStore(data_dir)
+
         # Start proactive scheduler on our dedicated loop
         if self._proactive_config.enabled and self.engine.interaction_tracker:
             # Pass the memory data_dir so anti-repetition history persists
             # across restarts (otherwise Aria forgets what she just sent)
-            data_dir = (
-                getattr(self.engine.memory, "data_dir", None)
-                or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
-            )
             self._proactive_scheduler = ProactiveScheduler(
                 config=self._proactive_config,
                 tracker=self.engine.interaction_tracker,
                 channel_registry=self._channel_registry,
                 engine=self.engine,
                 data_dir=str(data_dir),
+                share_intent_store=_share_intent_store,
+                fact_retriever=getattr(self.engine, "fact_retriever", None),
             )
             asyncio.run_coroutine_threadsafe(
                 self._proactive_scheduler.start(), self._loop
@@ -440,18 +451,14 @@ class FeishuBot(OutboundChannel):
         ):
             from lingxi.social.promoter import SocialPromoter
             from lingxi.social.scheduler import SocialScheduler
-            from lingxi.proactive.share_intent import ShareIntentStore
 
-            social_data_dir = (
-                getattr(self.engine.memory, "data_dir", None)
-                or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
-            )
             promoter_hook = None
-            if getattr(self.engine, "life_writer", None) is not None:
-                share_intent_store = ShareIntentStore(social_data_dir)
+            if _share_intent_store is not None:
+                # Reuse the same ShareIntentStore instance created above so
+                # promoter writes and proactive reads share one queue file.
                 promoter = SocialPromoter(
                     life_writer=self.engine.life_writer,
-                    share_intent_store=share_intent_store,
+                    share_intent_store=_share_intent_store,
                     social_store=self.engine.social_store,
                 )
                 promoter_hook = promoter.maybe_promote
