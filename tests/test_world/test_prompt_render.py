@@ -1,7 +1,9 @@
-"""Test that DailyBriefing renders into the focus reminder.
+"""Test that DailyBriefing no longer renders into the focus reminder.
 
-Phase 2 context refactor — daily_briefing is dynamic per-day state, lives
-in `<system-reminder>` (recency channel), not the static system prompt.
+Phase 3 context refactor — _build_world_section and the daily_briefing
+rendering inside _build_inner_state_section were removed from prompt_builder.
+World news now flows through brain/renderer 【身边的事】 block (FactStore world.*
+facts) on the _prepare_turn_v2 path. The daily_briefing param is silently ignored.
 """
 
 from datetime import date
@@ -34,67 +36,13 @@ class TestEmptyBriefingNoRender:
         if reminder is not None:
             assert "今早扫到的事" not in reminder
 
-
-class TestPopulatedRendering:
-    def test_items_render_in_inner_state(self):
-        b = DailyBriefing(
-            date=date(2026, 5, 9),
-            items=[
-                NewsItem(
-                    headline="JWST 火星观测",
-                    aria_voice="今早扫到 JWST 拍到火星新数据",
-                    category="天文",
-                ),
-                NewsItem(
-                    headline="上海暴雨",
-                    aria_voice="今天上海要下大雨",
-                    category="上海本地",
-                ),
-            ],
-        )
-        reminder = _reminder(inner_state=InnerState(), daily_briefing=b)
-        assert reminder is not None
-        assert "今早扫到的事" in reminder
-        assert "JWST" in reminder
-        assert "今天上海要下大雨" in reminder
-        assert "[天文]" in reminder
-        assert "[上海本地]" in reminder
-
-    def test_其他_category_no_tag(self):
-        b = DailyBriefing(
-            date=date(2026, 5, 9),
-            items=[
-                NewsItem(headline="x", aria_voice="一条普通的事", category="其他"),
-            ],
-        )
-        reminder = _reminder(inner_state=InnerState(), daily_briefing=b)
-        assert reminder is not None
-        assert "[其他]" not in reminder
-        assert "一条普通的事" in reminder
-
-    def test_caps_at_5_items(self):
-        b = DailyBriefing(
-            date=date(2026, 5, 9),
-            items=[
-                NewsItem(headline=f"h{i}", aria_voice=f"voice-{i}", category="其他")
-                for i in range(10)
-            ],
-        )
-        reminder = _reminder(inner_state=InnerState(), daily_briefing=b)
-        assert reminder is not None
-        assert "voice-0" in reminder
-        assert "voice-4" in reminder
-        assert "voice-5" not in reminder
-
-
-class TestStandaloneRender:
-    def test_world_section_when_no_inner_state(self):
-        # Even without inner_state, briefing should still surface
+    def test_populated_briefing_also_not_rendered(self):
+        # World section removed — even populated DailyBriefing is silently ignored.
+        # Rendering is now brain/renderer's job via 【身边的事】.
         b = DailyBriefing(
             date=date(2026, 5, 9),
             items=[NewsItem(headline="x", aria_voice="今天上海要下雨", category="上海本地")],
         )
-        reminder = _reminder(inner_state=None, daily_briefing=b)
-        assert reminder is not None
-        assert "今早扫到" in reminder
-        assert "今天上海要下雨" in reminder
+        reminder = _reminder(inner_state=InnerState(), daily_briefing=b)
+        if reminder is not None:
+            assert "今早扫到的事" not in reminder
