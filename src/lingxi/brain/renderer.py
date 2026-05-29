@@ -1,6 +1,7 @@
-"""Render the 3 dynamic prompt blocks from orchestrator decision + fact retriever.
+"""Render up to 4 dynamic prompt sections from orchestrator decision + fact retriever.
 
-3 blocks (in fixed order):
+Sections (in fixed order, empty sections are dropped):
+- 【核心记忆】 — agent-curated core-memory blocks (MemGPT main context, rendered first)
 - 【你此刻】 — aria.* facts + register hint + topic anchor
 - 【你和他】 — user:<recipient_key>.* facts
 - 【身边的事】 — npc:*.* + world.* facts
@@ -63,7 +64,7 @@ async def render_dynamic_blocks(
     *,
     recipient_key: str,
 ) -> str:
-    """Produce the 3-section dynamic prompt for this turn."""
+    """Produce the dynamic prompt sections (up to 4) for this turn."""
     blocks: dict[str, list[str]] = {"self": [], "them": [], "world": []}
 
     for q in decision.fact_queries:
