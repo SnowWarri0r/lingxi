@@ -1,4 +1,4 @@
-"""Build system prompts from persona config, memory context, and plan state."""
+"""Build system prompts from persona config + per-turn emotion/biography state."""
 
 from __future__ import annotations
 
@@ -6,13 +6,6 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from lingxi.inner_life.models import (
-        AgendaItem,
-        InnerState,
-        SubjectiveView,
-    )
-    from lingxi.memory.manager import MemoryContext
-    from lingxi.planning.models import Plan
     from lingxi.social.models import NPCState, SocialGraph
 
 from lingxi.persona.models import EmotionState, PersonaConfig
@@ -27,16 +20,11 @@ class PromptBuilder:
 
     def build_system_prompt(
         self,
-        memory_context: MemoryContext | None = None,
-        active_plans: list[Plan] | None = None,
         current_mood: str | None = None,
         relationship_level: int = 1,
         current_time: datetime | None = None,
         last_interaction_time: datetime | None = None,
         emotion_state: EmotionState | None = None,
-        inner_state: InnerState | None = None,
-        subjective_view: SubjectiveView | None = None,
-        pending_agenda: list[AgendaItem] | None = None,
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
         social_graph: "SocialGraph | None" = None,
@@ -80,12 +68,10 @@ class PromptBuilder:
         if habits_block:
             sections.append(habits_block)
 
-        # decision_axes still uses inner_state.axis_modulation as input —
-        # the axes section itself is stable persona dimensions, but
-        # which axes are CURRENTLY pushed depends on inner_state. Reading
-        # inner_state for that purpose is fine; we just don't render the
-        # inner_state SECTION here.
-        axes_block = self._build_decision_axes_section(inner_state)
+        # decision_axes renders the persona's behavioral fingerprint
+        # (extreme baseline axes). The old inner_state-driven short-term
+        # modulation was dropped when inner_life was retired.
+        axes_block = self._build_decision_axes_section()
         if axes_block:
             sections.append(axes_block)
 
@@ -103,21 +89,6 @@ class PromptBuilder:
             if social_block:
                 sections.append(social_block)
 
-        if subjective_view is not None:
-            from lingxi.inner_life.subjective import SubjectiveLayer
-            subj_block = SubjectiveLayer.render_for_prompt(subjective_view)
-            if subj_block:
-                sections.append(subj_block)
-
-        if memory_context and memory_context.long_term_facts:
-            sections.append(self._build_memory_section(memory_context))
-
-        if pending_agenda:
-            sections.append(self._build_agenda_section(pending_agenda))
-
-        if active_plans:
-            sections.append(self._build_plan_section(active_plans))
-
         return "\n\n".join(sections)
 
     def build_turn_focus_reminder(
@@ -127,7 +98,6 @@ class PromptBuilder:
         last_assistant_statement: str | None = None,
         current_time: datetime | None = None,
         last_interaction_time: datetime | None = None,
-        inner_state: "InnerState | None" = None,
         emotion_state: "EmotionState | None" = None,
         current_mood: str | None = None,
         recent_proactive_messages: list[str] | None = None,
@@ -157,11 +127,11 @@ class PromptBuilder:
         if current_mood is not None or emotion_state is not None:
             sections.append(self._build_emotional_section(current_mood, emotion_state))
 
-        from lingxi.inner_life.models import (
+        from lingxi.persona.engagement import (
             EngagementMode,
             derive_engagement_mode,
         )
-        mode = derive_engagement_mode(inner_state, emotion_state)
+        mode = derive_engagement_mode(emotion_state)
         if mode != EngagementMode.FULL:
             sections.append(self._build_engagement_section(mode))
 
@@ -250,22 +220,6 @@ class PromptBuilder:
             "\n这是你的人生底色——经历过所以你懂这种感受。讲不讲、什么时候讲，看你当下。"
             "\n上面没写的具体事别现编：写了『大学时室友小林』不等于你和小林一起看过 Clannad。"
             "没有的共同经历就是没有，别为了有共鸣临时编一个。"
-        )
-        return "\n".join(lines)
-
-    def _build_agenda_section(self, items: list[AgendaItem]) -> str:
-        lines = ["## 📝 你最近想找他说的话（放在心里，不一定每次都说）"]
-        for item in items[:5]:
-            kind_label = {
-                "share": "想分享",
-                "follow_up": "想跟进",
-                "concern": "想关心",
-                "question": "想问",
-                "invitation": "想邀约",
-            }.get(item.kind.value, "想提")
-            lines.append(f"- [{kind_label}] {item.content}")
-        lines.append(
-            "\n对话自然流到相关话题再提；对方在说别的，就先放着。"
         )
         return "\n".join(lines)
 
@@ -599,7 +553,7 @@ class PromptBuilder:
         The copy below is permission-shaped: enumerate what is FINE and
         what is NOT NEEDED, so the model isn't reaching for completeness.
         """
-        from lingxi.inner_life.models import EngagementMode
+        from lingxi.persona.engagement import EngagementMode
 
         if mode == EngagementMode.CURT:
             return (
@@ -682,46 +636,36 @@ class PromptBuilder:
         )
         return "\n".join(lines)
 
-    def _build_decision_axes_section(self, inner_state: InnerState | None) -> str:
+    def _build_decision_axes_section(self) -> str:
         """Render persona's 8-axis behavioral fingerprint (forge-skill L3).
 
-        Only surfaces axes that ACTUALLY shape behavior — extremes (≤3 or ≥8)
-        as character signatures, plus any axes currently modulated by inner
-        state (energy/sleep/social_need shift baseline ±1-2). Skip if neither.
+        Surfaces only the axes that ACTUALLY shape behavior — extreme
+        baselines (≤3 or ≥8) as character signatures. Skip the rest.
 
         Engineering rationale: rendering all 8 axes every turn is noise. The
         LLM only needs the axes that distinguish *this* persona from default
-        behavior, plus what's actively shifted right now.
+        behavior. (The old inner_state-driven short-term modulation was
+        dropped when inner_life was retired.)
         """
         from lingxi.persona.models import DecisionAxes
         axes = self.persona.decision_axes
-        modulation = inner_state.axis_modulation if inner_state else {}
 
         lines: list[str] = []
         for axis_name in DecisionAxes.AXIS_NAMES:
             axis = axes.get(axis_name)
             base = axis.score
-            delta = modulation.get(axis_name, 0)
-            # Surface if extreme baseline or actively modulated
-            if not (base <= 3 or base >= 8 or delta != 0):
+            if not (base <= 3 or base >= 8):
                 continue
 
-            effective = max(1, min(10, base + delta))
             low_label, high_label = DecisionAxes.AXIS_LABELS[axis_name]
-            # Render as "倾向 (effective/10)" with direction
-            if effective <= 4:
+            if base <= 4:
                 direction = low_label
-            elif effective >= 7:
+            elif base >= 7:
                 direction = high_label
             else:
                 direction = f"{low_label}和{high_label}之间"
 
-            line = f"- {direction}（{effective}/10）"
-            if delta > 0:
-                line += f" ←此刻被推往「{high_label}」一侧 +{delta}"
-            elif delta < 0:
-                line += f" ←此刻被推往「{low_label}」一侧 {delta}"
-            lines.append(line)
+            lines.append(f"- {direction}（{base}/10）")
 
         if not lines:
             return ""
@@ -748,29 +692,6 @@ class PromptBuilder:
                 f"{current_level.name}：{current_level.description}"
             )
         return f"## 你和这个人的熟悉度\n{r.initial_stance}"
-
-    def _build_memory_section(self, memory_context: MemoryContext) -> str:
-        lines = ["## 你记得的事情"]
-        if memory_context.long_term_facts:
-            lines.append("### 关于对方的了解")
-            for fact in memory_context.long_term_facts:
-                lines.append(f"- {fact.content}")
-        if memory_context.relevant_episodes:
-            lines.append("### 过去的对话回忆")
-            for ep in memory_context.relevant_episodes:
-                lines.append(f"- [{ep.timestamp}] {ep.summary}")
-        return "\n".join(lines)
-
-    def _build_plan_section(self, plans: list[Plan]) -> str:
-        lines = ["## 你当前的计划和意图"]
-        for plan in plans:
-            lines.append(f"- 目标：{plan.goal.description}（优先级：{plan.goal.priority:.1f}）")
-            pending = [s for s in plan.steps if not s.completed]
-            if pending:
-                lines.append(f"  下一步：{pending[0].description}")
-        lines.append("\n在合适的时机，你可以主动提起与你计划相关的话题。")
-        return "\n".join(lines)
-
 
 def build_persona_block(persona: PersonaConfig) -> str:
     """Standalone persona section: identity + personality + style + habits.
