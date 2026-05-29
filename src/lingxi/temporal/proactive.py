@@ -631,24 +631,8 @@ class ProactiveScheduler:
         # proactive — fixes the "feels like two different people" gap.
         # Inner state, current activity, mood, biography retrieval all flow
         # through identically.
-        try:
-            relationship_record = self.engine.interaction_tracker.get_record(
-                record.channel, record.recipient_id
-            )
-            emotion_state = None
-            if relationship_record is not None:
-                from lingxi.persona.models import EmotionState
-                emotion_state = EmotionState(
-                    dimensions=dict(relationship_record.emotion_dimensions or {}),
-                    narrative_label=relationship_record.emotion_narrative or "",
-                )
-        except Exception:
-            emotion_state = None
-
         system_prompt = self.engine.prompt_builder.build_system_prompt(
-            current_mood=None,
             relationship_level=record.relationship_level,
-            emotion_state=emotion_state,
             mode="single",
         )
 
@@ -660,8 +644,6 @@ class ProactiveScheduler:
         focus_reminder = self.engine.prompt_builder.build_turn_focus_reminder(
             current_time=now,
             last_interaction_time=record.last_interaction,
-            emotion_state=emotion_state,
-            current_mood=None,
             recent_proactive_messages=(
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),

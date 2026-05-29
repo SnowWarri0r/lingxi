@@ -49,13 +49,6 @@ class TestPromptBuilder:
         assert "Test Character" in prompt
         assert "curious" in prompt or "好奇" in prompt
 
-    def test_prompt_includes_mood(self, sample_persona):
-        # Mood is dynamic — surfaces in the focus reminder, not the
-        # static system prompt (Phase 2 context refactor).
-        builder = PromptBuilder(sample_persona)
-        reminder = builder.build_turn_focus_reminder(current_mood="excited")
-        assert reminder is not None
-        assert "excited" in reminder
 
     def test_axes_section_omitted_when_all_neutral(self, sample_persona):
         # Defaults are all 5/10 — no axis is extreme, no modulation → skip

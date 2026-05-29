@@ -39,21 +39,3 @@ class TestConversationEngine:
         assert "===META===" not in response
         assert "memory_writes" not in response
         assert "Nice to meet you" in response
-
-    @pytest.mark.asyncio
-    async def test_mood_update(self, sample_persona, tmp_path):
-        from tests.conftest import MockLLMProvider
-
-        mock = MockLLMProvider(responses=[
-            'That\'s wonderful!\n===META===\n'
-            '{"mood": "excited"}'
-        ])
-        memory = MemoryManager(data_dir=str(tmp_path / "memory"))
-        engine = ConversationEngine(
-            persona=sample_persona,
-            llm_provider=mock,
-            memory_manager=memory,
-        )
-
-        await engine.chat("I found a new star!")
-        assert engine._current_mood == "excited"

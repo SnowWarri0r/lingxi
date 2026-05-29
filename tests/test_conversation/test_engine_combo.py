@@ -72,30 +72,6 @@ def memory(tmp_path):
     return MemoryManager(data_dir=str(tmp_path), long_term_backend="json")
 
 
-async def test_style_preamble_prepended_to_user_message(persona, memory):
-    llm = FakeLLM()
-    engine = ConversationEngine(persona=persona, llm_provider=llm, memory_manager=memory)
-    await engine.chat("你今天吃啥", channel="cli", recipient_id="tester")
-
-    # The last user message should start with the style preamble
-    user_msgs = [m for m in llm.last_messages or [] if m["role"] == "user"]
-    assert user_msgs, "no user message was sent"
-    last_user = user_msgs[-1]
-    content = last_user["content"]
-    # Content may be a string or list of blocks
-    if isinstance(content, list):
-        # Find the text block
-        text = next((b.get("text", "") for b in content if b.get("type") == "text"), "")
-    else:
-        text = content
-    assert "[本轮" in text
-    assert "≤30" in text
-    # blacklist is no longer planted in preamble (reverse-attention anti-pattern)
-    assert "据说" not in text
-    assert "避用词" not in text
-    assert "你今天吃啥" in text
-
-
 async def test_sampler_forwarded(persona, memory):
     llm = FakeLLM()
     engine = ConversationEngine(persona=persona, llm_provider=llm, memory_manager=memory)
