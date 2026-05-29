@@ -125,6 +125,35 @@ async def test_generate_with_tools_runaway_cap(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_prepare_turn_v2_attaches_images_main_path(tmp_path, monkeypatch):
+    # Regression: the main (fact_retriever-wired) path must route the current
+    # turn through _build_user_message so image-only messages don't send empty
+    # content (Anthropic 400). The fallback path alone doesn't catch this.
+    eng, store = await _engine(tmp_path)
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain import renderer as rend_mod
+    from lingxi.brain.models import OrchestrationDecision
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(register="warm", engage_level=0.5,
+                                     fact_queries=[], skip=[], topic_anchor="")
+
+    async def _fake_render(*a, **k):
+        return ""
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(rend_mod, "render_dynamic_blocks", _fake_render)
+
+    _sys, messages = await eng._prepare_turn_v2(
+        "", [{"media_type": "image/jpeg", "data": "B64"}], "feishu", "x")
+    last = messages[-1]
+    assert last["role"] == "user"
+    assert isinstance(last["content"], list)
+    assert any(b["type"] == "image" for b in last["content"])
+    assert any(b["type"] == "text" and b["text"].strip() for b in last["content"])
+
+
+@pytest.mark.asyncio
 async def test_stream_events_runs_tool_loop(tmp_path):
     eng, store = await _engine(tmp_path)
 
