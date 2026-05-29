@@ -43,3 +43,15 @@ async def test_get_core_block_scoped_by_subject(tmp_path):
     u = await s.get_core_block("user:feishu:x")
     assert a.content == "A"
     assert u.content == "U"
+
+
+@pytest.mark.asyncio
+async def test_retriever_get_core_block(tmp_path):
+    from lingxi.facts.retriever import FactRetriever
+    s = await _store(tmp_path)
+    await s.write(Fact(subject="aria", content="hello", source=Source.LLM_INFERRED,
+                       type=FactType.CORE, ts=datetime(2026, 5, 1, 9, 0)))
+    r = FactRetriever(s)
+    block = await r.get_core_block("aria")
+    assert block is not None and block.content == "hello"
+    assert await r.get_core_block("aria-missing") is None

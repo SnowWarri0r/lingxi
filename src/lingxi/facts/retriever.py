@@ -83,6 +83,10 @@ class FactRetriever:
         """Return a single Fact by ID, or None if not found."""
         return await self._store.get(fact_id)
 
+    async def get_core_block(self, subject: str) -> Fact | None:
+        """Current MemGPT core-memory block for subject (or None)."""
+        return await self._store.get_core_block(subject)
+
     async def catalog(self) -> dict[str, int]:
         """Return {bucket: count} for orchestrator's decision input.
 
