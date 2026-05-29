@@ -15,6 +15,8 @@ class CompletionResult:
     model: str = ""
     usage: dict = field(default_factory=dict)
     finish_reason: str = ""
+    tool_calls: list = field(default_factory=list)        # [{"id","name","input"}]
+    raw_content_blocks: list = field(default_factory=list)  # original API content blocks
 
 
 @dataclass
