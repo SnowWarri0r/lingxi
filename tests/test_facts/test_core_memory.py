@@ -55,3 +55,26 @@ async def test_retriever_get_core_block(tmp_path):
     block = await r.get_core_block("aria")
     assert block is not None and block.content == "hello"
     assert await r.get_core_block("aria-missing") is None
+
+
+@pytest.mark.asyncio
+async def test_core_writer_allows_aria_and_user(tmp_path):
+    from lingxi.facts.writers.core_memory import CoreMemoryWriter
+    s = await _store(tmp_path)
+    w = CoreMemoryWriter(s)
+    await w.write(subject="aria", content="self note", type=FactType.CORE,
+                  source=Source.LLM_INFERRED, ts=datetime(2026, 5, 1, 9, 0))
+    await w.write(subject="user:feishu:x", content="about him", type=FactType.CORE,
+                  source=Source.LLM_INFERRED, ts=datetime(2026, 5, 1, 9, 0))
+    assert (await s.get_core_block("aria")).content == "self note"
+    assert (await s.get_core_block("user:feishu:x")).content == "about him"
+
+
+@pytest.mark.asyncio
+async def test_core_writer_rejects_foreign_subject(tmp_path):
+    from lingxi.facts.writers.core_memory import CoreMemoryWriter
+    s = await _store(tmp_path)
+    w = CoreMemoryWriter(s)
+    with pytest.raises(ValueError):
+        await w.write(subject="npc:bob", content="x", type=FactType.CORE,
+                      source=Source.LLM_INFERRED, ts=datetime(2026, 5, 1, 9, 0))
