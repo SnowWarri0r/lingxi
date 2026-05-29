@@ -315,6 +315,27 @@ class ConversationEngine:
             msgs.append({"role": "user", "content": tool_results})
             iters += 1
 
+    @staticmethod
+    def _build_user_message(user_input: str, images: list[dict] | None) -> dict:
+        """Build the current-turn user message. With images, attach them as
+        Anthropic multimodal blocks; the text block falls back to a non-empty
+        caption so image-only messages never produce empty content (which the
+        API rejects with 400 'user messages must have non-empty content')."""
+        if not images:
+            return {"role": "user", "content": user_input}
+        blocks: list[dict] = []
+        for img in images:
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": img.get("media_type", "image/png"),
+                    "data": img["data"],
+                },
+            })
+        blocks.append({"type": "text", "text": user_input or "（请看这张图）"})
+        return {"role": "user", "content": blocks}
+
     async def _prepare_turn_v2(
         self,
         user_input: str,
@@ -360,7 +381,7 @@ class ConversationEngine:
             )
             messages = self.context_assembler.assemble_messages(memory_context)
             self.memory.add_turn("user", memory_text)
-            messages.append({"role": "user", "content": user_input})
+            messages.append(self._build_user_message(user_input, images))
             return build_persona_block(self.persona), messages
 
         # 1. Build state digest purely from the facts memory stream.
