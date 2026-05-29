@@ -275,6 +275,46 @@ class ConversationEngine:
         except Exception as e:
             return f"tool error: {e}"
 
+    async def _generate_with_tools(
+        self,
+        system_prompt: str,
+        messages: list[dict],
+        *,
+        recipient_key: str,
+        prefill: str = "",
+        purpose: str = "chat_full",
+    ) -> str:
+        """Agentic generation loop: the model may call memory tools mid-turn.
+        Returns the final user-facing text. Caps iterations to avoid runaway."""
+        from lingxi.brain.memory_tools import MEMORY_TOOLS
+        MAX_TOOL_ITERS = 5
+        msgs = list(messages)
+        iters = 0
+        while True:
+            forced = iters >= MAX_TOOL_ITERS
+            tool_choice = {"type": "none"} if forced else {"type": "auto"}
+            result = await self.llm.complete(
+                messages=msgs,
+                system=system_prompt,
+                temperature=self.persona.sampling.temperature,
+                top_p=self.persona.sampling.top_p,
+                prefill=prefill if iters == 0 else "",
+                tools=MEMORY_TOOLS,
+                tool_choice=tool_choice,
+                _debug_purpose=purpose,
+            )
+            if forced or result.finish_reason != "tool_use" or not result.tool_calls:
+                return result.content
+            msgs.append({"role": "assistant", "content": result.raw_content_blocks})
+            tool_results = []
+            for call in result.tool_calls:
+                out = await self._dispatch_memory_tool(
+                    call["name"], call.get("input", {}), recipient_key)
+                tool_results.append({
+                    "type": "tool_result", "tool_use_id": call["id"], "content": out})
+            msgs.append({"role": "user", "content": tool_results})
+            iters += 1
+
     async def _prepare_turn_v2(
         self,
         user_input: str,
@@ -628,25 +668,21 @@ class ConversationEngine:
             user_input, images, channel, recipient_id
         )
 
+        rkey = self._current_recipient_key or "_anon"
         if self.persona.compression.enabled:
-            # Two-call: think (Sonnet) then compress (Haiku)
-            think_raw = await self._run_think(system_prompt, messages)
+            # Two-call: think (with memory tools) then compress (Haiku, no tools)
+            think_raw = await self._generate_with_tools(
+                system_prompt, messages, recipient_key=rkey, purpose="think")
             output = self._process_response(think_raw)
             inner_thought = output.inner_thought or output.speech
             speech = await self._run_compress(inner_thought, user_input)
             output.speech = speech
             output.inner_thought = inner_thought
         else:
-            prefill = pick_prefill(self.persona.style)
-            result = await self.llm.complete(
-                messages=messages,
-                system=system_prompt,
-                temperature=self.persona.sampling.temperature,
-                top_p=self.persona.sampling.top_p,
-                prefill=prefill,
-                _debug_purpose="chat_full",
-            )
-            output = self._process_response(result.content)
+            think_raw = await self._generate_with_tools(
+                system_prompt, messages, recipient_key=rkey,
+                prefill=pick_prefill(self.persona.style), purpose="chat_full")
+            output = self._process_response(think_raw)
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later
