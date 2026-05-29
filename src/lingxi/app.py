@@ -14,7 +14,6 @@ from lingxi.auth.external_sync import ExternalCredentialSync
 from lingxi.conversation.engine import ConversationEngine
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.loader import load_persona
-from lingxi.planning.planner import Planner
 from lingxi.providers.registry import ProviderRegistry
 from lingxi.utils.config import load_config, get_nested
 from lingxi.utils.logging import setup_logging, get_logger
@@ -168,36 +167,15 @@ async def create_engine(
     memory_manager = MemoryManager(
         data_dir=data_dir,
         max_short_term_turns=get_nested(memory_config, "short_term", "max_turns", default=30),
-        max_long_term_entries=get_nested(memory_config, "long_term", "max_entries", default=100000),
-        max_episodes=get_nested(memory_config, "episodic", "max_episodes", default=500),
-        retrieval_top_k=get_nested(memory_config, "long_term", "retrieval_top_k", default=10),
-        long_term_backend=get_nested(memory_config, "long_term", "backend", default="chroma"),
-        embedding_dim=embedding_dim,
     )
 
     if embedding_provider is not None:
         memory_manager.set_embedding_provider(embedding_provider)
 
-    # Create planner
-    planner = None
-    if get_nested(config, "planning", "enabled", default=True):
-        planner = Planner(llm_provider, persona)
-
     # Create interaction tracker (time awareness)
     from lingxi.temporal.tracker import InteractionTracker
 
     interaction_tracker = InteractionTracker(data_dir)
-
-    # Inner life: life simulator, agenda, subjective layer
-    from lingxi.inner_life import (
-        AgendaEngine,
-        InnerLifeStore,
-        SubjectiveLayer,
-    )
-
-    inner_life_store = InnerLifeStore(data_dir)
-    agenda_engine = AgendaEngine(inner_life_store)
-    subjective_layer = SubjectiveLayer(inner_life_store)
 
     # Fewshot pool: FewShotStore + AnnotationStore + FewShotRetriever
     from lingxi.fewshot.retriever import FewShotRetriever
@@ -299,10 +277,6 @@ async def create_engine(
         persona=persona,
         llm_provider=llm_provider,
         memory_manager=memory_manager,
-        planner=planner,
-        inner_life_store=inner_life_store,
-        agenda_engine=agenda_engine,
-        subjective_layer=subjective_layer,
         interaction_tracker=interaction_tracker,
         fewshot_store=fewshot_store,
         annotation_store=annotation_store,
@@ -314,6 +288,7 @@ async def create_engine(
         npc_writer=npc_writer,
         inference_writer=inference_writer,
         world_writer=world_writer,
+        user_statement_writer=user_statement_writer,
         plan_executor=plan_executor,
     )
     # Expose daily_planner on engine so the channel's start() can schedule loops.
@@ -538,13 +513,8 @@ async def run_cli() -> None:
 
             if user_input == "/stats":
                 stats = engine.memory.get_stats()
-                print(f"\n[记忆状态] 短期: {stats['short_term_turns']} 轮 | "
-                      f"长期: {stats['long_term_entries']} 条 | "
-                      f"情景: {stats['episodes']} 段")
-                await engine.memory.entity_graph.load()
-                ent_stats = engine.memory.entity_graph.stats()
-                print(f"[实体图谱] {ent_stats['entity_count']} 个实体, "
-                      f"{ent_stats['total_links']} 个事实链接\n")
+                print(f"\n[记忆状态] 短期: {stats['short_term_turns']} 轮 "
+                      f"(长期记忆已迁到 facts.db)\n")
                 continue
 
             if user_input == "/mood":
@@ -557,39 +527,14 @@ async def run_cli() -> None:
                 continue
 
             if user_input.startswith("/memories"):
-                query = user_input[len("/memories"):].strip() or "最近"
-                ctx = await engine.memory.assemble_context(
-                    query, long_term_limit=10, episode_limit=5,
-                    recipient_key="cli:local",
+                query = user_input[len("/memories"):].strip() or None
+                from lingxi.facts.retriever import FactQuery
+                facts = await engine.fact_retriever.fetch(
+                    FactQuery(subject="user:cli:local", semantic=query, limit=10)
                 )
-                print(f"\n[搜索: \"{query}\"]")
-                print(f"长期记忆 ({len(ctx.long_term_facts)}):")
-                for f in ctx.long_term_facts:
-                    rec = (f.metadata or {}).get("recipient_key", "_global")
-                    print(f"  • [{f.importance:.1f}] {f.content[:80]} ({rec})")
-                print(f"情景记忆 ({len(ctx.relevant_episodes)}):")
-                for ep in ctx.relevant_episodes:
-                    print(f"  • [{ep.timestamp.strftime('%m-%d %H:%M')}] {ep.summary[:80]}")
-                print()
-                continue
-
-            if user_input == "/entities":
-                await engine.memory.entity_graph.load()
-                ents = engine.memory.entity_graph.all_entities()
-                ents.sort(key=lambda e: e.mention_count, reverse=True)
-                print(f"\n[实体图谱] 共 {len(ents)} 个")
-                for e in ents[:20]:
-                    print(f"  • {e.name} ({e.type}) - 提及 {e.mention_count} 次, "
-                          f"链接 {len(e.fact_ids)} 条事实")
-                print()
-                continue
-
-            if user_input == "/episodes":
-                eps = await engine.memory.episodic.get_recent(limit=10)
-                print(f"\n[最近 {len(eps)} 个session摘要]")
-                for ep in eps:
-                    print(f"  • [{ep.timestamp.strftime('%Y-%m-%d %H:%M')}] "
-                          f"({ep.emotional_tone}) {ep.summary[:100]}")
+                print(f"\n[facts: \"{query or '最近'}\"] ({len(facts)})")
+                for f in facts:
+                    print(f"  • [{f.importance}] {f.content[:80]}")
                 print()
                 continue
 

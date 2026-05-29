@@ -16,7 +16,7 @@ from datetime import datetime
 from fastapi import FastAPI
 import uvicorn
 
-from lingxi.inner_life.models import derive_engagement_mode
+from lingxi.persona.engagement import derive_engagement_mode
 from lingxi.persona.models import EmotionState
 from lingxi.pet.sprite_mapper import pick_sprite
 
@@ -72,24 +72,28 @@ def build_pet_state_app(engine) -> FastAPI:
     @app.get("/pet/state")
     async def state():
         emotion = engine._emotion_state
-        inner_state = None
-        if engine.inner_life_store is not None:
-            try:
-                inner_state = await engine.inner_life_store.load_state()
-            except Exception:
-                inner_state = None
-
         family = classify_emotion_family(emotion)
-        mode = derive_engagement_mode(inner_state, emotion).value
+        mode = derive_engagement_mode(emotion).value
 
-        activity = inner_state.current_activity if inner_state else None
-        activity_kind = activity.kind.value if activity else None
-        activity_name = activity.name if activity else None
+        # Current activity is facts-driven now: the latest aria.event fact
+        # written by PlanExecutor. No structured ActivityKind any more.
+        activity_name = None
+        if engine.fact_retriever is not None:
+            try:
+                from lingxi.facts.models import FactType
+                from lingxi.facts.retriever import FactQuery
+                events = await engine.fact_retriever.fetch(
+                    FactQuery(subject="aria", type=FactType.EVENT, limit=1)
+                )
+                if events:
+                    activity_name = events[0].content[:40]
+            except Exception:
+                activity_name = None
 
         sprite = pick_sprite(
             engagement_mode=mode,
             emotion_family=family,
-            activity_kind=activity_kind,
+            activity_kind=None,
             hour=datetime.now().hour,
         )
 
@@ -97,7 +101,7 @@ def build_pet_state_app(engine) -> FastAPI:
             "sprite": sprite,
             "engagement_mode": mode,
             "emotion_family": family,
-            "activity_kind": activity_kind,
+            "activity_kind": None,
             "activity_name": activity_name,
             "mood_narrative": engine._current_mood,
             "ts": datetime.now().isoformat(),

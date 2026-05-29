@@ -27,23 +27,10 @@ from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.persona.prompt_builder import PromptBuilder
-from lingxi.planning.executor import ActionExecutor
-from lingxi.planning.planner import Planner
-from lingxi.planning.scheduler import Scheduler
 from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
 from lingxi.temporal.tracker import InteractionTracker
 from lingxi.temporal.relationship import RelationshipEvaluator
-
-# Inner life is optional — keep the engine usable without it
-try:
-    from lingxi.inner_life.store import InnerLifeStore
-    from lingxi.inner_life.agenda import AgendaEngine
-    from lingxi.inner_life.subjective import SubjectiveLayer
-except ImportError:
-    InnerLifeStore = None  # type: ignore
-    AgendaEngine = None  # type: ignore
-    SubjectiveLayer = None  # type: ignore
 
 
 @dataclass
@@ -130,14 +117,10 @@ class ConversationEngine:
         persona: PersonaConfig,
         llm_provider: LLMProvider,
         memory_manager: MemoryManager,
-        planner: Planner | None = None,
         context_assembler: ContextAssembler | None = None,
         interaction_tracker: InteractionTracker | None = None,
         relationship_evaluator: RelationshipEvaluator | None = None,
         embedding_provider: EmbeddingProvider | None = None,
-        inner_life_store=None,
-        agenda_engine=None,
-        subjective_layer=None,
         fewshot_store: FewShotStore | None = None,
         annotation_store: AnnotationStore | None = None,
         fewshot_retriever: FewShotRetriever | None = None,
@@ -148,14 +131,12 @@ class ConversationEngine:
         npc_writer=None,
         inference_writer=None,
         world_writer=None,
+        user_statement_writer=None,
         plan_executor=None,
     ):
         self.persona = persona
         self.llm = llm_provider
         self.memory = memory_manager
-        self.inner_life_store = inner_life_store
-        self.agenda_engine = agenda_engine
-        self.subjective_layer = subjective_layer
         self.social_graph = social_graph
         self.social_store = social_store
         self.fact_retriever = fact_retriever
@@ -163,14 +144,12 @@ class ConversationEngine:
         self.npc_writer = npc_writer
         self.inference_writer = inference_writer
         self.world_writer = world_writer
+        self.user_statement_writer = user_statement_writer
         self.plan_executor = plan_executor
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
-        self.planner = planner or Planner(llm_provider, persona)
         self.context_assembler = context_assembler or ContextAssembler()
-        self.scheduler = Scheduler()
-        self.executor = ActionExecutor(memory_manager)
         self.interaction_tracker = interaction_tracker
         self.relationship_evaluator = (
             relationship_evaluator or RelationshipEvaluator(persona, llm_provider)
@@ -223,342 +202,34 @@ class ConversationEngine:
 
         # Initialize
         self.memory.set_llm_provider(llm_provider)
-        self.planner.initialize_goals()
 
-    async def _prepare_turn(
+    async def _apply_voice_and_style(
         self,
+        system_prompt: str,
+        messages: list[dict],
+        recipient_key: str,
         user_input: str,
-        images: list[dict] | None = None,
-        channel: str | None = None,
-        recipient_id: str | None = None,
     ) -> tuple[str, list[dict]]:
-        """Common setup for a conversation turn. Returns (system_prompt, messages).
-
-        Args:
-            user_input: The user's text message.
-            images: Optional list of image dicts, each:
-                {"media_type": "image/png", "data": "<base64>"}
-            channel: The channel name ("feishu", "web", "cli").
-            recipient_id: The recipient identifier in that channel.
-        """
-        # Compute last-interaction time BEFORE recording this interaction
-        last_interaction_time: datetime | None = None
-        recipient_key = f"{channel}:{recipient_id}" if channel and recipient_id else None
-
-        # Stash for use in _process_response (sync method, can't get from args)
-        self._current_recipient_key = recipient_key
-
-        # Switch short-term memory context to this recipient (restore buffer)
-        if recipient_key:
-            await self.memory.short_term.switch_recipient(recipient_key)
-
-        if self.interaction_tracker and channel and recipient_id:
-            rec = self.interaction_tracker.get_record(channel, recipient_id)
-            if rec:
-                last_interaction_time = rec.last_interaction
-                self._relationship_level = rec.relationship_level
-                if rec.emotion_dimensions:
-                    self._emotion_state.dimensions = dict(rec.emotion_dimensions)
-                if rec.emotion_last_decay:
-                    self._emotion_state.last_decay_at = rec.emotion_last_decay
-                if rec.emotion_narrative:
-                    self._current_mood = rec.emotion_narrative
-
-                # Time weight: silence since last interaction bumps emotion
-                # BEFORE we record the new one. Decay carries the shift to
-                # fade naturally over subsequent turns in this conversation.
-                if last_interaction_time:
-                    from lingxi.temporal.silence import (
-                        compute_silence_emotion_deltas,
-                    )
-                    silence = datetime.now() - last_interaction_time
-                    deltas = compute_silence_emotion_deltas(silence)
-                    if deltas:
-                        self._emotion_state.apply_deltas(
-                            deltas,
-                            volatility=self.persona.emotional_baseline.mood_volatility,
-                        )
-                        print(
-                            f"[silence] {silence} → emotion deltas {deltas}",
-                            flush=True,
-                        )
-
-            self.interaction_tracker.record_interaction(channel, recipient_id)
-
-        # Track input in short-term memory (with image indicator)
-        memory_text = user_input
-        if images:
-            memory_text = f"[发送了{len(images)}张图片] {user_input}".strip()
-        self.memory.add_turn("user", memory_text)
-
-        # Mid-term layer: opportunistically compress aged turns (older than
-        # the verbatim window) into one-line summaries before assembling
-        # the context. Cheap because it only runs when there are pending
-        # turns that haven't been summarized yet.
-        try:
-            await self.memory.compress_aged_turns(
-                threshold_minutes=self.context_assembler.budget.verbatim_window_minutes
-            )
-        except Exception as e:
-            print(f"[mid-term] compress failed: {e}")
-
-        memory_context = await self.memory.assemble_context(
-            user_input or "(图片消息)",
-            recipient_key=recipient_key,
-        )
-
-        # NOTE: per-turn planner.check_proactive_action disabled.
-        # The injected `[内心想法：你想要X，因为Y]` nudge was the source of
-        # the "AI 硬扯话题" feel — production trace 2026-05-20: user asked
-        # "你不看那些教人做菜的短视频么", planner suggested "...就像观星其实
-        # 也有很多小窍门..." because goal "[0.9] 与他人分享天文学的美" was
-        # still loaded from stale plans.json. Even with goals cleaned, the
-        # framing "是否有合适的时机主动提起某个话题" systematically biases
-        # the model toward forcing a topic transition every turn. Real
-        # friends don't agenda-plan each reply.
-        # Proactive *outreach* (silence-threshold-based reach-out) lives
-        # in temporal/proactive.py and is a separate, correctly-shaped
-        # path. Per-turn goal nudging is just AI-tell amplification.
-        proactive_nudge = ""
-
-        triggered = self.scheduler.check_event_triggers(user_input or "")
-        if triggered:
-            for t in triggered:
-                proactive_nudge += f"\n[事件触发：{t}]"
-
-        # Decay emotions toward baseline before rendering
-        self._emotion_state.decay_toward_baseline(
-            self.persona.emotional_baseline.baseline_dimensions or {"平静": 0.5, "好奇": 0.3}
-        )
-        self._emotion_state.narrative_label = self._current_mood
-
-        # Confrontation check — accusations like "好敷衍" / "你都不" /
-        # "什么关系" should destabilize Aria. Bump 慌乱/心虚 BEFORE the
-        # focus reminder is built, so engagement_mode derives FLUSTERED
-        # this turn. The rebuke matters most when it happens, and decay
-        # naturally fades it across the next few turns.
-        from lingxi.conversation.turn_focus import detect_confrontation
-        if user_input and detect_confrontation(user_input):
-            self._emotion_state.apply_deltas(
-                {"慌乱": 0.6, "心虚": 0.4},
-                volatility=self.persona.emotional_baseline.mood_volatility,
-            )
-            print(
-                f"[engine] confrontation detected in user_input — fluster bumped",
-                flush=True,
-            )
-
-        # Load inner life state / subjective view / agenda (if available)
-        inner_state = None
-        subjective_view = None
-        pending_agenda: list = []
-        if self.inner_life_store is not None:
-            try:
-                inner_state = await self.inner_life_store.load_state()
-            except Exception:
-                pass
-            if recipient_key and self.subjective_layer is not None:
-                try:
-                    subjective_view = await self.subjective_layer.get(recipient_key)
-                except Exception:
-                    pass
-            if recipient_key and self.agenda_engine is not None:
-                try:
-                    pending_agenda = await self.agenda_engine.top_pending(recipient_key, limit=5)
-                except Exception:
-                    pass
-
-        # Social graph: load fresh NPC states on each turn. Cheap — small
-        # files, capped at 30 days of events per NPC. Renderer will pick
-        # top-4 relevant NPCs to keep prompt budget bounded.
-        social_states = None
-        if self.social_graph is not None and self.social_store is not None:
-            try:
-                social_states = {}
-                for npc in self.social_graph.npcs:
-                    social_states[npc.id] = await self.social_store.load_state(npc.id)
-            except Exception as e:
-                print(f"[social] load failed: {e}", flush=True)
-                social_states = None
-
-        # Retrieve biographical events relevant to the current turn.
-        # Query: user input (most directly topical); later we could also
-        # fold in the previous inner_thought for continuity.
-        biography_hits: list = []
-        # Heavy-topic gate: if the user is sharing a serious life event
-        # (death/illness/loss/breakup/firing), do NOT surface biography
-        # at all. Even with a "don't grandstand" rule, having those
-        # memories in the system prompt biases the model to share them.
-        # Better not to put them in front of the model on those turns.
-        is_heavy_topic = _looks_like_heavy_topic(user_input)
-        # Suppress biography retrieval on confrontational turns too —
-        # she's defending herself, not opening up. Heavy bio fragments
-        # weaving into a fluster reply reads as deflection, not genuine
-        # sharing (production: user said "你在胡说八道些什么", Aria
-        # surfaced "想过结束" biography → off-key).
-        from lingxi.conversation.turn_focus import detect_confrontation
-        is_confrontation = bool(user_input and detect_confrontation(user_input))
-
-        # LLM-based selector (CC-style): give Haiku a manifest of all
-        # biography events + tone hints, let it pick 0-2 GENUINELY
-        # relevant events. Replaces the embedding-similarity retriever.
-        # The selector internally short-circuits to [] on confrontation
-        # and is told to skip heavy events on light queries.
-        if (
-            self.biography_selector is not None
-            and user_input.strip()
-        ):
-            try:
-                biography_hits = await self.biography_selector.select(
-                    query=user_input,
-                    is_heavy=is_heavy_topic,
-                    is_confrontation=is_confrontation,
-                    recent_emotion=self._current_mood,
-                )
-            except Exception as e:
-                print(f"[biography] selector failed: {e}", flush=True)
-                biography_hits = []
-            if biography_hits:
-                summary = "; ".join(f"{e.age}岁·{e.content[:18]}..." for e in biography_hits)
-                print(f"[biography] selected {len(biography_hits)} for {user_input[:20]!r}: {summary}", flush=True)
-            else:
-                tone = []
-                if is_heavy_topic:
-                    tone.append("heavy")
-                if is_confrontation:
-                    tone.append("confrontation")
-                tone_str = f" [{','.join(tone)}]" if tone else ""
-                print(f"[biography] no selection for {user_input[:20]!r}{tone_str}", flush=True)
-        self._last_biography_hit = bool(biography_hits)
-        self._last_is_heavy_topic = is_heavy_topic
-
-        # Stash for compress step (it needs user_input + biography hits)
-        self._last_biography_hits = list(biography_hits)
-        self._last_user_input = user_input
-
-        prompt_mode = "think" if self.persona.compression.enabled else "single"
-        system_prompt = self.prompt_builder.build_system_prompt(
-            memory_context=memory_context,
-            active_plans=self.planner.active_plans if self.planner else None,
-            current_mood=self._current_mood,
-            relationship_level=self._relationship_level,
-            current_time=datetime.now(),
-            last_interaction_time=last_interaction_time,
-            emotion_state=self._emotion_state,
-            inner_state=inner_state,
-            subjective_view=subjective_view,
-            pending_agenda=pending_agenda,
-            biography_hits=biography_hits,
-            social_graph=self.social_graph,
-            social_states=social_states,
-            mode=prompt_mode,
-        )
-        if proactive_nudge:
-            system_prompt += f"\n\n## 当前内心活动{proactive_nudge}"
-
-        messages = self.context_assembler.assemble_messages(memory_context)
-
-        # Defensive: if messages is empty (we've seen this happen when a
-        # concurrent reflection-driven switch_recipient races with our
-        # compress_aged_turns + assemble_context path), at least surface
-        # the literal user input so the API call never gets an empty list.
-        if not messages and (user_input or images):
-            messages = [{"role": "user", "content": user_input or "（图片消息）"}]
-
-        # Turn-focus reminder: high-recency `<system-reminder>` block embedded
-        # at the start of the user's current message. Pattern lifted from
-        # Claude Code (utils/api.ts:449). System prompt has stable identity
-        # + rules; this carries every dynamic per-turn signal: time, current
-        # activity, recent events, emotion + engagement mode, today's news
-        # briefing, the question Aria just asked.
-        from lingxi.conversation.turn_focus import (
-            detect_last_assistant_question,
-            detect_last_assistant_turn,
-        )
-        history_for_focus = self.memory.short_term.get_history()
-        last_question = detect_last_assistant_question(history_for_focus)
-        last_statement: str | None = None
-        if not last_question:
-            # Only surface statement-anchor when there's no question
-            # already in flight (question takes precedence — it's about
-            # what the user is answering, statement is about what context
-            # anchors a short reply).
-            turn_info = detect_last_assistant_turn(history_for_focus)
-            if turn_info is not None:
-                content, is_question = turn_info
-                if not is_question:
-                    last_statement = content
-        focus_reminder = self.prompt_builder.build_turn_focus_reminder(
-            last_assistant_question=last_question,
-            last_assistant_statement=last_statement,
-            current_time=datetime.now(),
-            last_interaction_time=last_interaction_time,
-            inner_state=inner_state,
-            emotion_state=self._emotion_state,
-            current_mood=self._current_mood,
-        )
-
-        # If there are images, inject them into the last user message as multimodal blocks
-        if images:
-            # Rebuild last user message as content block array
-            text_content = user_input or "（请看这张图）"
-            blocks: list[dict] = []
-            for img in images:
-                blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img.get("media_type", "image/png"),
-                        "data": img["data"],
-                    },
-                })
-            blocks.append({"type": "text", "text": text_content})
-
-            # Replace or append the last user message
-            if messages and messages[-1]["role"] == "user":
-                messages[-1] = {"role": "user", "content": blocks}
-            else:
-                messages.append({"role": "user", "content": blocks})
-
-        # Embed focus reminder into the start of the user's current message.
-        # Either prepend to the string content, or insert as the first text
-        # block in the multimodal array — order matters: reminder first,
-        # then the user's actual content.
-        if focus_reminder and messages and messages[-1].get("role") == "user":
-            last = messages[-1]
-            content = last.get("content")
-            if isinstance(content, str):
-                last["content"] = f"{focus_reminder}\n\n{content}"
-            elif isinstance(content, list):
-                content.insert(0, {"type": "text", "text": focus_reminder})
-
-        # --- Few-shot retrieval (rendered as TEXT inside system prompt now,
-        # not as user/assistant message pairs interleaved with real history).
-        # The pair-injection approach caused the model to confabulate prior
-        # user messages from fewshot context. Text-block treatment avoids
-        # that while still anchoring voice. ---
+        """Append fewshot voice anchors to the system prompt + attach the style
+        preamble to the last user message. Shared by both _prepare_turn_v2
+        paths. Ported from the retired _prepare_turn (v2 was missing it)."""
         baseline_seeds = self._phase0_seed_fewshots()[:3]
         retrieved: list[FewShotSample] = []
         if self.fewshot_retriever is not None:
             try:
                 query_text = self._last_inner_thought_for(recipient_key) or user_input
                 retrieved = await self.fewshot_retriever.retrieve(
-                    query_text=query_text,
-                    recipient_key=recipient_key,
-                    k=3,
+                    query_text=query_text, recipient_key=recipient_key, k=3,
                 )
             except Exception:
                 retrieved = []
         seed_fewshots = baseline_seeds + retrieved
         self._last_fewshots = seed_fewshots
-
-        # Render fewshots as a text block and append to system prompt
         if seed_fewshots:
-            voice_examples_block = self._render_fewshots_as_text(seed_fewshots[:5])
-            if voice_examples_block:
-                system_prompt = f"{system_prompt}\n\n{voice_examples_block}"
+            block = self._render_fewshots_as_text(seed_fewshots[:5])
+            if block:
+                system_prompt = f"{system_prompt}\n\n{block}"
 
-        # Attach style preamble to the last user message
         effective_style = self.persona.style
         if self._last_biography_hit:
             effective_style = effective_style.model_copy(
@@ -570,8 +241,6 @@ class ConversationEngine:
             biography_hit=self._last_biography_hit,
         )
         self._apply_style_preamble(messages, style_preamble)
-
-        # Final message list = real chat history only (NO fewshot pair injection)
         return system_prompt, messages
 
     async def _prepare_turn_v2(
@@ -592,27 +261,65 @@ class ConversationEngine:
 
         recipient_key = f"{channel}:{recipient_id}" if recipient_id else "_anon"
 
-        # 1. Build state digest from current inner_life snapshot
-        inner_state = (
-            await self.inner_life_store.load_state()
-            if self.inner_life_store else None
+        # Per-recipient state setup: restore this recipient's short-term
+        # buffer + emotion/mood/relationship from the interaction record, age
+        # emotion for elapsed silence, and record the interaction. (Ported
+        # from the retired _prepare_turn — v2 was missing all of this.)
+        self._current_recipient_key = recipient_key
+        if recipient_key:
+            await self.memory.short_term.switch_recipient(recipient_key)
+
+        if self.interaction_tracker and channel and recipient_id:
+            rec = self.interaction_tracker.get_record(channel, recipient_id)
+            if rec:
+                self._relationship_level = rec.relationship_level
+                if rec.emotion_dimensions:
+                    self._emotion_state.dimensions = dict(rec.emotion_dimensions)
+                if rec.emotion_last_decay:
+                    self._emotion_state.last_decay_at = rec.emotion_last_decay
+                if rec.emotion_narrative:
+                    self._current_mood = rec.emotion_narrative
+                if rec.last_interaction:
+                    from lingxi.temporal.silence import compute_silence_emotion_deltas
+                    deltas = compute_silence_emotion_deltas(
+                        datetime.now() - rec.last_interaction
+                    )
+                    if deltas:
+                        self._emotion_state.apply_deltas(
+                            deltas,
+                            volatility=self.persona.emotional_baseline.mood_volatility,
+                        )
+            self.interaction_tracker.record_interaction(channel, recipient_id)
+
+        # Text persisted to short-term for the user turn (with image marker).
+        memory_text = user_input
+        if images:
+            memory_text = f"[发送了{len(images)}张图片] {user_input}".strip()
+
+        # No facts layer wired (tests / minimal embeds): degrade to a plain
+        # persona prompt + short-term dialog history, skipping the
+        # orchestrator/renderer entirely.
+        if self.fact_retriever is None:
+            memory_context = await self.memory.assemble_context(
+                query=user_input, recipient_key=recipient_key,
+            )
+            messages = self.context_assembler.assemble_messages(memory_context)
+            self.memory.add_turn("user", memory_text)
+            messages.append({"role": "user", "content": user_input})
+            return await self._apply_voice_and_style(
+                build_persona_block(self.persona), messages, recipient_key, user_input
+            )
+
+        # 1. Build state digest from facts (life state is facts-driven now).
+        # "current activity" = latest aria.event fact; mood = engine's own
+        # tracked mood label. The old inner_life snapshot was retired.
+        aria_events = await self.fact_retriever.fetch(
+            FactQuery(subject="aria", type=FactType.EVENT, limit=4)
         )
         digest = StateDigest(
-            activity=(
-                inner_state.current_activity.description
-                if inner_state and inner_state.current_activity else ""
-            ),
-            mood="，".join(
-                f"{k}({v:.1f})"
-                for k, v in sorted(
-                    (inner_state.axis_modulation or {}).items()
-                )[:3]
-            ) if inner_state else "",
-            last_lived=[
-                f.content[:50] for f in await self.fact_retriever.fetch(
-                    FactQuery(subject="aria", type=FactType.EVENT, limit=3)
-                )
-            ],
+            activity=aria_events[0].content[:60] if aria_events else "",
+            mood=self._current_mood or "",
+            last_lived=[f.content[:50] for f in aria_events[:3]],
         )
 
         # 2. Build catalog — filter user buckets to ONLY the current
@@ -634,6 +341,9 @@ class ConversationEngine:
             query=user_input, recipient_key=recipient_key,
         )
         messages = self.context_assembler.assemble_messages(memory_context)
+        # Persist the user turn AFTER assembling history (so it isn't
+        # duplicated this turn, but is available next turn).
+        self.memory.add_turn("user", memory_text)
         prev_summary = self._thread_summaries.get(recipient_key, "") if hasattr(self, "_thread_summaries") else ""
 
         # 3. Orchestrator decides
@@ -673,7 +383,9 @@ class ConversationEngine:
         # Append user input as last message
         messages.append({"role": "user", "content": user_input})
 
-        return system_prompt, messages
+        return await self._apply_voice_and_style(
+            system_prompt, messages, recipient_key, user_input
+        )
 
     @staticmethod
     def _render_fewshots_as_text(samples: list[FewShotSample]) -> str:
@@ -938,61 +650,8 @@ class ConversationEngine:
             import asyncio as _asyncio
             loop = _asyncio.get_running_loop()
             loop.create_task(self.memory.short_term.persist_current())
-
-            # Mark agenda items as delivered if response seems to have mentioned them
-            if self.agenda_engine and self._last_response_text and self._current_recipient_key:
-                loop.create_task(
-                    self._mark_agenda_delivered_if_mentioned(
-                        self._current_recipient_key, self._last_response_text
-                    )
-                )
-
-            # Reactive life: chat just happened → drop social_need + stamp
-            if self.inner_life_store is not None:
-                loop.create_task(self._touch_inner_life_chatted())
         except RuntimeError:
             pass
-
-    async def _touch_inner_life_chatted(self) -> None:
-        """Lightweight hook: inform the life simulator that a chat just occurred.
-
-        Reduces social_need (she just talked to someone) and stamps last_chat_at
-        so drift_dynamics can keep social_need depressed for the next ~hour.
-        """
-        if self.inner_life_store is None:
-            return
-        try:
-            state = await self.inner_life_store.load_state()
-            from datetime import datetime as _dt
-            state.last_chat_at = _dt.now()
-            state.social_need = max(0.1, state.social_need - 0.15)
-            await self.inner_life_store.save_state(state)
-        except Exception:
-            # Never let life-state errors break the chat path
-            pass
-
-    async def _mark_agenda_delivered_if_mentioned(
-        self, recipient_key: str, response_text: str
-    ) -> None:
-        """Heuristic: if Aria's response contains part of an agenda item, mark it delivered."""
-        if self.agenda_engine is None:
-            return
-        try:
-            pending = await self.agenda_engine.top_pending(recipient_key, limit=10)
-        except Exception:
-            return
-        delivered_ids: list[str] = []
-        response_lower = response_text.lower()
-        for item in pending:
-            # Crude overlap: if 40%+ of agenda content words appear in response
-            content_words = set(item.content.lower().split())
-            if not content_words:
-                continue
-            overlap = sum(1 for w in content_words if w in response_lower)
-            if overlap / len(content_words) >= 0.4:
-                delivered_ids.append(item.id)
-        if delivered_ids:
-            await self.agenda_engine.mark_delivered(recipient_key, delivered_ids)
 
     async def chat(
         self,
@@ -1048,14 +707,9 @@ class ConversationEngine:
         channel: str | None,
         recipient_id: str | None,
     ) -> TurnOutput:
-        if self.fact_retriever is not None:
-            system_prompt, messages = await self._prepare_turn_v2(
-                user_input, images, channel, recipient_id
-            )
-        else:
-            system_prompt, messages = await self._prepare_turn(
-                user_input, images, channel, recipient_id
-            )
+        system_prompt, messages = await self._prepare_turn_v2(
+            user_input, images, channel, recipient_id
+        )
 
         if self.persona.compression.enabled:
             # Two-call: think (Sonnet) then compress (Haiku)
@@ -1119,14 +773,9 @@ class ConversationEngine:
         channel: str | None,
         recipient_id: str | None,
     ) -> AsyncIterator[str]:
-        if self.fact_retriever is not None:
-            system_prompt, messages = await self._prepare_turn_v2(
-                user_input, images, channel, recipient_id
-            )
-        else:
-            system_prompt, messages = await self._prepare_turn(
-                user_input, images, channel, recipient_id
-            )
+        system_prompt, messages = await self._prepare_turn_v2(
+            user_input, images, channel, recipient_id
+        )
 
         prefill = pick_prefill(self.persona.style)
 
@@ -1201,14 +850,9 @@ class ConversationEngine:
     ) -> AsyncIterator[StreamEvent]:
         from lingxi.conversation.output_schema import META_DELIMITER
 
-        if self.fact_retriever is not None:
-            system_prompt, messages = await self._prepare_turn_v2(
-                user_input, images, channel, recipient_id
-            )
-        else:
-            system_prompt, messages = await self._prepare_turn(
-                user_input, images, channel, recipient_id
-            )
+        system_prompt, messages = await self._prepare_turn_v2(
+            user_input, images, channel, recipient_id
+        )
 
         if self.persona.compression.enabled:
             # Two-call streaming: think (non-stream) then compress (stream)
@@ -1376,24 +1020,29 @@ class ConversationEngine:
         if self._current_recipient_key and output.inner_thought:
             self._recent_inner_thoughts[self._current_recipient_key] = output.inner_thought
 
-        # Apply memory writes (scoped to current recipient). Track tasks so
-        # `end_session()` (or process shutdown) can flush before exit —
-        # without this, embedding/Chroma writes that haven't completed get
-        # silently dropped on quick shutdowns or back-to-back consolidate.
-        for content in output.memory_writes:
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(
-                    self.memory.add_fact(
-                        content,
-                        importance=0.7,
-                        recipient_key=self._current_recipient_key,
+        # Apply memory writes → facts.db (subject=user:<recipient_key>).
+        # These are durable facts the persona chose to remember about the
+        # interlocutor; they surface back via the orchestrator/renderer's
+        # 【你和他】 block. Fire-and-forget, tracked so end_session() can flush.
+        if self.user_statement_writer is not None and self._current_recipient_key:
+            from lingxi.facts.models import Source
+            subject = f"user:{self._current_recipient_key}"
+            for content in output.memory_writes:
+                try:
+                    loop = asyncio.get_running_loop()
+                    task = loop.create_task(
+                        self.user_statement_writer.write(
+                            subject=subject,
+                            content=content,
+                            type=FactType.PATTERN,
+                            source=Source.USER_STATED,
+                            ts=datetime.now(),
+                        )
                     )
-                )
-                self._pending_memory_tasks.add(task)
-                task.add_done_callback(self._pending_memory_tasks.discard)
-            except RuntimeError:
-                pass
+                    self._pending_memory_tasks.add(task)
+                    task.add_done_callback(self._pending_memory_tasks.discard)
+                except RuntimeError:
+                    pass
 
         # Apply mood label update
         if output.mood_label:
@@ -1405,11 +1054,6 @@ class ConversationEngine:
                 output.emotion_deltas,
                 volatility=self.persona.emotional_baseline.mood_volatility,
             )
-
-        # Apply plan updates
-        for directive in output.plan_updates:
-            if self.planner:
-                self.planner.update_from_directive(directive)
 
         self._last_output = output
         return output
@@ -1452,7 +1096,11 @@ class ConversationEngine:
             rec = self.interaction_tracker.get_record(channel, recipient_id)
             if rec and self.relationship_evaluator:
                 old_level = rec.relationship_level
-                new_level = await self.relationship_evaluator.evaluate(rec, self.memory)
+                try:
+                    new_level = await self.relationship_evaluator.evaluate(rec, self.memory)
+                except Exception as e:
+                    print(f"[relationship] eval failed (non-fatal): {e}")
+                    new_level = old_level
                 if new_level != old_level:
                     self.interaction_tracker.update_relationship_level(
                         channel, recipient_id, new_level
@@ -1467,21 +1115,13 @@ class ConversationEngine:
                     )
 
         await self.memory.save()
-        if self.planner:
-            await self.planner.save_to_disk(
-                str(self.memory.data_dir / "plans.json")
-            )
         if self.interaction_tracker:
             await self.interaction_tracker.save()
         return result
 
     async def load_state(self) -> None:
-        """Load persisted state (memory, plans, interactions) from disk."""
+        """Load persisted state (short-term memory, interactions) from disk."""
         await self.memory.load()
-        if self.planner:
-            await self.planner.load_from_disk(
-                str(self.memory.data_dir / "plans.json")
-            )
         if self.interaction_tracker:
             await self.interaction_tracker.load()
 

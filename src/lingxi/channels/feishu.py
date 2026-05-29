@@ -26,9 +26,7 @@ from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
 from lingxi.channels.outbound import ChannelRegistry, OutboundChannel
 from lingxi.conversation.engine import ConversationEngine
-from lingxi.inner_life.simulator import LifeSimulator
 from lingxi.temporal.proactive import ProactiveConfig, ProactiveScheduler
-from lingxi.temporal.reflection import ReflectionConfig, ReflectionLoop
 
 FEISHU_BASE = "https://open.feishu.cn/open-apis"
 
@@ -301,9 +299,6 @@ class FeishuBot(OutboundChannel):
         self._channel_registry = ChannelRegistry()
         self._channel_registry.register(self)
         self._proactive_scheduler: ProactiveScheduler | None = None
-        self._reflection_config = ReflectionConfig()
-        self._reflection_loop: ReflectionLoop | None = None
-        self._life_simulator: LifeSimulator | None = None
         self._world_scheduler = None  # WorldScheduler — started below
         self._social_scheduler = None  # SocialScheduler — started below
 
@@ -397,31 +392,10 @@ class FeishuBot(OutboundChannel):
                 self._proactive_scheduler.start(), self._loop
             )
 
-        # Start reflection loop
-        if self._reflection_config.enabled and self.engine.interaction_tracker:
-            self._reflection_loop = ReflectionLoop(
-                config=self._reflection_config,
-                tracker=self.engine.interaction_tracker,
-                engine=self.engine,
-            )
-            asyncio.run_coroutine_threadsafe(
-                self._reflection_loop.start(), self._loop
-            )
-
-        # Start life simulator (Aria has a life running in the background).
-        # Pass memory so daily diary auto-consolidates into chroma episodes.
-        if self.engine.inner_life_store is not None:
-            self._life_simulator = LifeSimulator(
-                persona=self.engine.persona,
-                llm=self.engine.llm,
-                store=self.engine.inner_life_store,
-                tick_interval_minutes=30,
-                memory=self.engine.memory,
-                life_writer=self.engine.life_writer,
-            )
-            asyncio.run_coroutine_threadsafe(
-                self._life_simulator.start(), self._loop
-            )
+        # Reflection is handled by facts/Reflector + ReflectionTrigger (wired
+        # in create_engine). Aria's life runs through DailyPlanner +
+        # PlanExecutor (started below) writing aria.* facts — the old
+        # ReflectionLoop and LifeSimulator were retired.
 
         # World scheduler — fetches today's news briefing each morning.
         # Requires the LLM provider's api_key to issue the web_search call.
@@ -448,6 +422,7 @@ class FeishuBot(OutboundChannel):
         if (
             getattr(self.engine, "social_graph", None) is not None
             and getattr(self.engine, "social_store", None) is not None
+            and getattr(self.engine.social_graph, "npcs", None)  # skip when NPC roster empty
         ):
             from lingxi.social.promoter import SocialPromoter
             from lingxi.social.scheduler import SocialScheduler
@@ -1002,9 +977,7 @@ class FeishuBot(OutboundChannel):
                 "可用命令：\n"
                 "/stats - 记忆状态\n"
                 "/mood - 当前心情\n"
-                "/memories <关键词> - 搜索记忆\n"
-                "/entities - 实体图谱\n"
-                "/episodes - 最近session摘要\n"
+                "/memories <关键词> - 搜索 facts\n"
                 "/reveal <turn_id> - 查看 Aria 当时的内心独白\n"
                 "/good [turn_id] - 标记某轮回复像 (默认最后一轮)\n"
                 "/bad <turn_id> <应该说的话> - 提交修正\n"
@@ -1013,19 +986,22 @@ class FeishuBot(OutboundChannel):
 
         if cmd == "/stats":
             stats = self.engine.memory.get_stats()
-            await self.engine.memory.entity_graph.load()
-            ent_stats = self.engine.memory.entity_graph.stats()
             rec = None
             if self.engine.interaction_tracker:
                 rec = self.engine.interaction_tracker.get_record("feishu", chat_id)
             lvl = rec.relationship_level if rec else 1
             turns = rec.total_turns if rec else 0
+            fact_count = "?"
+            if getattr(self.engine, "fact_retriever", None) is not None:
+                try:
+                    cat = await self.engine.fact_retriever.catalog()
+                    fact_count = sum(cat.values())
+                except Exception:
+                    fact_count = "?"
             return (
                 f"📊 状态\n"
                 f"短期: {stats['short_term_turns']} 轮\n"
-                f"长期: {stats['long_term_entries']} 条\n"
-                f"情景: {stats['episodes']} 段\n"
-                f"实体: {ent_stats['entity_count']} 个 / {ent_stats['total_links']} 个链接\n"
+                f"facts.db: {fact_count} 条\n"
                 f"关系等级: {lvl} | 总对话轮数: {turns}"
             )
 
@@ -1038,37 +1014,14 @@ class FeishuBot(OutboundChannel):
             return "\n".join(lines)
 
         if cmd == "/memories":
-            query = arg or "最近"
-            ctx = await self.engine.memory.assemble_context(
-                query, long_term_limit=8, episode_limit=3,
-                recipient_key=recipient_key,
+            query = arg or None
+            from lingxi.facts.retriever import FactQuery
+            facts = await self.engine.fact_retriever.fetch(
+                FactQuery(subject=f"user:{recipient_key}", semantic=query, limit=8)
             )
-            lines = [f"🔍 \"{query}\" 的记忆:"]
-            lines.append(f"事实 ({len(ctx.long_term_facts)}):")
-            for f in ctx.long_term_facts[:8]:
-                lines.append(f"  • [{f.importance:.1f}] {f.content[:60]}")
-            lines.append(f"\nsession ({len(ctx.relevant_episodes)}):")
-            for ep in ctx.relevant_episodes:
-                lines.append(f"  • [{ep.timestamp.strftime('%m-%d')}] {ep.summary[:80]}")
-            return "\n".join(lines)
-
-        if cmd == "/entities":
-            await self.engine.memory.entity_graph.load()
-            ents = self.engine.memory.entity_graph.all_entities()
-            ents.sort(key=lambda e: e.mention_count, reverse=True)
-            lines = [f"🌐 实体图谱 ({len(ents)} 个):"]
-            for e in ents[:15]:
-                lines.append(f"  • {e.name} ({e.type}) ×{e.mention_count}")
-            return "\n".join(lines)
-
-        if cmd == "/episodes":
-            eps = await self.engine.memory.episodic.get_recent(limit=8)
-            lines = [f"📚 最近 session ({len(eps)} 段):"]
-            for ep in eps:
-                lines.append(
-                    f"  • [{ep.timestamp.strftime('%m-%d %H:%M')}] "
-                    f"({ep.emotional_tone}) {ep.summary[:80]}"
-                )
+            lines = [f"🔍 \"{query or '最近'}\" 的 facts ({len(facts)}):"]
+            for f in facts:
+                lines.append(f"  • [{f.importance}] {f.content[:60]}")
             return "\n".join(lines)
 
         if cmd == "/test-proactive":
