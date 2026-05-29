@@ -16,16 +16,13 @@ from lingxi.conversation.context import ContextAssembler
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
 from lingxi.facts.models import FactType
 from lingxi.facts.retriever import FactQuery
-from lingxi.conversation.prompt_assembly import (
-    build_style_preamble,
-    pick_prefill,
-)
+from lingxi.conversation.prompt_assembly import pick_prefill
 from lingxi.fewshot.models import AnnotationTurn, FewShotSample
 from lingxi.fewshot.retriever import FewShotRetriever
 from lingxi.fewshot.seeds_loader import load_seeds
 from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
-from lingxi.persona.models import EmotionState, PersonaConfig
+from lingxi.persona.models import PersonaConfig
 from lingxi.persona.prompt_builder import PromptBuilder
 from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
@@ -155,8 +152,6 @@ class ConversationEngine:
             relationship_evaluator or RelationshipEvaluator(persona, llm_provider)
         )
 
-        self._current_mood: str = persona.emotional_baseline.default_mood
-        self._emotion_state: EmotionState = EmotionState.from_baseline(persona.emotional_baseline)
         self._relationship_level: int = 1
         self._current_recipient_key: str | None = None
         self._last_response_text: str = ""
@@ -203,46 +198,6 @@ class ConversationEngine:
         # Initialize
         self.memory.set_llm_provider(llm_provider)
 
-    async def _apply_voice_and_style(
-        self,
-        system_prompt: str,
-        messages: list[dict],
-        recipient_key: str,
-        user_input: str,
-    ) -> tuple[str, list[dict]]:
-        """Append fewshot voice anchors to the system prompt + attach the style
-        preamble to the last user message. Shared by both _prepare_turn_v2
-        paths. Ported from the retired _prepare_turn (v2 was missing it)."""
-        baseline_seeds = self._phase0_seed_fewshots()[:3]
-        retrieved: list[FewShotSample] = []
-        if self.fewshot_retriever is not None:
-            try:
-                query_text = self._last_inner_thought_for(recipient_key) or user_input
-                retrieved = await self.fewshot_retriever.retrieve(
-                    query_text=query_text, recipient_key=recipient_key, k=3,
-                )
-            except Exception:
-                retrieved = []
-        seed_fewshots = baseline_seeds + retrieved
-        self._last_fewshots = seed_fewshots
-        if seed_fewshots:
-            block = self._render_fewshots_as_text(seed_fewshots[:5])
-            if block:
-                system_prompt = f"{system_prompt}\n\n{block}"
-
-        effective_style = self.persona.style
-        if self._last_biography_hit:
-            effective_style = effective_style.model_copy(
-                update={"speech_max_chars": max(effective_style.speech_max_chars, 60)},
-            )
-        style_preamble = build_style_preamble(
-            effective_style,
-            voice_hint=self._persona_voice_hint(),
-            biography_hit=self._last_biography_hit,
-        )
-        self._apply_style_preamble(messages, style_preamble)
-        return system_prompt, messages
-
     async def _prepare_turn_v2(
         self,
         user_input: str,
@@ -262,9 +217,8 @@ class ConversationEngine:
         recipient_key = f"{channel}:{recipient_id}" if recipient_id else "_anon"
 
         # Per-recipient state setup: restore this recipient's short-term
-        # buffer + emotion/mood/relationship from the interaction record, age
-        # emotion for elapsed silence, and record the interaction. (Ported
-        # from the retired _prepare_turn — v2 was missing all of this.)
+        # buffer + relationship level, and record the interaction. (Emotion
+        # state was stripped — pure GA, the agent's state IS its memory stream.)
         self._current_recipient_key = recipient_key
         if recipient_key:
             await self.memory.short_term.switch_recipient(recipient_key)
@@ -273,22 +227,6 @@ class ConversationEngine:
             rec = self.interaction_tracker.get_record(channel, recipient_id)
             if rec:
                 self._relationship_level = rec.relationship_level
-                if rec.emotion_dimensions:
-                    self._emotion_state.dimensions = dict(rec.emotion_dimensions)
-                if rec.emotion_last_decay:
-                    self._emotion_state.last_decay_at = rec.emotion_last_decay
-                if rec.emotion_narrative:
-                    self._current_mood = rec.emotion_narrative
-                if rec.last_interaction:
-                    from lingxi.temporal.silence import compute_silence_emotion_deltas
-                    deltas = compute_silence_emotion_deltas(
-                        datetime.now() - rec.last_interaction
-                    )
-                    if deltas:
-                        self._emotion_state.apply_deltas(
-                            deltas,
-                            volatility=self.persona.emotional_baseline.mood_volatility,
-                        )
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
         # Text persisted to short-term for the user turn (with image marker).
@@ -306,19 +244,17 @@ class ConversationEngine:
             messages = self.context_assembler.assemble_messages(memory_context)
             self.memory.add_turn("user", memory_text)
             messages.append({"role": "user", "content": user_input})
-            return await self._apply_voice_and_style(
-                build_persona_block(self.persona), messages, recipient_key, user_input
-            )
+            return build_persona_block(self.persona), messages
 
-        # 1. Build state digest from facts (life state is facts-driven now).
-        # "current activity" = latest aria.event fact; mood = engine's own
-        # tracked mood label. The old inner_life snapshot was retired.
+        # 1. Build state digest purely from the facts memory stream.
+        # "current activity" = latest aria.event fact; recent lived = next few.
+        # No emotion/mood scalar — pure GA, state is the memory stream.
         aria_events = await self.fact_retriever.fetch(
             FactQuery(subject="aria", type=FactType.EVENT, limit=4)
         )
         digest = StateDigest(
             activity=aria_events[0].content[:60] if aria_events else "",
-            mood=self._current_mood or "",
+            mood="",
             last_lived=[f.content[:50] for f in aria_events[:3]],
         )
 
@@ -383,67 +319,7 @@ class ConversationEngine:
         # Append user input as last message
         messages.append({"role": "user", "content": user_input})
 
-        return await self._apply_voice_and_style(
-            system_prompt, messages, recipient_key, user_input
-        )
-
-    @staticmethod
-    def _render_fewshots_as_text(samples: list[FewShotSample]) -> str:
-        """Render fewshots as a TEXT block in the system prompt.
-
-        Format: '场景：X / 你那时说："Y"'. The samples are voice anchors,
-        explicitly NOT prior conversation turns the model should treat
-        as if the user said them.
-        """
-        if not samples:
-            return ""
-        lines = [
-            "## 你的说话样本（仅作语感参考——这些**不是**对方刚说的话，"
-            "**不是**真实历史，只是几个'当年类似场景下你会怎么说'的示例）"
-        ]
-        for s in samples:
-            ctx = (s.context_summary or "").strip()[:60]
-            speech = (s.corrected_speech or "").strip()[:100]
-            if not speech:
-                continue
-            if ctx:
-                lines.append(f'- 场景："{ctx}" → 你那时说："{speech}"')
-            else:
-                lines.append(f'- 你那时说："{speech}"')
-        return "\n".join(lines)
-
-    def _phase0_seed_fewshots(self) -> list[FewShotSample]:
-        """Hardcoded baseline seeds before Task 16's retriever lands.
-
-        Covers three common AI-tone failure modes: over-eager agreement,
-        cliché punchlines, and help-desk sign-offs.
-        """
-        return [
-            FewShotSample(
-                id="p0-1",
-                inner_thought="",
-                corrected_speech="哦？啥机械？",
-                context_summary="用户提到他朋友的朋友也在做工业机械",
-                tags=["好奇", "追问"],
-                source="seed",
-            ),
-            FewShotSample(
-                id="p0-2",
-                inner_thought="",
-                corrected_speech="也是，折腾完还要复盘 累。",
-                context_summary="用户说刚开完一个长会",
-                tags=["共鸣", "吐槽"],
-                source="seed",
-            ),
-            FewShotSample(
-                id="p0-3",
-                inner_thought="",
-                corrected_speech="嗯 早点睡。",
-                context_summary="用户说困了要睡了",
-                tags=["日常", "短"],
-                source="seed",
-            ),
-        ]
+        return system_prompt, messages
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
         """Cheapest signal for the retriever: the previous turn's inner_thought.
@@ -534,20 +410,11 @@ class ConversationEngine:
             render_fewshots_for_compress,
         )
 
-        # Use whatever _prepare_turn already retrieved (3 seeds + up to 3
-        # context-relevant samples). Falling back to seeds-only when there's
-        # no stash means cold-start still has voice anchors.
-        seeds = list(self._last_fewshots) if self._last_fewshots else self._phase0_seed_fewshots()[:3]
-        seeds = seeds[:5]
+        # Pure GA: no fewshot voice anchors in the compress pass either.
+        seeds: list = []
 
         style = self.persona.style
         max_chars = style.speech_max_chars
-        if self._last_biography_hit:
-            max_chars = max(max_chars, 60)
-        # Heavy topic: hard-cap to 25 chars regardless of biography. Short +
-        # present beats grandstanding empathy speech.
-        if self._last_is_heavy_topic:
-            max_chars = min(max_chars, 25)
 
         # Pull Aria's most recent assistant turn from short_term as anchor
         # for compress. Without this, short user replies like '给我吃'
@@ -606,30 +473,6 @@ class ConversationEngine:
 
     # === end two-call helpers ==========================================
 
-    def _apply_style_preamble(self, messages: list[dict], preamble: str) -> None:
-        """Prepend the preamble to the last user message's text.
-
-        Handles both string content and multimodal block lists.
-        """
-        if not messages:
-            return
-        for msg in reversed(messages):
-            if msg.get("role") != "user":
-                continue
-            content = msg.get("content", "")
-            if isinstance(content, str):
-                msg["content"] = preamble + content
-                return
-            if isinstance(content, list):
-                # Find last text block; prepend preamble to it
-                for block in reversed(content):
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        block["text"] = preamble + block.get("text", "")
-                        return
-                # No text block? Add one
-                content.append({"type": "text", "text": preamble})
-                return
-
     def _persist_state(self, channel: str | None, recipient_id: str | None) -> None:
         """Save current emotion state back to the InteractionRecord.
 
@@ -641,9 +484,6 @@ class ConversationEngine:
         rec = self.interaction_tracker.get_record(channel, recipient_id)
         if rec is None:
             return
-        rec.emotion_dimensions = dict(self._emotion_state.dimensions)
-        rec.emotion_last_decay = self._emotion_state.last_decay_at
-        rec.emotion_narrative = self._current_mood
 
         # Persist short-term buffer async
         try:
@@ -671,8 +511,8 @@ class ConversationEngine:
         """Get/create the per-recipient turn lock.
 
         Two reactive turns for the SAME recipient must serialize through
-        engine singleton state (`_current_recipient_key`, `_current_mood`,
-        `_emotion_state`, short_term `_buffer`). Different recipients get
+        engine singleton state (`_current_recipient_key`, short_term
+        `_buffer`). Different recipients get
         different locks and proceed in parallel — but parallel reactive
         chats from different users still share singleton state, so callers
         should be aware: in practice the IM channel runs one chat at a
@@ -1043,17 +883,6 @@ class ConversationEngine:
                     task.add_done_callback(self._pending_memory_tasks.discard)
                 except RuntimeError:
                     pass
-
-        # Apply mood label update
-        if output.mood_label:
-            self._current_mood = output.mood_label
-
-        # Apply emotion dimension deltas
-        if output.emotion_deltas:
-            self._emotion_state.apply_deltas(
-                output.emotion_deltas,
-                volatility=self.persona.emotional_baseline.mood_volatility,
-            )
 
         self._last_output = output
         return output
