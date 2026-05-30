@@ -635,8 +635,16 @@ class ConversationEngine:
             ],
         )
 
-        # 2. Build catalog
-        catalog = await self.fact_retriever.catalog()
+        # 2. Build catalog — filter user buckets to ONLY the current
+        # recipient. Without this, Sonnet sees ALL users' patterns/jokes
+        # and may query the wrong user's data (which then either pollutes
+        # 【身边的事】 or leaks one user's private texture into another's chat).
+        catalog_raw = await self.fact_retriever.catalog()
+        cur_user_prefix = f"user:{recipient_key}."
+        catalog = {
+            k: v for k, v in catalog_raw.items()
+            if not k.startswith("user:") or k.startswith(cur_user_prefix)
+        }
 
         # 3. Orchestrator decides
         decision = await decide(self.llm, user_input, digest, catalog)
