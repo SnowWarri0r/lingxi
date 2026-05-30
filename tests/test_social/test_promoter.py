@@ -15,11 +15,13 @@ def make_npc(id="xiaomin", name="小敏", relation="室友"):
 
 
 def make_event(**overrides):
+    """Default event is aria_interaction so the promoter accepts it. The
+    'life' type defaults to skipped — see TestTypeGate."""
     defaults = dict(
         npc_id="xiaomin",
         ts=datetime.now() - timedelta(minutes=5),
-        type="life",
-        content="跟导师吵了一架",
+        type="aria_interaction",
+        content="拉 Aria 一起吃了麻辣烫，吵了几句关于学校食堂",
         significance=0.7,
     )
     defaults.update(overrides)
@@ -59,7 +61,19 @@ class TestThreshold:
         state = await inner.load_state()
         assert len(state.recent_events) == 1
         assert state.recent_events[0].wants_to_share is True
-        assert "小敏" in state.recent_events[0].content
+
+    @pytest.mark.asyncio
+    async def test_life_events_never_promoted(self, stores):
+        """NPC's own-life events should stay in 'they live their own life'
+        background. Promoting them makes Aria narrate them as her own."""
+        inner, social, root = stores
+        promoter = SocialPromoter(inner, social, root)
+        ev = make_event(type="life", significance=0.9, content="Echo 桌上发现一杯咖啡")
+        await social.append_event(ev)
+        promoted = await promoter.maybe_promote(make_npc(), ev)
+        assert promoted is False
+        state = await inner.load_state()
+        assert state.recent_events == []
 
     @pytest.mark.asyncio
     async def test_already_promoted_skipped(self, stores):
