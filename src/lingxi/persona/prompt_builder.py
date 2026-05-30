@@ -15,7 +15,6 @@ if TYPE_CHECKING:
     from lingxi.planning.models import Plan
     from lingxi.relational.models import RelationalMemory
     from lingxi.social.models import NPCState, SocialGraph
-    from lingxi.world.models import DailyBriefing
 
 from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
@@ -42,7 +41,6 @@ class PromptBuilder:
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
         relational_memory: RelationalMemory | None = None,
-        daily_briefing: DailyBriefing | None = None,
         social_graph: "SocialGraph | None" = None,
         social_states: "dict[str, NPCState] | None" = None,
         mode: str = "single",
@@ -134,7 +132,6 @@ class PromptBuilder:
         inner_state: "InnerState | None" = None,
         emotion_state: "EmotionState | None" = None,
         current_mood: str | None = None,
-        daily_briefing: "DailyBriefing | None" = None,
         recent_proactive_messages: list[str] | None = None,
         proactive_mode: bool = False,
     ) -> str | None:

@@ -1,4 +1,9 @@
-"""Daily briefing scheduler — fetch each morning if not yet present."""
+"""Daily briefing scheduler — fetch each morning if not yet present.
+
+world/store.py was deleted in P7. Idempotency is now enforced by
+querying the facts table: if any world.EVENT facts exist since
+today_start, we already fetched today and skip.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +11,6 @@ import asyncio
 from datetime import date, datetime, timedelta
 
 from lingxi.world.fetcher import fetch_daily_briefing
-from lingxi.world.store import WorldStore
 
 
 class WorldScheduler:
@@ -17,31 +21,28 @@ class WorldScheduler:
     `morning_after_hour` (default 6 AM), fetch it. After that, sleeps
     until the next check.
 
-    Idempotent: if the file already exists for today, no fetch happens.
+    Idempotent: queries the facts store (subject="world") to check
+    whether a briefing was already written today before fetching.
     """
 
     def __init__(
         self,
         api_key: str,
-        store: WorldStore,
         *,
         morning_after_hour: int = 6,
         check_interval_minutes: int = 30,
         model: str = "claude-sonnet-4-5",
         empty_retry_hours: float = 4.0,
         world_writer=None,
+        fact_retriever=None,
     ):
         self._api_key = api_key
-        self._store = store
         self._morning_after_hour = morning_after_hour
         self._check_interval = check_interval_minutes * 60
         self._model = model
-        # If today's briefing exists but is empty (API error, parse fail),
-        # we'd block retry permanently. Allow retry when the empty briefing
-        # is older than this. Genuinely thin news days get retried a few
-        # times then sit until tomorrow's date rollover.
         self._empty_retry = timedelta(hours=empty_retry_hours)
         self._world_writer = world_writer
+        self._fact_retriever = fact_retriever
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -77,36 +78,36 @@ class WorldScheduler:
                 print(f"[world] scheduler tick error: {e}", flush=True)
             await asyncio.sleep(self._check_interval)
 
+    async def _already_fetched_today(self) -> bool:
+        """Return True if world facts for today already exist in the facts table."""
+        if self._fact_retriever is None:
+            return False
+        try:
+            from lingxi.facts.models import FactType as _FactType
+            from lingxi.facts.retriever import FactQuery
+            today_start = datetime.combine(date.today(), datetime.min.time())
+            hits = await self._fact_retriever.fetch(
+                FactQuery(subject="world", type=_FactType.EVENT, since=today_start, limit=1)
+            )
+            return len(hits) > 0
+        except Exception as e:
+            print(f"[world] facts check failed: {e}", flush=True)
+            return False
+
     async def _maybe_fetch_today(self) -> None:
         today = date.today()
         now = datetime.now()
         if now.hour < self._morning_after_hour:
             return
 
-        existing = await self._store.load_today()
-        if existing is not None:
-            # Already have a briefing for today.
-            if existing.items:
-                # Got real items — done.
-                return
-            if (now - existing.generated_at) < self._empty_retry:
-                # Empty + recent: probably transient error, give it more
-                # time before retrying (not retried in <4h).
-                return
-            # Empty + stale: try again. Common case: 429 rate limit
-            # hit at 8am, retried successfully at noon.
-            print(
-                f"[world] empty briefing for {today} stale "
-                f"({(now - existing.generated_at).total_seconds() / 3600:.1f}h), retrying...",
-                flush=True,
-            )
-        else:
-            print(f"[world] no briefing for {today}, fetching...", flush=True)
+        if await self._already_fetched_today():
+            return
+
+        print(f"[world] no briefing for {today}, fetching...", flush=True)
 
         briefing = await fetch_daily_briefing(
             self._api_key, target_date=today, model=self._model,
         )
-        await self._store.save(briefing)
 
         if self._world_writer is not None and briefing.items:
             try:
@@ -133,4 +134,21 @@ class WorldScheduler:
         briefing = await fetch_daily_briefing(
             self._api_key, target_date=today, model=self._model,
         )
-        await self._store.save(briefing)
+        if self._world_writer is not None and briefing.items:
+            try:
+                from lingxi.facts.models import FactType as _FactType
+                from datetime import datetime as _dt, timedelta as _td
+                for item in briefing.items:
+                    content = (item.aria_voice or item.headline or "").strip()
+                    if not content:
+                        continue
+                    await self._world_writer.write(
+                        subject="world",
+                        content=content,
+                        type=_FactType.EVENT,
+                        ts=_dt.combine(briefing.date, _dt.min.time()),
+                        tags=[item.category],
+                        expires_at=_dt.now() + _td(days=2),
+                    )
+            except Exception as e:
+                print(f"[world] trigger_now facts write failed: {e}", flush=True)
