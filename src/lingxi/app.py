@@ -214,11 +214,6 @@ async def create_engine(
         annotation_store = AnnotationStore(data_dir=fewshot_dir)
         fewshot_retriever = FewShotRetriever(store=fewshot_store, embedder=embedding_provider)
 
-    # Per-recipient relational memory store (inside jokes / shared places /
-    # fight patterns / sweet moments etc). Auto-grown by reflection.
-    from lingxi.relational.store import RelationalMemoryStore
-    relational_store = RelationalMemoryStore(data_dir=data_dir)
-
     # Social graph — handwritten roster of NPCs in Aria's life (room-
     # mate / advisor / mom / etc) with persistent arcs + event logs.
     # Cron in P2 will keep generating events; for P1 just static arcs.
@@ -312,7 +307,6 @@ async def create_engine(
         fewshot_store=fewshot_store,
         annotation_store=annotation_store,
         fewshot_retriever=fewshot_retriever,
-        relational_store=relational_store,
         social_graph=social_graph,
         social_store=social_store,
         fact_retriever=fact_retriever,
