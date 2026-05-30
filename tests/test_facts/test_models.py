@@ -93,3 +93,34 @@ class TestFact:
         )
         assert f.importance == 7
         assert f.last_accessed == now
+
+
+def test_plan_fact_type_exists():
+    from lingxi.facts.models import FactType
+    assert FactType.PLAN.value == "plan"
+
+
+def test_plan_fact_type_round_trips_through_store(tmp_path):
+    """Verify a PLAN fact persists and reads back as PLAN type."""
+    import asyncio
+    from datetime import datetime
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.models import Fact, Source, FactType
+
+    async def run():
+        store = FactStore(tmp_path / "facts.db")
+        await store.init()
+        f = Fact(
+            subject="aria",
+            content="跑光变曲线第三组分析",
+            source=Source.LIFE_SIMULATED,
+            type=FactType.PLAN,
+            ts=datetime.now(),
+            tags=["time_window:09:00-12:00"],
+        )
+        await store.write(f)
+        rows = await store.query(subject="aria", type=FactType.PLAN, limit=5)
+        assert len(rows) == 1
+        assert rows[0].type == FactType.PLAN
+
+    asyncio.run(run())
