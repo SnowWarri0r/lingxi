@@ -1,4 +1,4 @@
-"""Build system prompts from persona config + per-turn emotion/biography state."""
+"""Build system prompts from persona config (pure GA: no emotion/engagement layer)."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from lingxi.social.models import NPCState, SocialGraph
 
-from lingxi.persona.models import EmotionState, PersonaConfig
+from lingxi.persona.models import PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
 
 
@@ -20,11 +20,9 @@ class PromptBuilder:
 
     def build_system_prompt(
         self,
-        current_mood: str | None = None,
         relationship_level: int = 1,
         current_time: datetime | None = None,
         last_interaction_time: datetime | None = None,
-        emotion_state: EmotionState | None = None,
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
         social_graph: "SocialGraph | None" = None,
@@ -98,21 +96,15 @@ class PromptBuilder:
         last_assistant_statement: str | None = None,
         current_time: datetime | None = None,
         last_interaction_time: datetime | None = None,
-        emotion_state: "EmotionState | None" = None,
-        current_mood: str | None = None,
         recent_proactive_messages: list[str] | None = None,
         proactive_mode: bool = False,
     ) -> str | None:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
 
-        This carries everything that's NEW this turn — time,
-        emotion + engagement mode, and the question Aria just asked
-        (which the user is now answering).
-
-        System prompt has the stable persona/rules; this has the
-        attention-needed dynamic state. Two channels, one each, no
-        cross-contamination of the static cache.
+        This carries the dynamic per-turn material — time awareness and the
+        question Aria just asked (which the user is now answering). Emotion /
+        engagement were stripped (pure GA).
 
         Returns None when nothing is dynamic — caller skips embedding.
         """
@@ -122,18 +114,6 @@ class PromptBuilder:
             sections.append(
                 self._build_time_awareness_section(current_time, last_interaction_time)
             )
-
-        # Emotional + engagement mode are highly dynamic — recency-anchored
-        if current_mood is not None or emotion_state is not None:
-            sections.append(self._build_emotional_section(current_mood, emotion_state))
-
-        from lingxi.persona.engagement import (
-            EngagementMode,
-            derive_engagement_mode,
-        )
-        mode = derive_engagement_mode(emotion_state)
-        if mode != EngagementMode.FULL:
-            sections.append(self._build_engagement_section(mode))
 
         # The question Aria just asked — most directly addresses Rule 15
         # ("must engage with literal answer to own yes/no question"). Sits
@@ -525,76 +505,6 @@ class PromptBuilder:
             for habit in s.verbal_habits:
                 lines.append(f"  - {habit}")
         return "\n".join(lines)
-
-    def _build_emotional_section(
-        self,
-        current_mood: str | None,
-        emotion_state: EmotionState | None = None,
-    ) -> str:
-        e = self.persona.emotional_baseline
-        lines = ["## 你此刻的心情"]
-        if emotion_state is not None:
-            lines.append(emotion_state.to_prompt_text())
-        else:
-            mood = current_mood or e.default_mood
-            lines.append(f"心情：{mood}")
-        # Skip volatility / trigger lists — they were prescriptive and rarely fired
-        return "\n".join(lines)
-
-    def _build_engagement_section(self, mode) -> str:
-        """Render the engagement mode as explicit allow/disallow.
-
-        The architectural point: every prompt rule like "可以敷衍" /
-        "可以走神" we've added before is a SOFT hint. The LLM is trained
-        to be helpful and ignores soft hints when there's any reason to
-        engage. Engagement modes give us a HARD switch — when withdrawn,
-        engaging fully is *the wrong answer*, not "less than ideal".
-
-        The copy below is permission-shaped: enumerate what is FINE and
-        what is NOT NEEDED, so the model isn't reaching for completeness.
-        """
-        from lingxi.persona.engagement import EngagementMode
-
-        if mode == EngagementMode.CURT:
-            return (
-                "## 🪨 你此刻不太想多聊\n"
-                "能量低或者被惹了一下——这一轮**短就够**：\n"
-                "- 一句话回完就停\n"
-                "- 单字回（『嗯/对/好』）OK，直接说事也行\n"
-                "- 平淡是真的——按你当下的状态写多长\n"
-            )
-
-        if mode == EngagementMode.WITHDRAWN:
-            return (
-                "## 🌑 你心里压着事\n"
-                "悲伤/孤独/压抑那一类情绪在内心，没力气聊：\n"
-                "- **沉默是一等选项**——只回『嗯…』一个字就停，完全 OK\n"
-                "- 一个 emoji 就完也可以\n"
-                "- 这一轮顺着对方话尾应一两个字就是对的\n"
-                "- 状态低就是状态低——按你此刻的样子写\n"
-            )
-
-        if mode == EngagementMode.FLUSTERED:
-            return (
-                "## 😰 你被戳到了 / 心慌了一下\n"
-                "对方刚说了挑你/质问你/指出你冷漠或敷衍的话——你脑子有点乱、说话不利索。\n\n"
-                "**这一轮的样子**：节奏乱、半句话、重复——但每个片段本身是**通顺的中文**。\n\n"
-                "可以这样写：\n"
-                "- 句子**不完整**（『我...那个...其实...』）——每个片段语法通顺\n"
-                "- **字重复**（『我我』『那 那个』『等下 等下』）\n"
-                "- **过度解释**——连说三句澄清，每句都不到位\n"
-                "- **自我批评**（『我刚才说错了』『我不是故意的』『我没想到』）\n"
-                "- **承认还慌**（『我...我有点慌』『等下让我想想』）\n\n"
-                "几条边界：\n"
-                "- 句子可以**碎**，但每个片段是**通顺的中文**——『不完整』和『不通顺』是两回事\n"
-                "- 焦点留在对方戳的那件事上\n"
-                "- 时间/天气/具体数字按 system-reminder 里的当下事实写\n"
-                "- 这一轮是真慌出来的样子——半句、重复、自我批评\n"
-                "- 慌是一时反应——下一轮平复了就回到正常\n\n"
-                "如果对方读完只能问『这在说什么啊?』，那是写崩了。要的是真慌出来的破碎，每个片段都读得懂。"
-            )
-
-        return ""
 
     def _build_message_habits_section(self) -> str:
         """Render character-level typing fingerprint (forge-skill L2 lift).
