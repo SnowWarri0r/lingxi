@@ -76,33 +76,40 @@ class ContextAssembler:
         l2_cutoff = now - timedelta(minutes=self.budget.verbatim_window_minutes)
         session_cutoff = now - timedelta(minutes=self.budget.session_window_minutes)
 
-        # Drop turns older than session window
-        in_session = [t for t in turns if t.timestamp >= session_cutoff]
-        turns = in_session
-        if not turns:
-            return []
-
-        # Always include the last N turns (the "guaranteed window")
+        # ALWAYS preserve the last N turns regardless of age — losing them
+        # silently breaks "user comes back next day and replies to what
+        # Aria said yesterday" (the model sees only the new message and
+        # has zero context for what's being referenced). The session-window
+        # filter only applies to the older "fill" turns beyond this anchor.
         guaranteed_count = min(self.budget.recent_turns_min, len(turns))
         guaranteed = turns[-guaranteed_count:]
         guaranteed_tokens = sum(estimate_tokens(t.content) for t in guaranteed)
 
+        # Older candidates are anything before the guaranteed window AND
+        # within the session window — beyond session window we rely on
+        # episode summaries (rendered in the system prompt's memory block).
+        older_all = turns[:-guaranteed_count] if guaranteed_count < len(turns) else []
+        in_session_older = [t for t in older_all if t.timestamp >= session_cutoff]
+        dropped_by_session = len(older_all) - len(in_session_older)
+
         # Remaining budget for older turns (filled from newest backward)
         remaining_budget = self.budget.history_budget - guaranteed_tokens
-        older = turns[:-guaranteed_count] if guaranteed_count < len(turns) else []
 
         included_older: list = []
         used = 0
         # Walk from most-recent older turn backward to the oldest
-        for turn in reversed(older):
+        for turn in reversed(in_session_older):
             cost = estimate_tokens(turn.content)
             if used + cost > remaining_budget:
                 break
             included_older.insert(0, turn)
             used += cost
 
-        # Prepend a summary marker if we dropped turns
-        dropped = len(older) - len(included_older)
+        # Prepend a summary marker if we dropped turns (by session window or
+        # by budget). Session-window drops are silent otherwise — model has
+        # no signal that prior context exists.
+        dropped_by_budget = len(in_session_older) - len(included_older)
+        dropped = dropped_by_session + dropped_by_budget
         result_messages: list[dict] = []
         if dropped > 0:
             result_messages.append({
