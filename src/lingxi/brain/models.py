@@ -23,6 +23,7 @@ class OrchestrationDecision:
     fact_queries: list[OrchestratorFactQuery]
     topic_anchor: str
     skip: list[str]                     # category names to skip rendering
+    thread_summary: str = ""            # rolling thread summary for next turn
 
     @classmethod
     def default(cls) -> "OrchestrationDecision":
@@ -34,6 +35,7 @@ class OrchestrationDecision:
             ],
             topic_anchor="",
             skip=[],
+            thread_summary="",
         )
 
     @classmethod
@@ -65,4 +67,5 @@ class OrchestrationDecision:
             fact_queries=queries,
             topic_anchor=str(raw.get("topic_anchor", "")),
             skip=[str(s) for s in raw.get("skip", [])],
+            thread_summary=str(raw.get("thread_summary", "")),
         )
