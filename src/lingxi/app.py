@@ -219,12 +219,6 @@ async def create_engine(
     from lingxi.relational.store import RelationalMemoryStore
     relational_store = RelationalMemoryStore(data_dir=data_dir)
 
-    # World awareness — daily news briefing fetched by morning scheduler
-    # so Aria isn't living in a sealed simulation. Started by the channel
-    # (needs the LLM provider's api_key for web_search tool calls).
-    from lingxi.world.store import WorldStore
-    world_store = WorldStore(data_dir=data_dir)
-
     # Social graph — handwritten roster of NPCs in Aria's life (room-
     # mate / advisor / mom / etc) with persistent arcs + event logs.
     # Cron in P2 will keep generating events; for P1 just static arcs.
@@ -319,7 +313,6 @@ async def create_engine(
         annotation_store=annotation_store,
         fewshot_retriever=fewshot_retriever,
         relational_store=relational_store,
-        world_store=world_store,
         social_graph=social_graph,
         social_store=social_store,
         fact_retriever=fact_retriever,
