@@ -58,7 +58,7 @@ class FactRetriever:
 
     async def fetch_by_id(self, fact_id: str) -> Fact | None:
         """Return a single Fact by ID, or None if not found."""
-        return await self._store.get_by_id(fact_id)
+        return await self._store.get(fact_id)
 
     async def catalog(self) -> dict[str, int]:
         """Return {bucket: count} for orchestrator's decision input.
