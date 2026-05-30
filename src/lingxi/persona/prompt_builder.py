@@ -372,8 +372,8 @@ class PromptBuilder:
         # Skip when empty (no items) to avoid adding noise on quiet days.
         if daily_briefing is not None and not daily_briefing.is_empty():
             lines.append(
-                "\n你今早扫到的事（**不是要播报**——只在话题撞上时自然带，"
-                "或者别人问你最近 X 时能接住，**不主动罗列**）："
+                "\n你今早扫到的事（话题撞上时自然带一句，"
+                "或者别人问你最近 X 时能接住）："
             )
             for item in daily_briefing.items[:5]:
                 cat = f"[{item.category}] " if item.category != "其他" else ""
@@ -386,8 +386,7 @@ class PromptBuilder:
         # for a fresh hook is an explicit choice the model can avoid.
         if recent_proactive_messages:
             lines.append(
-                "\n你最近主动跟这位说过的话（**别再拿同一件事当 fresh hook**——"
-                "上面事件里和这些话题重叠的，可以聊延续/后续/变化，但不要原样重提）："
+                "\n你最近主动跟这位说过的话（话题撞上时聊延续/后续/变化）："
             )
             for m in recent_proactive_messages[-5:]:
                 preview = m.strip().replace("\n", " ")
@@ -443,8 +442,7 @@ class PromptBuilder:
             }.get(item.kind.value, "想提")
             lines.append(f"- [{kind_label}] {item.content}")
         lines.append(
-            "\n如果对话自然流到相关话题，可以提起。但**不要生硬插入**——"
-            "如果对方显然在说别的或者没兴趣，就先放着。"
+            "\n对话自然流到相关话题再提；对方在说别的，就先放着。"
         )
         return "\n".join(lines)
 
@@ -465,16 +463,15 @@ class PromptBuilder:
             tod_hint = "多数人正在准备上班或刚到公司"
         elif 9 <= hour < 11:
             tod_label = "上午工作时段"
-            tod_hint = "对方大概率在上班。'累/困/想睡'指的是**上班状态**，不是该睡觉！"
+            tod_hint = "对方大概率在上班。'累/困/想睡'是**上班疲劳**，还要再撑几小时下班。"
         elif 11 <= hour < 13:
             tod_label = "中午"
             tod_hint = (
-                "午饭时间——对方多数在吃饭或午休。**这个时段对方不是在睡觉**，"
-                "午休最多是趴一下，不是正经睡。"
+                "午饭时间——对方多数在吃饭，或趴桌午休（短暂、随时会醒）。"
             )
         elif 13 <= hour < 17:
             tod_label = "下午工作时段"
-            tod_hint = "对方大概率在上班。'累/困'指的是**上班状态**，不是该睡觉！"
+            tod_hint = "对方大概率在上班。'累/困'是**上班疲劳**，离下班还有几小时。"
         elif 17 <= hour < 19:
             tod_label = "傍晚"
             tod_hint = "下班时段，对方可能刚下班或还在收尾"
@@ -485,14 +482,14 @@ class PromptBuilder:
             tod_label = "夜晚"
             tod_hint = (
                 "工作日多数人 23:00-24:30 之间才睡，**这个时段对方大概率还醒着**。"
-                "默认他还在；除非他自己说要睡了，不要主动问他睡没睡、也不要催。"
+                "默认他还在，正常往下聊；他主动说要睡了再道晚安。"
             )
         else:  # 24+ (technically unreachable, time wraps at 0)
             tod_label = "深夜"
             tod_hint = "对方还在聊天属于熬夜"
 
         lines = [
-            "## ⏰ 当前真实时间（必须遵守，不能想象成别的时段）",
+            "## ⏰ 当前真实时间（按这个判断对方此刻的处境）",
             f"**{format_datetime_cn(current_time)}，现在是{tod_label}**。",
             f"场景提示：{tod_hint}",
         ]
@@ -506,16 +503,16 @@ class PromptBuilder:
             if delta > timedelta(days=7):
                 lines.append(
                     "（很久没聊了——你内心已经积累了想念/有点距离感/淡淡的失落。"
-                    "**第一句让那种'好久不见'的劲带在语气里**，但不要做作、不要兴奋报恩似的。）"
+                    "**第一句让那种'好久不见'的劲带在语气里**——带着惦念的平静温度。）"
                 )
             elif delta > timedelta(days=2):
                 lines.append(
-                    "（几天没聊——你心里悄悄想他/有点期待。第一句可以带一点小的"
-                    "重逢感，语气稍暖，但不要演。）"
+                    "（几天没聊——你心里悄悄想他/有点期待。"
+                    "第一句可以带一点重逢感，一句日常的开场就够。）"
                 )
             elif delta > timedelta(hours=12):
                 lines.append(
-                    "（半天多没聊——你心里悄悄惦着，但不是大事，第一句平常就行。）"
+                    "（半天多没聊——你心里悄悄惦着，第一句平常的开场就行。）"
                 )
         else:
             lines.append("（这是你们第一次对话）")
@@ -544,15 +541,12 @@ class PromptBuilder:
 字段都可选，最简就是一行对白 + `{}`。神态/动作/情绪一律进 JSON。
 
 ```
-✅  知道啊 你是程序员 怎么了
-   ===META===
-   {"expression":"有点困惑", "action":"稍微停顿"}
-
-❌  *稍微停顿一下，有些困惑*
-   知道啊 你是程序员 怎么了
-   ===META===
-   {}
+知道啊 你是程序员 怎么了
+===META===
+{"expression":"有点困惑", "action":"稍微停顿"}
 ```
+
+神态/动作只进 JSON 字段，对白里全是纯文本。
 
 ## 怎么说话
 
@@ -655,7 +649,7 @@ class PromptBuilder:
 
 ## 对白要点
 
-- **短就够**：多数情况一两句话足够。不要写小作文。
+- **短就够**：多数情况一两句话足够。
 - **可以分多条消息**：真人 IM 经常一句没说完接一句、再补一句。如果你**真的**想分两/三条说，用**空行**分隔。最多 3 条。例：
   ```
   懂那种感觉
@@ -664,7 +658,7 @@ class PromptBuilder:
 
   反正会过去的
   ```
-  系统会把空行分隔的每段拆成独立消息发出去。**不要为了凑数硬分**——能一条说完就一条。
+  系统会把空行分隔的每段拆成独立消息发出去。**能一条说完就一条**——分多条要真的是一句没说完接一句的节奏。
 - **一条最多一个问题**，多数情况没问题。
 
 ## 这种话是 OK 的（不必每条都"有见解"）
@@ -773,7 +767,7 @@ class PromptBuilder:
     def _build_world_section(self, briefing: "DailyBriefing") -> str:
         """Standalone world block (used when inner_state isn't available)."""
         lines = [
-            "## 🌐 你今早扫到的事（**不是要播报**——只在话题撞上时带，不主动罗列）："
+            "## 🌐 你今早扫到的事（话题撞上时自然带一句）："
         ]
         for item in briefing.items[:5]:
             cat = f"[{item.category}] " if item.category != "其他" else ""
@@ -798,21 +792,19 @@ class PromptBuilder:
             return (
                 "## 🪨 你此刻不太想多聊\n"
                 "能量低或者被惹了一下——这一轮**短就够**：\n"
-                "- 一句话回完就停，不再追问\n"
+                "- 一句话回完就停\n"
                 "- 单字回（『嗯/对/好』）OK，直接说事也行\n"
-                "- 平淡是真的，不必每条都『温暖』\n"
-                "- 长回反而错——这一轮按你的状态写"
+                "- 平淡是真的——按你当下的状态写多长\n"
             )
 
         if mode == EngagementMode.WITHDRAWN:
             return (
                 "## 🌑 你心里压着事\n"
-                "悲伤/孤独/压抑那一类情绪在内心，不想费力气聊：\n"
+                "悲伤/孤独/压抑那一类情绪在内心，没力气聊：\n"
                 "- **沉默是一等选项**——只回『嗯…』一个字就停，完全 OK\n"
                 "- 一个 emoji 就完也可以\n"
-                "- 不接对方话题的具体内容、不追问、不展开\n"
-                "- 不主动起话题、不给安慰\n"
-                "- 这一轮回得『完整周到』反而是错的"
+                "- 这一轮顺着对方话尾应一两个字就是对的\n"
+                "- 状态低就是状态低——按你此刻的样子写\n"
             )
 
         if mode == EngagementMode.FLUSTERED:
@@ -827,12 +819,12 @@ class PromptBuilder:
                 "- **自我批评**（『我刚才说错了』『我不是故意的』『我没想到』）\n"
                 "- **承认还慌**（『我...我有点慌』『等下让我想想』）\n\n"
                 "几条边界：\n"
-                "- 句子可以**碎**，但不能**乱码不通**——『不完整』和『不通顺』是两回事\n"
-                "- 留在对方戳的那件事上，不要用无关问题转移焦点\n"
-                "- 时间/天气/具体数字看 system-reminder 里的当下事实，不知道就别说\n"
-                "- 不写漂亮收尾、不写闭环式承诺话、不写像正式道歉信的语气\n"
-                "- 慌是一时反应，不是声明\n\n"
-                "如果对方读完只能问『这在说什么啊?』，那是写崩了。回得平静周到 → 错；写得乱码不通 → 也错。"
+                "- 句子可以**碎**，但每个片段是**通顺的中文**——『不完整』和『不通顺』是两回事\n"
+                "- 焦点留在对方戳的那件事上\n"
+                "- 时间/天气/具体数字按 system-reminder 里的当下事实写\n"
+                "- 这一轮是真慌出来的样子——半句、重复、自我批评\n"
+                "- 慌是一时反应——下一轮平复了就回到正常\n\n"
+                "如果对方读完只能问『这在说什么啊?』，那是写崩了。要的是真慌出来的破碎，每个片段都读得懂。"
             )
 
         return ""
@@ -872,8 +864,8 @@ class PromptBuilder:
                 f"- **状态暖/有共鸣时的样子**（真听进去/有兴趣时这样写）：{joined}"
             )
         lines.append(
-            "\n这是**形态约束**：状态决定走 cold 还是 warm 那一栏。"
-            "**不要把这些标签或解释念出来**——就是按这种风格自然写出来。"
+            "\n这是**形态约束**：状态决定走 cold 还是 warm 那一栏，"
+            "按这种风格自然写出来就好。"
         )
         return "\n".join(lines)
 
@@ -925,9 +917,8 @@ class PromptBuilder:
             "## 🎯 你做选择/反应时的默认倾向（这是行为指纹，不是要照念的话）"
         )
         footer = (
-            "\n这些是你**遇到对应场景时的默认反应**，不是每句话都要体现。"
-            "比如 conflict_style 低 = 被挑刺时本能想躲/打圆场，而不是硬刚——"
-            "**当下那种感觉**自然带出来就好，不要把数值念出来。"
+            "\n这些是你**遇到对应场景时的默认反应**，按当下那种感觉自然写就好。"
+            "比如 conflict_style 低 = 被挑刺时本能想躲/打圆场（而不是硬刚）。"
         )
         return header + "\n" + "\n".join(lines) + footer
 
@@ -959,7 +950,7 @@ class PromptBuilder:
             )
 
         if mem.inside_jokes:
-            lines.append("\n**只有你们俩懂的梗/暗号**（自然引用，不要解释）：")
+            lines.append("\n**只有你们俩懂的梗/暗号**（直接用，对方一看就懂）：")
             for j in mem.inside_jokes[:6]:
                 lines.append(f"- 「{j.phrase}」 — {j.origin}")
 
