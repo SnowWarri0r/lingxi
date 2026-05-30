@@ -235,6 +235,66 @@ class FactStore:
 
         return [_row_to_fact(r) for r in rows]
 
+    async def fts_rank(self, query: str, ids: list[str]) -> dict[str, float]:
+        """Return {id: normalized_rank in [0,1]} for ids matching FTS query.
+
+        Missing ids get 0.0. Higher = more relevant.
+        bm25() in FTS5 returns negative scores; more negative = better match.
+        We invert the sign then min-max normalize to [0, 1].
+        """
+        if not ids:
+            return {}
+
+        def _read():
+            c = self._conn()
+            placeholders = ",".join("?" * len(ids))
+            sql = (
+                "SELECT facts.id, bm25(facts_fts) AS rank "
+                "FROM facts_fts JOIN facts ON facts_fts.rowid = facts.rowid "
+                f"WHERE facts_fts MATCH ? AND facts.id IN ({placeholders})"
+            )
+            rows = c.execute(sql, (query, *ids)).fetchall()
+            c.close()
+            return rows
+
+        try:
+            rows = await asyncio.to_thread(_read)
+        except sqlite3.OperationalError:
+            # FTS5 syntax error (e.g. user query contained special chars)
+            return {fid: 0.0 for fid in ids}
+
+        if not rows:
+            return {fid: 0.0 for fid in ids}
+
+        # bm25 returns negative scores; smaller (more negative) = better match.
+        # Invert sign, then min-max normalize to [0, 1].
+        raw = {row["id"]: -row["rank"] for row in rows}
+        result = {fid: 0.0 for fid in ids}
+        if len(raw) == 1:
+            result.update({k: 1.0 for k in raw})
+            return result
+        lo, hi = min(raw.values()), max(raw.values())
+        span = hi - lo if hi > lo else 1.0
+        for k, v in raw.items():
+            result[k] = (v - lo) / span
+        return result
+
+    async def update_last_accessed(self, ids: list[str], ts: datetime) -> None:
+        """Set last_accessed = ts for all given fact ids."""
+        if not ids:
+            return
+
+        def _write():
+            c = self._conn()
+            placeholders = ",".join("?" * len(ids))
+            sql = f"UPDATE facts SET last_accessed = ? WHERE id IN ({placeholders})"
+            c.execute(sql, (ts.isoformat(), *ids))
+            c.commit()
+            c.close()
+
+        async with self._lock:
+            await asyncio.to_thread(_write)
+
     async def count_by_subject(self) -> dict[str, int]:
         def _read():
             c = self._conn()
