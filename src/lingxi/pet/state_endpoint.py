@@ -16,7 +16,6 @@ from datetime import datetime
 from fastapi import FastAPI
 import uvicorn
 
-from lingxi.persona.engagement import derive_engagement_mode
 from lingxi.persona.models import EmotionState
 from lingxi.pet.sprite_mapper import pick_sprite
 
@@ -60,8 +59,10 @@ def classify_emotion_family(emotion: EmotionState | None) -> str:
 def build_pet_state_app(engine) -> FastAPI:
     """FastAPI app exposing /pet/state and /pet/health.
 
-    `engine` is the running ConversationEngine — we read `_emotion_state`
-    and `inner_life_store` from it. No writes.
+    `engine` is the running ConversationEngine — we read the latest
+    aria.event fact for current activity. No writes. (Emotion/engagement
+    state was stripped — pure GA — so the sprite is driven by activity +
+    time of day only.)
     """
     app = FastAPI(title="Lingxi Pet State", version="0.1.0")
 
@@ -71,11 +72,7 @@ def build_pet_state_app(engine) -> FastAPI:
 
     @app.get("/pet/state")
     async def state():
-        emotion = engine._emotion_state
-        family = classify_emotion_family(emotion)
-        mode = derive_engagement_mode(emotion).value
-
-        # Current activity is facts-driven now: the latest aria.event fact
+        # Current activity is facts-driven: the latest aria.event fact
         # written by PlanExecutor. No structured ActivityKind any more.
         activity_name = None
         if engine.fact_retriever is not None:
@@ -91,19 +88,19 @@ def build_pet_state_app(engine) -> FastAPI:
                 activity_name = None
 
         sprite = pick_sprite(
-            engagement_mode=mode,
-            emotion_family=family,
+            engagement_mode="full",
+            emotion_family="NEUTRAL",
             activity_kind=None,
             hour=datetime.now().hour,
         )
 
         return {
             "sprite": sprite,
-            "engagement_mode": mode,
-            "emotion_family": family,
+            "engagement_mode": "full",
+            "emotion_family": "NEUTRAL",
             "activity_kind": None,
             "activity_name": activity_name,
-            "mood_narrative": engine._current_mood,
+            "mood_narrative": None,
             "ts": datetime.now().isoformat(),
         }
 

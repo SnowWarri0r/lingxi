@@ -96,26 +96,12 @@ class TestPetStateEndpoint:
         r = client.get("/pet/state")
         assert r.status_code == 200
         body = r.json()
+        # Pure GA: no emotion/engagement — sprite driven by activity + time.
         assert body["engagement_mode"] == "full"
         assert body["emotion_family"] == "NEUTRAL"
         assert body["activity_kind"] is None
         assert "ts" in body
-        assert body["mood_narrative"] == "平静"
-
-    def test_state_heavy_emotion_drives_withdrawn_sprite(self):
-        engine = _make_mock_engine(dimensions={"悲伤": 0.7})
-        client = TestClient(build_pet_state_app(engine))
-        body = client.get("/pet/state").json()
-        # 悲伤 0.7 ≥ HEAVY threshold 0.5 → engagement_mode = withdrawn
-        assert body["engagement_mode"] == "withdrawn"
-        assert body["sprite"] == "withdrawn"  # mode wins over emotion family
-
-    def test_state_flustered_emotion_drives_flustered_sprite(self):
-        engine = _make_mock_engine(dimensions={"慌乱": 0.6})
-        client = TestClient(build_pet_state_app(engine))
-        body = client.get("/pet/state").json()
-        assert body["engagement_mode"] == "flustered"
-        assert body["sprite"] == "flustered"
+        assert body["mood_narrative"] is None
 
     def test_state_activity_from_facts(self):
         engine = _make_mock_engine(activity_content="在改关于仙女座那段，卡在开头一句")
@@ -123,14 +109,6 @@ class TestPetStateEndpoint:
         body = client.get("/pet/state").json()
         assert body["activity_kind"] is None  # no structured ActivityKind any more
         assert body["activity_name"] == "在改关于仙女座那段，卡在开头一句"[:40]
-
-    def test_state_high_energy_emotion(self):
-        engine = _make_mock_engine(dimensions={"兴奋": 0.7})
-        client = TestClient(build_pet_state_app(engine))
-        body = client.get("/pet/state").json()
-        # 兴奋 < HEAVY/FLUSTERED thresholds → engagement_mode stays full
-        assert body["engagement_mode"] == "full"
-        assert body["emotion_family"] == "HIGH_ENERGY"
 
     def test_state_works_without_fact_retriever(self):
         engine = _make_mock_engine(fact_retriever_present=False)
