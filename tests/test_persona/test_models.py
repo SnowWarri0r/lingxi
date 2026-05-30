@@ -101,27 +101,6 @@ class TestPromptBuilder:
         assert "action_bias" not in prompt  # raw axis names should NOT appear
         assert "此刻被推往" in prompt
 
-    def test_recent_proactive_messages_surfaced_in_inner_state(self):
-        # User: "agent doesn't know self has sent". Phase 2 context refactor
-        # — recent proactive list moved to focus reminder (high recency)
-        # alongside inner_state events.
-        from lingxi.inner_life.models import InnerState
-        from lingxi.persona.models import Identity, PersonaConfig
-        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
-        inner = InnerState()
-        builder = PromptBuilder(persona)
-        reminder = builder.build_turn_focus_reminder(
-            inner_state=inner,
-            recent_proactive_messages=[
-                "刚整理书 银杏叶都碎了 有点遗憾",
-                "蜘蛛在角落织网",
-            ],
-        )
-        assert reminder is not None
-        assert "你最近主动跟这位说过的话" in reminder
-        assert "银杏叶" in reminder
-        assert "蜘蛛" in reminder
-
     def test_recent_proactive_messages_omitted_when_empty(self):
         from lingxi.inner_life.models import InnerState
         from lingxi.persona.models import Identity, PersonaConfig
@@ -134,23 +113,6 @@ class TestPromptBuilder:
         # Reminder may render time/inner_state but not the proactive subblock
         if reminder is not None:
             assert "你最近主动跟这位说过的话" not in reminder
-
-    def test_recent_proactive_messages_truncated_long_lines(self):
-        from lingxi.inner_life.models import InnerState
-        from lingxi.persona.models import Identity, PersonaConfig
-        persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
-        builder = PromptBuilder(persona)
-        long_msg = "刚整理书" * 50  # 200 chars
-        reminder = builder.build_turn_focus_reminder(
-            inner_state=InnerState(),
-            recent_proactive_messages=[long_msg],
-        )
-        assert reminder is not None
-        # Truncated with ellipsis
-        assert "…" in reminder
-        # Doesn't bloat the reminder
-        assert long_msg not in reminder
-
 
 class TestTraitBehaviorCue:
     def test_default_cue_empty(self):

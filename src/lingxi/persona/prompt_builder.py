@@ -21,45 +21,6 @@ from lingxi.persona.models import EmotionState, PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
 
 
-def _time_of_day_label(hour: int) -> str:
-    """Map 0-23 hour to a coarse time-of-day bucket."""
-    if hour < 6:
-        return "凌晨"
-    if hour < 11:
-        return "上午"
-    if hour < 14:
-        return "中午"
-    if hour < 18:
-        return "下午"
-    return "晚上"  # 18-23
-
-
-def _age_label(ts: datetime, now: datetime) -> str:
-    """Render a ts relative to `now` for use in the prompt's recent-events list.
-
-    Uses calendar-day comparison past the first 3 hours, so an event at
-    23:00 yesterday seen from 13:00 today reads as "昨晚" (not the old
-    rolling-24h "今天早些时候" which let the LLM hallucinate "早上看流星雨"
-    by misreading yesterday-evening events as this-morning ones).
-    """
-    delta = now - ts
-    if delta < timedelta(minutes=10):
-        return "刚刚"
-    if delta < timedelta(minutes=60):
-        return f"{int(delta.total_seconds() // 60)}分钟前"
-    if delta < timedelta(hours=3):
-        # Within 3h, "X小时前" reads naturally even across midnight.
-        return f"{int(delta.total_seconds() // 3600)}小时前"
-
-    days_ago = (now.date() - ts.date()).days
-    tod = _time_of_day_label(ts.hour)
-    if days_ago == 0:
-        return f"今天{tod}"
-    if days_ago == 1:
-        return "昨晚" if tod == "晚上" else f"昨天{tod}"
-    return f"{days_ago}天前"
-
-
 class PromptBuilder:
     """Assembles the system prompt that defines the agent's persona in every LLM call."""
 
@@ -139,8 +100,7 @@ class PromptBuilder:
 
         # Social graph: 身边的人. Background-knowledge block — NPC arcs +
         # recent events. Sits next to biography because both are "things
-        # about Aria's life outside this conversation". Push-mode events
-        # (significance≥0.6) go through inner_state.recent_events instead.
+        # about Aria's life outside this conversation".
         if social_graph is not None and social_states:
             from lingxi.social.renderer import render_social_section
             social_block = render_social_section(social_graph, social_states)
@@ -152,13 +112,6 @@ class PromptBuilder:
             subj_block = SubjectiveLayer.render_for_prompt(subjective_view)
             if subj_block:
                 sections.append(subj_block)
-
-        # Relational memory: between-us texture (inside jokes, shared
-        # places, fight patterns, sweet moments...). Renders only when
-        # populated — fresh relationship has nothing yet, accumulates
-        # via reflection-driven extractor.
-        if relational_memory is not None and not relational_memory.is_empty():
-            sections.append(self._build_relational_section(relational_memory))
 
         if memory_context and memory_context.long_term_facts:
             sections.append(self._build_memory_section(memory_context))
@@ -188,10 +141,9 @@ class PromptBuilder:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
 
-        This carries everything that's NEW this turn — time, current
-        activity, recent_events, emotion + engagement mode, today's
-        news briefing, what Aria's already said proactively, and the
-        question Aria just asked (which the user is now answering).
+        This carries everything that's NEW this turn — time,
+        emotion + engagement mode, and the question Aria just asked
+        (which the user is now answering).
 
         System prompt has the stable persona/rules; this has the
         attention-needed dynamic state. Two channels, one each, no
@@ -205,17 +157,6 @@ class PromptBuilder:
             sections.append(
                 self._build_time_awareness_section(current_time, last_interaction_time)
             )
-
-        if inner_state is not None:
-            inner_block = self._build_inner_state_section(
-                inner_state, recent_proactive_messages, daily_briefing,
-                proactive_mode=proactive_mode,
-            )
-            if inner_block:
-                sections.append(inner_block)
-        elif daily_briefing is not None and not daily_briefing.is_empty():
-            # World awareness even when inner_state isn't loaded
-            sections.append(self._build_world_section(daily_briefing))
 
         # Emotional + engagement mode are highly dynamic — recency-anchored
         if current_mood is not None or emotion_state is not None:
@@ -291,113 +232,6 @@ class PromptBuilder:
             f"- 起手用具体反应（直接说状态/直接问），不用单字附和当起手\n"
             f"- 留在他刚答的话题上，不切到通用劝慰、也不跳回前几轮的旧话题"
         )
-
-    def _build_inner_state_section(
-        self,
-        state: InnerState,
-        recent_proactive_messages: list[str] | None = None,
-        daily_briefing: "DailyBriefing | None" = None,
-        *,
-        proactive_mode: bool = False,
-    ) -> str:
-        """Inject 'what I'm doing right now' so participation level is emergent from state."""
-        lines = ["## 🌱 你此刻的生活状态（真实在发生，不是设定）"]
-
-        if state.current_activity:
-            act = state.current_activity
-            scene_part = f"，{act.scene}" if getattr(act, "scene", "") else ""
-            lines.append(
-                f"你现在正在 **{act.name}**（{act.description}{scene_part}）"
-            )
-            # Translate focus/social_openness into 参与度提示
-            if act.focus_level > 0.7:
-                lines.append("- 你正专注其中，被打断会有点出戏，回应可能比平常短或慢")
-            if act.social_openness > 0.7:
-                lines.append("- 你这会儿比较有空，愿意多聊几句")
-            elif act.social_openness < 0.3:
-                lines.append("- 你这会儿不太想说话，回应会比较短/敷衍")
-
-        # Energy / mood theme inform her conversational presence
-        if state.energy < 0.35:
-            lines.append(f"- 你能量很低（{state.energy:.1f}），脑子有点钝，话不会多")
-        elif state.energy > 0.75:
-            lines.append(f"- 你能量在线（{state.energy:.1f}），状态不错")
-
-        if state.social_need < 0.25:
-            lines.append("- 你最近聊过了，社交需求暂时低，不主动开话题")
-        elif state.social_need > 0.7:
-            lines.append("- 你独处太久了，挺想找人说话的")
-
-        if state.today_plan and state.today_plan.mood_theme:
-            lines.append(f"- 今天整体的感觉：{state.today_plan.mood_theme}")
-
-        # Recent events: things that happened TO her. Filtered to recent
-        # (≤24h) and rendered with relative-time prefixes so model doesn't
-        # treat a 4-day-old event as "just now". Older events live in the
-        # store but aren't surfaced as "current" — they belong to episodes.
-        if state.recent_events:
-            now = datetime.now()
-            cutoff = now - timedelta(hours=24)
-
-            # All fresh events surface as background context for both reactive
-            # and proactive turns. Proactive topic selection is now driven by
-            # ShareIntentStore (via find_pending_share / pending_share_block in
-            # proactive.py) — no longer gated by wants_to_share here.
-            # Reactive chat keeps all events visible so Aria can reference
-            # them naturally when a topic comes up mid-conversation.
-            fresh = [
-                e for e in state.recent_events[:8]
-                if e.significance >= 0.3 and e.timestamp >= cutoff
-            ][:5]
-            if fresh:
-                lines.append(
-                    "\n你过去 24h 里发生的事（**这是背景**——话题真的撞上时自然提；"
-                    "对方在谈具体的事就接他那件事。）：\n"
-                    "时间标签按括号里的来——『刚刚/X分钟前/X小时前』可以用『刚刚/刚才』起手，"
-                    "『今天上午/今天下午/昨晚/昨天下午』就用对应时段措辞。"
-                )
-                for e in fresh:
-                    marker = "📌想说" if e.wants_to_share else "·"
-                    when = _age_label(e.timestamp, now)
-                    lines.append(f"  {marker} [{when}] {e.content}")
-
-        # World awareness — what she "saw this morning". Real-world news
-        # injected as part of her state so she doesn't feel offline.
-        # Skip when empty (no items) to avoid adding noise on quiet days.
-        if daily_briefing is not None and not daily_briefing.is_empty():
-            lines.append(
-                "\n你今早扫到的事（话题撞上时自然带一句，"
-                "或者别人问你最近 X 时能接住）："
-            )
-            for item in daily_briefing.items[:5]:
-                cat = f"[{item.category}] " if item.category != "其他" else ""
-                lines.append(f"  - {cat}{item.aria_voice}")
-
-        # Self-awareness of what's already been said proactively. Surface
-        # alongside events so the agent treats "I already pitched 银杏叶 to
-        # this person" as part of her own state, not as something hidden
-        # behind a filter. With this block visible, picking the same event
-        # for a fresh hook is an explicit choice the model can avoid.
-        if recent_proactive_messages:
-            lines.append(
-                "\n你最近主动跟这位说过的话（话题撞上时聊延续/后续/变化）："
-            )
-            for m in recent_proactive_messages[-5:]:
-                preview = m.strip().replace("\n", " ")
-                if len(preview) > 80:
-                    preview = preview[:80] + "…"
-                lines.append(f"  - {preview}")
-
-        lines.append(
-            "\n**参与度由你的状态决定**：你是一个有自己生活的人顺手在聊天。"
-            "上面的状态决定你此刻能聊多少、想聊多少、对什么话题真的有感。"
-            "\n- 累/分心/没兴趣这个话题 → 短一句、敷衍、甚至岔开聊手边的事都是真实的"
-            "\n- 真的有共鸣或好奇 → 自然想多说两句"
-            "\n- 状态低 + 对方也没说什么大事 → 一两个字回也行"
-            "\n累就懒、忙就短、不感兴趣就转移——不必每句都给『最优』回应。"
-        )
-
-        return "\n".join(lines)
 
     def _build_biography_section(self, events: list) -> str:
         """Inject retrieved past events as BACKGROUND COLOR, not turn material."""
@@ -758,16 +592,6 @@ class PromptBuilder:
         # Skip volatility / trigger lists — they were prescriptive and rarely fired
         return "\n".join(lines)
 
-    def _build_world_section(self, briefing: "DailyBriefing") -> str:
-        """Standalone world block (used when inner_state isn't available)."""
-        lines = [
-            "## 🌐 你今早扫到的事（话题撞上时自然带一句）："
-        ]
-        for item in briefing.items[:5]:
-            cat = f"[{item.category}] " if item.category != "其他" else ""
-            lines.append(f"- {cat}{item.aria_voice}")
-        return "\n".join(lines)
-
     def _build_engagement_section(self, mode) -> str:
         """Render the engagement mode as explicit allow/disallow.
 
@@ -915,70 +739,6 @@ class PromptBuilder:
             "比如 conflict_style 低 = 被挑刺时本能想躲/打圆场（而不是硬刚）。"
         )
         return header + "\n" + "\n".join(lines) + footer
-
-    def _build_relational_section(self, mem: "RelationalMemory") -> str:
-        """Render the per-recipient relationship texture.
-
-        This is what's missing from "she remembers what happened" → "我们之间
-        有东西". Inside jokes, pet names, shared places, fight-patterns,
-        sweet moments all render here. The model gets concrete handles for
-        "我们" reference instead of having to reconstruct each turn.
-
-        Order chosen so the most-used items (inside_jokes, pet_names) come
-        first; archives (fight/sweet) come last as background context.
-        """
-        lines = ["## 💞 你和这个人之间专属的（**这是「我们」的部分，不是设定**）"]
-
-        if mem.relationship_summary:
-            lines.append(f"\n你心里对这段关系的概括：{mem.relationship_summary}")
-
-        if mem.pet_names:
-            joined = "、".join(f'"{n}"' for n in mem.pet_names[:5])
-            lines.append(f"\n你叫他/他叫你：{joined}")
-
-        if mem.signature_phrases:
-            joined = "、".join(f'"{p}"' for p in mem.signature_phrases[:6])
-            lines.append(
-                f"\n**你跟这个人说话长出来的口头**（不是规定每次必用，但是"
-                f"这段关系里你的语气特征）：{joined}"
-            )
-
-        if mem.inside_jokes:
-            lines.append("\n**只有你们俩懂的梗/暗号**（直接用，对方一看就懂）：")
-            for j in mem.inside_jokes[:6]:
-                lines.append(f"- 「{j.phrase}」 — {j.origin}")
-
-        if mem.shared_places:
-            lines.append("\n**你们的共同地点**（聊到相关时可以自然带）：")
-            for p in mem.shared_places[:4]:
-                lines.append(f"- {p.name}：{p.significance}")
-
-        if mem.daily_patterns:
-            lines.append(
-                "\n**他生活的规律**（你过去几次聊天里注意到的印象——**对方这轮明说的事实优先级更高**，"
-                "他这轮说的跟这里有出入就以他这轮的为准）："
-            )
-            for d in mem.daily_patterns[:5]:
-                lines.append(f"- {d.pattern}")
-
-        if mem.sweet_moments:
-            lines.append("\n**回忆里的几个具体瞬间**（不是 episode 流水账，是你心里留下的）：")
-            for m in mem.sweet_moments[:5]:
-                lines.append(f"- {m.content}")
-
-        if mem.fight_patterns:
-            lines.append("\n**你们吵架/冷战的典型节奏**（自我察觉，不是要复述）：")
-            for f in mem.fight_patterns[:3]:
-                lines.append(
-                    f"- 触发：{f.trigger}；你的反应：{f.her_pattern}；"
-                    f"通常怎么修复：{f.typical_repair}"
-                )
-
-        lines.append(
-            "\n这些是**你们独有**的——别把它们当设定念出来，但聊到相关的"
-            "事可以自然引用、回忆、玩梗。"
-        )
-        return "\n".join(lines)
 
     def _build_relationship_section(self, level: int) -> str:
         r = self.persona.relationship
