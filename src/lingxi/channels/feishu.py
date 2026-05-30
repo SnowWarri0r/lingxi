@@ -473,6 +473,14 @@ class FeishuBot(OutboundChannel):
                 self._social_scheduler.start(), self._loop
             )
 
+        # Plan executor tick (every 30min) + morning planner (daily 7am).
+        # DailyPlanner and PlanExecutor are constructed in create_engine and
+        # attached as engine.daily_planner / engine.plan_executor.
+        if getattr(self.engine, "plan_executor", None) is not None:
+            asyncio.run_coroutine_threadsafe(
+                self._start_plan_loops(), self._loop
+            )
+
         # Build event handler
         handler = (
             lark.EventDispatcherHandler.builder("", "")
@@ -648,6 +656,66 @@ class FeishuBot(OutboundChannel):
             import traceback
             print(f"[feishu] card action handler failed: {e}\n{traceback.format_exc()}", flush=True)
             return P2CardActionTriggerResponse({})
+
+    async def _start_plan_loops(self) -> None:
+        """Start DailyPlanner morning tick + PlanExecutor 30-min tick.
+
+        Called once from start() inside the dedicated asyncio loop.
+        Runs two concurrent tasks:
+          - _executor_loop:  PlanExecutor.tick() every 30 min
+          - _morning_planner_loop: DailyPlanner.plan_aria() at 7am each day,
+            plus an immediate run on startup if today has no plan yet.
+        """
+        import asyncio
+        from datetime import datetime, timedelta
+        from lingxi.facts.models import FactType
+
+        plan_executor = self.engine.plan_executor
+        daily_planner = getattr(self.engine, "daily_planner", None)
+        facts_store = getattr(self.engine, "_facts_store", None)
+        # Fall through to fact_retriever's store if not directly on engine
+        if facts_store is None:
+            fr = getattr(self.engine, "fact_retriever", None)
+            if fr is not None:
+                facts_store = getattr(fr, "_store", None) or getattr(fr, "store", None)
+
+        async def _executor_loop() -> None:
+            while True:
+                try:
+                    await plan_executor.tick()
+                except Exception as e:
+                    print(f"[executor] tick error: {e}", flush=True)
+                await asyncio.sleep(1800)  # 30 min
+
+        async def _morning_planner_loop() -> None:
+            while True:
+                now = datetime.now()
+                next_7am = now.replace(hour=7, minute=0, second=0, microsecond=0)
+                if next_7am <= now:
+                    next_7am += timedelta(days=1)
+                await asyncio.sleep((next_7am - now).total_seconds())
+                try:
+                    if daily_planner is not None:
+                        await daily_planner.plan_aria()
+                except Exception as e:
+                    print(f"[planner] morning tick failed: {e}", flush=True)
+
+        async def _ensure_today_plan() -> None:
+            if daily_planner is None or facts_store is None:
+                return
+            today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+            try:
+                todays = await facts_store.query(
+                    subject="aria", type=FactType.PLAN, since=today_start, limit=1
+                )
+                if not todays:
+                    await daily_planner.plan_aria()
+            except Exception as e:
+                print(f"[planner] startup plan failed: {e}", flush=True)
+
+        asyncio.ensure_future(_ensure_today_plan())
+        asyncio.ensure_future(_executor_loop())
+        asyncio.ensure_future(_morning_planner_loop())
 
     async def _handle_card_annotation(
         self,
