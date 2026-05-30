@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     )
     from lingxi.memory.manager import MemoryContext
     from lingxi.planning.models import Plan
-    from lingxi.relational.models import RelationalMemory
     from lingxi.social.models import NPCState, SocialGraph
 
 from lingxi.persona.models import EmotionState, PersonaConfig
@@ -40,7 +39,6 @@ class PromptBuilder:
         pending_agenda: list[AgendaItem] | None = None,
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
-        relational_memory: RelationalMemory | None = None,
         social_graph: "SocialGraph | None" = None,
         social_states: "dict[str, NPCState] | None" = None,
         mode: str = "single",
