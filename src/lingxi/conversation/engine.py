@@ -646,8 +646,22 @@ class ConversationEngine:
             if not k.startswith("user:") or k.startswith(cur_user_prefix)
         }
 
+        # 2.5. Pull recent dialog so orchestrator can capture topic-arc
+        # (a 3-line user message often makes no sense without the last
+        # 5-15 turns of context). Also pass previous thread_summary so
+        # orchestrator keeps continuity across long sessions.
+        memory_context = await self.memory.assemble_context(
+            query=user_input, recipient_key=recipient_key,
+        )
+        messages = self.context_assembler.assemble_messages(memory_context)
+        prev_summary = self._thread_summaries.get(recipient_key, "") if hasattr(self, "_thread_summaries") else ""
+
         # 3. Orchestrator decides
-        decision = await decide(self.llm, user_input, digest, catalog)
+        decision = await decide(
+            self.llm, user_input, digest, catalog,
+            history=messages,
+            prev_thread_summary=prev_summary,
+        )
         print(
             f"[brain] orch decision: register={decision.register} "
             f"engage={decision.engage_level:.1f} "
@@ -655,6 +669,12 @@ class ConversationEngine:
             f"anchor={decision.topic_anchor[:30]!r}",
             flush=True,
         )
+
+        # Persist thread_summary for next turn
+        if decision.thread_summary:
+            if not hasattr(self, "_thread_summaries"):
+                self._thread_summaries = {}
+            self._thread_summaries[recipient_key] = decision.thread_summary
 
         # 4. Render
         persona_block = build_persona_block(self.persona)
@@ -666,12 +686,6 @@ class ConversationEngine:
             self.fact_retriever, decision, recipient_key=recipient_key,
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
-
-        # 5. Messages still come from context_assembler (existing path)
-        memory_context = await self.memory.assemble_context(
-            query=user_input, recipient_key=recipient_key,
-        )
-        messages = self.context_assembler.assemble_messages(memory_context)
 
         # Append user input as last message
         messages.append({"role": "user", "content": user_input})
