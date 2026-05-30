@@ -44,3 +44,21 @@ def test_decision_clamps_engage_level():
     }
     d = OrchestrationDecision.from_dict(raw)
     assert d.engage_level == 1.0
+
+
+def test_decision_has_plan_conflict_default_false():
+    from lingxi.brain.models import OrchestrationDecision
+    d = OrchestrationDecision.default()
+    assert d.plan_conflict is False
+
+
+def test_decision_from_dict_parses_plan_conflict():
+    from lingxi.brain.models import OrchestrationDecision
+    d = OrchestrationDecision.from_dict({"plan_conflict": True})
+    assert d.plan_conflict is True
+
+
+def test_decision_from_dict_defaults_plan_conflict_false():
+    from lingxi.brain.models import OrchestrationDecision
+    d = OrchestrationDecision.from_dict({})
+    assert d.plan_conflict is False
