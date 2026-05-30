@@ -298,7 +298,9 @@ async def create_engine(
     from lingxi.planner.daily_planner import DailyPlanner
     from lingxi.planner.executor import PlanExecutor
 
-    daily_planner = DailyPlanner(llm_provider, fact_retriever, life_writer)
+    daily_planner = DailyPlanner(
+        llm_provider, fact_retriever, life_writer, npc_writer=npc_writer
+    )
     plan_executor = PlanExecutor(
         llm_provider, fact_retriever, life_writer, planner=daily_planner
     )
