@@ -141,3 +141,22 @@ async def test_count_by_subject(store):
     counts = await store.count_by_subject()
     assert counts["aria"] == 2
     assert counts["user:u1"] == 1
+
+
+@pytest.mark.asyncio
+async def test_store_persists_importance_and_last_accessed(tmp_path):
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.models import Fact, Source, FactType
+    from datetime import datetime
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    now = datetime.now()
+    f = Fact(
+        subject="aria", content="x", source=Source.LIFE_SIMULATED,
+        type=FactType.EVENT, ts=now, importance=8, last_accessed=now,
+    )
+    await store.write(f)
+    rows = await store.query(subject="aria", limit=1)
+    assert rows[0].importance == 8
+    assert rows[0].last_accessed is not None
