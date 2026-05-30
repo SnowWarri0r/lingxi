@@ -26,14 +26,14 @@ class TestEmptyBriefingNoRender:
             assert "今早扫到的事" not in reminder
 
     def test_focus_reminder_has_no_world_block(self):
-        # Even with mood/time, world section is not present.
-        reminder = _reminder(current_mood="开心")
+        from datetime import datetime
+        reminder = _reminder(current_time=datetime.now())
         if reminder is not None:
             assert "今早扫到的事" not in reminder
 
     def test_world_content_never_surfaces(self):
-        # Verify the reminder path produces no world news text.
-        reminder = _reminder(current_mood="平静")
+        from datetime import datetime
+        reminder = _reminder(current_time=datetime.now())
         if reminder is not None:
             assert "上海本地" not in reminder
             assert "今早扫到" not in reminder
