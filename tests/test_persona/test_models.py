@@ -81,8 +81,9 @@ class TestPromptBuilder:
         assert "回避冲突" in prompt
         assert "看长远" in prompt
 
-    def test_axes_section_renders_modulation(self):
-        from lingxi.inner_life.models import InnerState
+    def test_axes_section_renders_extreme_baseline(self):
+        # Short-term axis_modulation was dropped with inner_life. The axes
+        # section now surfaces only EXTREME baseline axes (≤3 or ≥8).
         from lingxi.persona.models import (
             DecisionAxes, DecisionAxis, Identity, PersonaConfig,
         )
@@ -90,27 +91,23 @@ class TestPromptBuilder:
             name="T",
             identity=Identity(full_name="T"),
             decision_axes=DecisionAxes(
-                action_bias=DecisionAxis(score=5),  # neutral baseline
+                conflict_style=DecisionAxis(score=2),  # extreme low → surfaces
             ),
         )
-        # action_bias is neutral but has active modulation → must surface
-        inner = InnerState(axis_modulation={"action_bias": -2})
         builder = PromptBuilder(persona)
-        prompt = builder.build_system_prompt(inner_state=inner)
+        prompt = builder.build_system_prompt()
         assert "行为指纹" in prompt
-        assert "action_bias" not in prompt  # raw axis names should NOT appear
-        assert "此刻被推往" in prompt
+        assert "回避冲突" in prompt  # extreme-low conflict_style → low_label surfaces
+        # No short-term modulation framing any more
+        assert "此刻被推往" not in prompt
 
     def test_recent_proactive_messages_omitted_when_empty(self):
-        from lingxi.inner_life.models import InnerState
         from lingxi.persona.models import Identity, PersonaConfig
         persona = PersonaConfig(name="T", identity=Identity(full_name="T"))
         builder = PromptBuilder(persona)
         reminder = builder.build_turn_focus_reminder(
-            inner_state=InnerState(),
             recent_proactive_messages=None,
         )
-        # Reminder may render time/inner_state but not the proactive subblock
         if reminder is not None:
             assert "你最近主动跟这位说过的话" not in reminder
 

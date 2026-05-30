@@ -5,11 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from lingxi.inner_life.models import (
-    Activity,
-    ActivityKind,
-    InnerState,
-)
 from lingxi.persona.models import EmotionState
 from lingxi.pet.state_endpoint import build_pet_state_app, classify_emotion_family
 
@@ -59,33 +54,31 @@ class TestClassifyEmotionFamily:
 def _make_mock_engine(
     *,
     dimensions: dict | None = None,
-    activity_kind: ActivityKind | None = None,
-    activity_name: str = "默认",
-    inner_life_store_present: bool = True,
+    activity_content: str | None = None,
+    fact_retriever_present: bool = True,
     mood: str = "平静",
 ):
-    """Build a minimal engine mock for /pet/state."""
+    """Build a minimal engine mock for /pet/state.
+
+    Current activity is facts-driven now: the endpoint reads the latest
+    aria.event fact via engine.fact_retriever (inner_life was retired).
+    """
     engine = MagicMock()
     engine._emotion_state = EmotionState(dimensions=dimensions or {"平静": 0.5})
     engine._current_mood = mood
 
-    if not inner_life_store_present:
-        engine.inner_life_store = None
+    if not fact_retriever_present:
+        engine.fact_retriever = None
         return engine
 
-    inner_state = InnerState()
-    if activity_kind is not None:
-        from datetime import datetime
-        inner_state.current_activity = Activity(
-            kind=activity_kind,
-            name=activity_name,
-            description="",
-            started_at=datetime.now(),
-        )
-
-    store = MagicMock()
-    store.load_state = AsyncMock(return_value=inner_state)
-    engine.inner_life_store = store
+    events = []
+    if activity_content is not None:
+        ev = MagicMock()
+        ev.content = activity_content
+        events = [ev]
+    retriever = MagicMock()
+    retriever.fetch = AsyncMock(return_value=events)
+    engine.fact_retriever = retriever
     return engine
 
 
@@ -105,7 +98,7 @@ class TestPetStateEndpoint:
         body = r.json()
         assert body["engagement_mode"] == "full"
         assert body["emotion_family"] == "NEUTRAL"
-        assert body["sprite"] in {"idle_default", "sleepy"}  # sleepy if late hr
+        assert body["activity_kind"] is None
         assert "ts" in body
         assert body["mood_narrative"] == "平静"
 
@@ -124,45 +117,37 @@ class TestPetStateEndpoint:
         assert body["engagement_mode"] == "flustered"
         assert body["sprite"] == "flustered"
 
-    def test_state_with_activity(self):
-        engine = _make_mock_engine(
-            activity_kind=ActivityKind.WORK,
-            activity_name="改稿",
-        )
+    def test_state_activity_from_facts(self):
+        engine = _make_mock_engine(activity_content="在改关于仙女座那段，卡在开头一句")
         client = TestClient(build_pet_state_app(engine))
         body = client.get("/pet/state").json()
-        assert body["activity_kind"] == "work"
-        assert body["activity_name"] == "改稿"
-        # No emotion family active + work activity → focused
-        assert body["sprite"] == "focused"
+        assert body["activity_kind"] is None  # no structured ActivityKind any more
+        assert body["activity_name"] == "在改关于仙女座那段，卡在开头一句"[:40]
 
-    def test_state_high_energy_emotion_drives_happy_sprite(self):
+    def test_state_high_energy_emotion(self):
         engine = _make_mock_engine(dimensions={"兴奋": 0.7})
         client = TestClient(build_pet_state_app(engine))
         body = client.get("/pet/state").json()
-        # 兴奋 < HEAVY/FLUSTERED thresholds, so engagement_mode stays full
-        # → falls through to emotion family
+        # 兴奋 < HEAVY/FLUSTERED thresholds → engagement_mode stays full
         assert body["engagement_mode"] == "full"
         assert body["emotion_family"] == "HIGH_ENERGY"
-        assert body["sprite"] == "happy"
 
-    def test_state_works_without_inner_life_store(self):
-        engine = _make_mock_engine(inner_life_store_present=False)
+    def test_state_works_without_fact_retriever(self):
+        engine = _make_mock_engine(fact_retriever_present=False)
         client = TestClient(build_pet_state_app(engine))
         body = client.get("/pet/state").json()
         assert body["activity_kind"] is None
         assert body["activity_name"] is None
 
-    def test_state_handles_store_failure(self):
+    def test_state_handles_retriever_failure(self):
         engine = MagicMock()
         engine._emotion_state = EmotionState(dimensions={"平静": 0.5})
         engine._current_mood = "平静"
-        store = MagicMock()
-        store.load_state = AsyncMock(side_effect=RuntimeError("disk gone"))
-        engine.inner_life_store = store
+        retriever = MagicMock()
+        retriever.fetch = AsyncMock(side_effect=RuntimeError("db gone"))
+        engine.fact_retriever = retriever
 
         client = TestClient(build_pet_state_app(engine))
         r = client.get("/pet/state")
-        # Should not 500 — falls back to None inner_state
         assert r.status_code == 200
-        assert r.json()["activity_kind"] is None
+        assert r.json()["activity_name"] is None
