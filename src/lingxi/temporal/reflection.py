@@ -265,9 +265,10 @@ class ReflectionLoop:
             added_count[0] = n
 
         await store.update_memory(rec_key, _mutate)
-        if added_count[0]:
+        added = added_count[0]
+        if added:
             print(
-                f"[relational] {rec_key}: +{added_count[0]} entries "
+                f"[relational] {rec_key}: +{added} entries "
                 f"(jokes={len(deltas['inside_jokes'])}, "
                 f"places={len(deltas['shared_places'])}, "
                 f"sweet={len(deltas['sweet_moments'])}, "
@@ -276,6 +277,50 @@ class ReflectionLoop:
                 f"sig={len(deltas['signature_phrases'])})",
                 flush=True,
             )
+
+        # Dual-write relational deltas to facts store (new arch)
+        _inf = getattr(self.engine, "inference_writer", None)
+        recipient_key = rec_key
+        if _inf is not None and added > 0:
+            from lingxi.facts.models import FactType as _FactType
+            from datetime import datetime as _dt
+            # Subject form: "user:<id>" where id comes from recipient_key
+            # which may be "feishu:oc_xxx" — preserve the full id
+            _subject = f"user:{recipient_key.split(':', 1)[-1]}" if ":" in recipient_key else f"user:{recipient_key}"
+            for d in deltas.get("daily_patterns", []):
+                try:
+                    await _inf.write(
+                        subject=_subject,
+                        content=d.get("pattern", ""),
+                        type=_FactType.PATTERN,
+                        ts=_dt.now(),
+                        tags=["reflection"],
+                    )
+                except Exception as e:
+                    print(f"[reflection] facts write failed: {e}", flush=True)
+            for m in deltas.get("sweet_moments", []):
+                try:
+                    await _inf.write(
+                        subject=_subject,
+                        content=m.get("content", ""),
+                        type=_FactType.OPINION,
+                        ts=_dt.now(),
+                        tags=["sweet_moment", m.get("weight", "medium")],
+                    )
+                except Exception:
+                    pass
+            for phrase in deltas.get("signature_phrases", []):
+                try:
+                    if isinstance(phrase, str) and phrase.strip():
+                        await _inf.write(
+                            subject=_subject,
+                            content=phrase,
+                            type=_FactType.PATTERN,
+                            ts=_dt.now(),
+                            tags=["signature_phrase"],
+                        )
+                except Exception:
+                    pass
 
     async def _maybe_add_biography_event(self, record: InteractionRecord) -> None:
         """Ask the LLM whether this session produced a biographical moment for Aria herself."""
