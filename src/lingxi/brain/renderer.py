@@ -82,6 +82,17 @@ async def render_dynamic_blocks(
 
     sections: list[str] = []
 
+    # 【核心记忆】 — always-present, agent-curated blocks (MemGPT main context).
+    core_lines: list[str] = []
+    persona_block = await retriever.get_core_block("aria")
+    if persona_block and persona_block.content.strip():
+        core_lines.append("你自己：\n" + persona_block.content.strip())
+    human_block = await retriever.get_core_block(f"user:{recipient_key}")
+    if human_block and human_block.content.strip():
+        core_lines.append("关于对方：\n" + human_block.content.strip())
+    if core_lines:
+        sections.append("【核心记忆】（你长期记着的，自己维护的）\n" + "\n\n".join(core_lines))
+
     # 【你此刻】
     self_lines: list[str] = []
     self_lines.append(_REGISTER_HINT.get(decision.register, _REGISTER_HINT["warm"]))
