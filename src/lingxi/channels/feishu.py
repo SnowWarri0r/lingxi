@@ -470,6 +470,7 @@ class FeishuBot(OutboundChannel):
                 npc_writer=self.engine.npc_writer,
                 life_writer=getattr(self.engine, "life_writer", None),
                 retriever=getattr(self.engine, "fact_retriever", None),
+                fact_retriever=getattr(self.engine, "fact_retriever", None),
             )
             asyncio.run_coroutine_threadsafe(
                 self._social_scheduler.start(), self._loop
