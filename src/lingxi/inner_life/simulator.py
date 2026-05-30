@@ -213,6 +213,7 @@ class LifeSimulator:
         store: InnerLifeStore,
         tick_interval_minutes: int = 30,
         memory: object | None = None,
+        life_writer=None,
     ):
         self.persona = persona
         self.llm = llm
@@ -222,6 +223,7 @@ class LifeSimulator:
         # consolidated into chroma episodes so conversation memory can
         # retrieve "what did Aria do last week" naturally.
         self.memory = memory
+        self.life_writer = life_writer
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -765,6 +767,22 @@ class LifeSimulator:
         if _is_near_duplicate_event(event.content, state.recent_events[:8]):
             print(f"[life] event skipped (near-dup): {event.content[:50]}")
             return
+
+        # Dual-write to facts store (new arch)
+        if self.life_writer is not None:
+            try:
+                from datetime import datetime as _dt
+                from lingxi.facts.models import FactType as _FactType
+                await self.life_writer.write(
+                    subject="aria",
+                    content=event.content,
+                    type=_FactType.EVENT,
+                    ts=_dt.now(),
+                    confidence=event.significance,
+                    tags=["lived"],
+                )
+            except Exception as e:
+                print(f"[life] facts write failed: {e}", flush=True)
 
         # Prepend + bound
         state.recent_events.insert(0, event)
