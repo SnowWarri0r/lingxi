@@ -454,8 +454,8 @@ class ConversationEngine:
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
 
-        # Append user input as last message
-        messages.append({"role": "user", "content": user_input})
+        # Append the current user turn (with images as multimodal blocks).
+        messages.append(self._build_user_message(user_input, images))
 
         return system_prompt, messages
 
