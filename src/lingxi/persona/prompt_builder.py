@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from lingxi.memory.manager import MemoryContext
     from lingxi.planning.models import Plan
     from lingxi.relational.models import RelationalMemory
+    from lingxi.social.models import NPCState, SocialGraph
     from lingxi.world.models import DailyBriefing
 
 from lingxi.persona.models import EmotionState, PersonaConfig
@@ -81,6 +82,8 @@ class PromptBuilder:
         recent_proactive_messages: list[str] | None = None,
         relational_memory: RelationalMemory | None = None,
         daily_briefing: DailyBriefing | None = None,
+        social_graph: "SocialGraph | None" = None,
+        social_states: "dict[str, NPCState] | None" = None,
         mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
@@ -133,6 +136,16 @@ class PromptBuilder:
 
         if biography_hits:
             sections.append(self._build_biography_section(biography_hits))
+
+        # Social graph: 身边的人. Background-knowledge block — NPC arcs +
+        # recent events. Sits next to biography because both are "things
+        # about Aria's life outside this conversation". Push-mode events
+        # (significance≥0.6) go through inner_state.recent_events instead.
+        if social_graph is not None and social_states:
+            from lingxi.social.renderer import render_social_section
+            social_block = render_social_section(social_graph, social_states)
+            if social_block:
+                sections.append(social_block)
 
         if subjective_view is not None:
             from lingxi.inner_life.subjective import SubjectiveLayer
