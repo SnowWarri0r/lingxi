@@ -48,6 +48,7 @@ class FactType(str, Enum):
     OPINION      = "opinion"
     PLAN         = "plan"
     EMOTION_NOTE = "emotion_note"
+    CORE         = "core"          # MemGPT core-memory block (one current per subject, supersede chain)
 
 
 _SUBJECT_RE = re.compile(r"^(aria|world|user:[A-Za-z0-9_:-]+|npc:[A-Za-z0-9_-]+)$")

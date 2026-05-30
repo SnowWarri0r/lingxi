@@ -154,6 +154,22 @@ class FactStore:
         row = await asyncio.to_thread(_read)
         return _row_to_fact(row) if row else None
 
+    async def get_core_block(self, subject: str) -> Fact | None:
+        """Return the current CORE-type fact for subject (latest, not superseded)."""
+        def _read():
+            c = self._conn()
+            row = c.execute(
+                "SELECT * FROM facts WHERE subject = ? AND type = ? "
+                "AND id NOT IN (SELECT supersedes FROM facts WHERE supersedes IS NOT NULL) "
+                "ORDER BY ts DESC LIMIT 1",
+                (subject, FactType.CORE.value),
+            ).fetchone()
+            c.close()
+            return row
+
+        row = await asyncio.to_thread(_read)
+        return _row_to_fact(row) if row else None
+
     async def query(
         self,
         *,
