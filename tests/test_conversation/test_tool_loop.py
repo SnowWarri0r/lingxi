@@ -72,3 +72,53 @@ async def test_dispatch_search_returns_facts(tmp_path):
     out = await eng._dispatch_memory_tool(
         "archival_memory_search", {"query": "仙女座", "scope": "self"}, "feishu:x")
     assert "仙女座" in out
+
+
+class _ScriptedLLM:
+    """Emits a queued sequence of CompletionResults."""
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls = 0
+
+    async def complete(self, **kwargs):
+        self.calls += 1
+        self._last_tool_choice = kwargs.get("tool_choice")
+        return self._results.pop(0) if self._results else _final("forced")
+
+
+def _toolcall(name, args, tid="t1"):
+    from lingxi.providers.base import CompletionResult
+    return CompletionResult(
+        content="", finish_reason="tool_use",
+        tool_calls=[{"id": tid, "name": name, "input": args}],
+        raw_content_blocks=[{"type": "tool_use", "id": tid, "name": name, "input": args}],
+    )
+
+
+def _final(text):
+    from lingxi.providers.base import CompletionResult
+    return CompletionResult(content=text, finish_reason="end_turn")
+
+
+@pytest.mark.asyncio
+async def test_generate_with_tools_runs_tool_then_final(tmp_path):
+    eng, store = await _engine(tmp_path)
+    eng.llm = _ScriptedLLM([
+        _toolcall("core_memory_append", {"block": "human", "content": "记一笔"}),
+        _final("好的"),
+    ])
+    text = await eng._generate_with_tools(
+        "SYS", [{"role": "user", "content": "hi"}], recipient_key="feishu:x")
+    assert text == "好的"
+    assert (await store.get_core_block("user:feishu:x")).content.endswith("记一笔")
+
+
+@pytest.mark.asyncio
+async def test_generate_with_tools_runaway_cap(tmp_path):
+    eng, store = await _engine(tmp_path)
+    # always tool_use → must stop at cap and force a text reply
+    eng.llm = _ScriptedLLM([_toolcall("conversation_search", {"query": "x"}) for _ in range(20)])
+    text = await eng._generate_with_tools(
+        "SYS", [{"role": "user", "content": "hi"}], recipient_key="feishu:x")
+    assert eng.llm.calls <= 6  # MAX_TOOL_ITERS(5) + 1 forced
+    assert eng.llm._last_tool_choice == {"type": "none"}
