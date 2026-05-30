@@ -432,25 +432,27 @@ class FeishuBot(OutboundChannel):
 
         # Social scheduler — generates NPC events on cron ticks so the
         # "身边的人" block has fresh material. Daytime-only (8-22, every 2h).
-        # Promoter pushes significance≥0.6 events to Aria.recent_events
-        # so the proactive opener can surface them.
+        # Promoter pushes significance≥0.6 events to Aria's facts store +
+        # ShareIntentStore so the proactive opener can surface them.
         if (
             getattr(self.engine, "social_graph", None) is not None
             and getattr(self.engine, "social_store", None) is not None
         ):
             from lingxi.social.promoter import SocialPromoter
             from lingxi.social.scheduler import SocialScheduler
+            from lingxi.proactive.share_intent import ShareIntentStore
 
             social_data_dir = (
                 getattr(self.engine.memory, "data_dir", None)
                 or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
             )
             promoter_hook = None
-            if self.engine.inner_life_store is not None:
+            if getattr(self.engine, "life_writer", None) is not None:
+                share_intent_store = ShareIntentStore(social_data_dir)
                 promoter = SocialPromoter(
-                    inner_store=self.engine.inner_life_store,
+                    life_writer=self.engine.life_writer,
+                    share_intent_store=share_intent_store,
                     social_store=self.engine.social_store,
-                    data_dir=str(social_data_dir),
                 )
                 promoter_hook = promoter.maybe_promote
             self._social_scheduler = SocialScheduler(
