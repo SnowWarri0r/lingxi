@@ -51,15 +51,18 @@ class TestBuildStylePreamble:
         pre = build_style_preamble(cfg)
         assert "≤25" in pre or "25" in pre
 
-    def test_default_blacklist_included(self):
-        pre = build_style_preamble(StyleConfig())
-        assert "希望" in pre
-        assert "总是让人" in pre
-
-    def test_persona_blacklist_appended(self):
-        cfg = StyleConfig(blacklist_phrases=["据说"])
-        pre = build_style_preamble(cfg)
-        assert "据说" in pre
+    def test_no_planted_bad_output_strings(self):
+        """Bad-output strings as 避用词 cause reverse-attention bias.
+        Register protection now lives in fewshot examples + system prompt
+        positive rules, not in a planted blacklist."""
+        pre = build_style_preamble(StyleConfig(
+            blacklist_phrases=["据说", "总的来说"],  # ignored by design
+        ))
+        # No specific AI-tell phrases should be planted
+        assert "希望" not in pre
+        assert "总是让人" not in pre
+        assert "据说" not in pre
+        assert "避用词" not in pre
 
     def test_ends_with_newline(self):
         """Preamble must end with \\n so engine can concat with user message directly."""

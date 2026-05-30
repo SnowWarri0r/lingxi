@@ -730,7 +730,6 @@ class ConversationEngine:
             build_compress_prompt,
             render_fewshots_for_compress,
         )
-        from lingxi.conversation.prompt_assembly import DEFAULT_BLACKLIST
 
         # Use whatever _prepare_turn already retrieved (3 seeds + up to 3
         # context-relevant samples). Falling back to seeds-only when there's
@@ -739,7 +738,6 @@ class ConversationEngine:
         seeds = seeds[:5]
 
         style = self.persona.style
-        blacklist_phrases = list(DEFAULT_BLACKLIST) + list(style.blacklist_phrases)
         max_chars = style.speech_max_chars
         if self._last_biography_hit:
             max_chars = max(max_chars, 60)
@@ -770,7 +768,6 @@ class ConversationEngine:
             user_message=user_input,
             fewshots_block=render_fewshots_for_compress(seeds),
             max_chars=max_chars,
-            blacklist="、".join(blacklist_phrases),
             previous_assistant_msg=previous_assistant_msg,
         )
         return prompt_text, [{"role": "user", "content": prompt_text}]
