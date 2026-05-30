@@ -65,11 +65,10 @@ class TestTrigger:
         sched = SocialScheduler(llm, graph, store, rng=rng)
         await sched.trigger_now()
 
+        # store.append_event removed in P7 (dual-write drop).
+        # Events now go to npc_writer (facts table) only.
+        # Verify both NPCs got an LLM event-generation call.
         assert llm.call_count == 2
-        s1 = await store.load_state("xiaomin")
-        s2 = await store.load_state("tom")
-        assert len(s1.recent_events) >= 1
-        assert len(s2.recent_events) >= 1
 
     @pytest.mark.asyncio
     async def test_trigger_writes_last_tick(self, store, graph):

@@ -100,6 +100,18 @@ def _render_arc_events(events: list[NPCEvent], arc_id: str, limit: int = 8) -> s
     return "\n".join(lines)
 
 
+def _render_facts_as_events(facts: list, limit: int = 8) -> str:
+    """Render Fact objects (from FactRetriever) as event lines for arc prompts."""
+    if not facts:
+        return "（无）"
+    shown = facts[:limit]
+    lines = []
+    for f in shown:
+        ts = f.ts.strftime("%m-%d %H:%M")
+        lines.append(f"- {ts} {f.content}")
+    return "\n".join(lines)
+
+
 async def maybe_advance_arc(
     llm: LLMProvider,
     npc: NPC,
@@ -108,6 +120,7 @@ async def maybe_advance_arc(
     *,
     now: datetime | None = None,
     model: str | None = None,
+    fact_retriever=None,
 ) -> NPCArc | None:
     """Judge whether `arc` should advance. Returns updated arc or None.
 
@@ -116,6 +129,9 @@ async def maybe_advance_arc(
 
     Force-resolve safeguard: if event_count exceeds MAX_EVENTS_PER_ARC,
     arc is resolved without LLM call.
+
+    fact_retriever: if provided, arc events are fetched from the facts
+    table (subject=npc:<id>, tag=arc_id) instead of state.recent_events.
     """
     now = now or datetime.now()
 
@@ -135,6 +151,26 @@ async def maybe_advance_arc(
     if arc.event_count < threshold:
         return None
 
+    # Fetch arc events from facts store (canonical) when retriever available,
+    # fall back to state.recent_events (from store's events.jsonl).
+    if fact_retriever is not None:
+        try:
+            from lingxi.facts.models import FactType as _FactType
+            from lingxi.facts.retriever import FactQuery
+            arc_facts = await fact_retriever.fetch(
+                FactQuery(
+                    subject=f"npc:{npc.id}",
+                    type=_FactType.EVENT,
+                    semantic=arc.id,
+                    limit=8,
+                )
+            )
+            events_text = _render_facts_as_events(arc_facts)
+        except Exception:
+            events_text = _render_arc_events(state.recent_events, arc.id)
+    else:
+        events_text = _render_arc_events(state.recent_events, arc.id)
+
     background_brief = (npc.background or "").strip().split("\n", 1)[0][:80]
     prompt = _ADVANCE_PROMPT.format(
         npc_name=npc.name,
@@ -143,7 +179,7 @@ async def maybe_advance_arc(
         summary=arc.summary,
         stage=arc.stage,
         event_count=arc.event_count,
-        events=_render_arc_events(state.recent_events, arc.id),
+        events=events_text,
     )
 
     try:
@@ -206,10 +242,13 @@ async def advance_npc_arcs(
     *,
     now: datetime | None = None,
     model: str | None = None,
+    fact_retriever=None,
 ) -> int:
     """Check all arcs for one NPC, advance the ones that should, persist.
 
     Returns the number of arcs that advanced (for logging).
+    fact_retriever: when provided, arc events are read from the facts
+    table instead of the store's events.jsonl.
     """
     state = await store.load_state(npc.id)
     if not state.arcs:
@@ -221,6 +260,7 @@ async def advance_npc_arcs(
     for arc in state.arcs:
         updated = await maybe_advance_arc(
             llm, npc, arc, state, now=now, model=model,
+            fact_retriever=fact_retriever,
         )
         if updated is None:
             new_arcs.append(arc)
