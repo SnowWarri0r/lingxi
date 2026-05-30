@@ -339,20 +339,15 @@ class PromptBuilder:
             now = datetime.now()
             cutoff = now - timedelta(hours=24)
 
-            # In proactive_mode (deciding what to reach out about), HIDE
-            # events that have already been voiced — wants_to_share is
-            # flipped to False after any successful proactive send via
-            # _mark_event_shared, so any False here means "已经对某个对话
-            # 提过这事". Without this filter, the same event leaks to a
-            # different recipient — production trace: 壁虎 sent to group,
-            # wants_to_share→False, but private chat's proactive cycle
-            # still saw 壁虎 in inner_state and pitched it again.
-            # Reactive chat path keeps all events visible so Aria can
-            # reference them naturally when topic comes up.
+            # All fresh events surface as background context for both reactive
+            # and proactive turns. Proactive topic selection is now driven by
+            # ShareIntentStore (via find_pending_share / pending_share_block in
+            # proactive.py) — no longer gated by wants_to_share here.
+            # Reactive chat keeps all events visible so Aria can reference
+            # them naturally when a topic comes up mid-conversation.
             fresh = [
                 e for e in state.recent_events[:8]
                 if e.significance >= 0.3 and e.timestamp >= cutoff
-                and (not proactive_mode or e.wants_to_share)
             ][:5]
             if fresh:
                 lines.append(
