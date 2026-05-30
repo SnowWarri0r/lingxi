@@ -129,6 +129,7 @@ class ConversationEngine:
         inference_writer=None,
         world_writer=None,
         user_statement_writer=None,
+        core_memory_writer=None,
         plan_executor=None,
     ):
         self.persona = persona
@@ -142,6 +143,7 @@ class ConversationEngine:
         self.inference_writer = inference_writer
         self.world_writer = world_writer
         self.user_statement_writer = user_statement_writer
+        self.core_memory_writer = core_memory_writer
         self.plan_executor = plan_executor
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
@@ -197,6 +199,81 @@ class ConversationEngine:
 
         # Initialize
         self.memory.set_llm_provider(llm_provider)
+
+    async def _dispatch_memory_tool(self, name: str, args: dict, recipient_key: str) -> str:
+        """Execute one MemGPT memory tool, scoped by recipient_key. Returns a
+        string for the tool_result. Errors are returned (not raised) so the
+        agent can recover."""
+        from datetime import datetime
+        from lingxi.brain.memory_tools import CORE_BLOCK_MAX_CHARS
+        from lingxi.facts.models import Fact, FactType, Source
+        from lingxi.facts.retriever import FactQuery
+
+        def _subject_for(scope: str) -> str:
+            if scope == "self":
+                return "aria"
+            if scope == "world":
+                return "world"
+            return f"user:{recipient_key}"
+
+        try:
+            if name == "archival_memory_search":
+                scope = args.get("scope", "user")
+                subject = _subject_for(scope)
+                facts = await self.fact_retriever.fetch(FactQuery(
+                    subject=subject, semantic=args.get("query"), limit=5))
+                if not facts:
+                    return "（没找到相关记忆）"
+                return "\n".join(
+                    f"- [{f.ts.strftime('%m-%d')}] {f.content}" for f in facts)
+
+            if name == "archival_memory_insert":
+                scope = args.get("scope", "user")
+                subject = _subject_for(scope)
+                writer = self.inference_writer if scope == "self" else self.user_statement_writer
+                if writer is None:
+                    return "（写入未启用）"
+                await writer.write(
+                    subject=subject, content=args["content"], type=FactType.PATTERN,
+                    source=writer.ALLOWED_SOURCE, ts=datetime.now(),
+                    importance=args.get("importance"))
+                return "inserted"
+
+            if name in ("core_memory_append", "core_memory_replace"):
+                if self.core_memory_writer is None:
+                    return "（核心记忆未启用）"
+                block = args.get("block", "human")
+                subject = "aria" if block == "persona" else f"user:{recipient_key}"
+                current = await self.fact_retriever.get_core_block(subject)
+                cur_text = current.content if current else ""
+                if name == "core_memory_append":
+                    new_text = (cur_text + "\n" + args["content"]).strip()
+                else:
+                    if args["old"] not in cur_text:
+                        return "substring not found in core block"
+                    new_text = cur_text.replace(args["old"], args["new"])
+                if len(new_text) > CORE_BLOCK_MAX_CHARS:
+                    return "core memory full, use core_memory_replace to condense"
+                await self.core_memory_writer.write(
+                    subject=subject, content=new_text, type=FactType.CORE,
+                    source=Source.LLM_INFERRED, ts=datetime.now(),
+                    supersedes=current.id if current else None)
+                return "ok"
+
+            if name == "conversation_search":
+                turns = await self.memory.short_term.snapshot_for_recipient(recipient_key)
+                q = args.get("query", "")
+                hits = [t for t in turns if q in (t.content or "")][:8]
+                if not hits:
+                    return "（最近对话里没找到）"
+                return "\n".join(
+                    f"- [{t.timestamp.strftime('%m-%d %H:%M')}] "
+                    f"{'对方' if t.role == 'user' else '我'}: {t.content[:80]}"
+                    for t in hits)
+
+            return f"unknown tool: {name}"
+        except Exception as e:
+            return f"tool error: {e}"
 
     async def _prepare_turn_v2(
         self,
