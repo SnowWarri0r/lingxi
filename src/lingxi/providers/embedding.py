@@ -120,12 +120,20 @@ class DoubaoEmbeddingProvider(EmbeddingProvider):
         self._api_key = api_key or os.environ.get("ARK_API_KEY", "")
         self._model = model
         self._base_url = base_url.rstrip("/")
-        self._client: httpx.AsyncClient | None = None
+        # httpx.AsyncClient binds its connection pool to whichever event
+        # loop created it. The feishu channel runs the life simulator in a
+        # dedicated background loop separate from request-path callers, so
+        # a single shared client fails with "Event loop is closed" on the
+        # second loop. Cache one client per loop id instead.
+        self._clients: dict[int, httpx.AsyncClient] = {}
 
     def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=30)
-        return self._client
+        loop = asyncio.get_running_loop()
+        client = self._clients.get(id(loop))
+        if client is None:
+            client = httpx.AsyncClient(timeout=30)
+            self._clients[id(loop)] = client
+        return client
 
     async def embed(self, text: str) -> list[float]:
         """Embed a single text string."""
