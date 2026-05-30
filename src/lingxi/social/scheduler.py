@@ -45,6 +45,7 @@ class SocialScheduler:
         model: str | None = None,
         rng: random.Random | None = None,
         on_event_written=None,
+        npc_writer=None,
     ):
         self._llm = llm
         self._graph = graph
@@ -56,6 +57,7 @@ class SocialScheduler:
         # P3 hook — promoter passes a callable that takes (npc, event)
         # and pushes significance≥threshold to Aria.recent_events
         self._on_event_written = on_event_written
+        self._npc_writer = npc_writer
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -130,6 +132,22 @@ class SocialScheduler:
         bumped_arcs: set[str] = set()
         for ev in events:
             await self._store.append_event(ev)
+            if self._npc_writer is not None:
+                try:
+                    from lingxi.facts.models import FactType as _FactType
+                    _tags = [ev.type]
+                    if ev.arc_id:
+                        _tags.append(ev.arc_id)
+                    await self._npc_writer.write(
+                        subject=f"npc:{npc.id}",
+                        content=ev.content,
+                        type=_FactType.EVENT,
+                        ts=ev.ts,
+                        confidence=ev.significance,
+                        tags=_tags,
+                    )
+                except Exception as e:
+                    print(f"[social] facts write failed: {e}", flush=True)
             print(
                 f"[social] {npc.id} +event sig={ev.significance:.2f} "
                 f"type={ev.type} arc={ev.arc_id or '-'} content={ev.content[:30]}...",
