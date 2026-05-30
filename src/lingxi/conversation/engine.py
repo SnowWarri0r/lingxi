@@ -143,6 +143,7 @@ class ConversationEngine:
         world_store=None,
         social_graph=None,
         social_store=None,
+        fact_retriever=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -154,6 +155,7 @@ class ConversationEngine:
         self.world_store = world_store
         self.social_graph = social_graph
         self.social_store = social_store
+        self.fact_retriever = fact_retriever
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -584,6 +586,83 @@ class ConversationEngine:
         # Final message list = real chat history only (NO fewshot pair injection)
         return system_prompt, messages
 
+    async def _prepare_turn_v2(
+        self,
+        user_input: str,
+        images: list[dict] | None,
+        channel: str | None,
+        recipient_id: str | None,
+    ) -> tuple[str, list[dict]]:
+        """New chat-prep path: orchestrator + renderer.
+
+        Replaces _prepare_turn when self.fact_retriever is wired. Old
+        path remains as fallback so we can A/B-compare.
+        """
+        from lingxi.brain.orchestrator import StateDigest, decide
+        from lingxi.brain.renderer import render_dynamic_blocks
+        from lingxi.persona.prompt_builder import build_persona_block
+
+        recipient_key = f"{channel}:{recipient_id}" if recipient_id else "_anon"
+
+        # 1. Build state digest from current inner_life snapshot
+        inner_state = (
+            await self.inner_life_store.load_state()
+            if self.inner_life_store else None
+        )
+        digest = StateDigest(
+            activity=(
+                inner_state.current_activity.description
+                if inner_state and inner_state.current_activity else ""
+            ),
+            mood="，".join(
+                f"{k}({v:.1f})"
+                for k, v in sorted(
+                    (inner_state.axis_modulation or {}).items()
+                )[:3]
+            ) if inner_state else "",
+            last_lived=[
+                e.content[:50] for e in (
+                    inner_state.recent_events[:3] if inner_state else []
+                )
+            ],
+        )
+
+        # 2. Build catalog
+        catalog = await self.fact_retriever.catalog()
+
+        # 3. Orchestrator decides
+        decision = await decide(self.llm, user_input, digest, catalog)
+        print(
+            f"[brain] orch decision: register={decision.register} "
+            f"engage={decision.engage_level:.1f} "
+            f"queries={len(decision.fact_queries)} "
+            f"anchor={decision.topic_anchor[:30]!r}",
+            flush=True,
+        )
+
+        # 4. Render
+        persona_block = build_persona_block(self.persona)
+        # For recipient_key in renderer, pass just the id portion after the
+        # channel prefix (e.g. "feishu:oc_xxx" → renderer matches against
+        # subject "user:oc_xxx" or "user:feishu:oc_xxx" depending on what
+        # the migrator used)
+        rk_for_render = recipient_key.split(":", 1)[-1] if ":" in recipient_key else recipient_key
+        dynamic_block = await render_dynamic_blocks(
+            self.fact_retriever, decision, recipient_key=rk_for_render,
+        )
+        system_prompt = persona_block + "\n\n" + dynamic_block
+
+        # 5. Messages still come from context_assembler (existing path)
+        memory_context = await self.memory.assemble_context(
+            user_input=user_input, recipient_key=recipient_key,
+        )
+        messages = self.context_assembler.assemble_messages(memory_context)
+
+        # Append user input as last message
+        messages.append({"role": "user", "content": user_input})
+
+        return system_prompt, messages
+
     @staticmethod
     def _render_fewshots_as_text(samples: list[FewShotSample]) -> str:
         """Render fewshots as a TEXT block in the system prompt.
@@ -957,9 +1036,14 @@ class ConversationEngine:
         channel: str | None,
         recipient_id: str | None,
     ) -> TurnOutput:
-        system_prompt, messages = await self._prepare_turn(
-            user_input, images, channel, recipient_id
-        )
+        if self.fact_retriever is not None:
+            system_prompt, messages = await self._prepare_turn_v2(
+                user_input, images, channel, recipient_id
+            )
+        else:
+            system_prompt, messages = await self._prepare_turn(
+                user_input, images, channel, recipient_id
+            )
 
         if self.persona.compression.enabled:
             # Two-call: think (Sonnet) then compress (Haiku)
@@ -1023,9 +1107,14 @@ class ConversationEngine:
         channel: str | None,
         recipient_id: str | None,
     ) -> AsyncIterator[str]:
-        system_prompt, messages = await self._prepare_turn(
-            user_input, images, channel, recipient_id
-        )
+        if self.fact_retriever is not None:
+            system_prompt, messages = await self._prepare_turn_v2(
+                user_input, images, channel, recipient_id
+            )
+        else:
+            system_prompt, messages = await self._prepare_turn(
+                user_input, images, channel, recipient_id
+            )
 
         prefill = pick_prefill(self.persona.style)
 
@@ -1100,9 +1189,14 @@ class ConversationEngine:
     ) -> AsyncIterator[StreamEvent]:
         from lingxi.conversation.output_schema import META_DELIMITER
 
-        system_prompt, messages = await self._prepare_turn(
-            user_input, images, channel, recipient_id
-        )
+        if self.fact_retriever is not None:
+            system_prompt, messages = await self._prepare_turn_v2(
+                user_input, images, channel, recipient_id
+            )
+        else:
+            system_prompt, messages = await self._prepare_turn(
+                user_input, images, channel, recipient_id
+            )
 
         if self.persona.compression.enabled:
             # Two-call streaming: think (non-stream) then compress (stream)
