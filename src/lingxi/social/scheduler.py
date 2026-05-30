@@ -19,6 +19,7 @@ import random
 from datetime import datetime, timedelta
 
 from lingxi.providers.base import LLMProvider
+from lingxi.social.arc_advancer import advance_npc_arcs
 from lingxi.social.event_generator import (
     compute_tick_probability,
     generate_events,
@@ -126,9 +127,7 @@ class SocialScheduler:
         events = await generate_events(
             self._llm, npc, state, now=now, model=self._model,
         )
-        if not events:
-            return
-
+        bumped_arcs: set[str] = set()
         for ev in events:
             await self._store.append_event(ev)
             print(
@@ -136,14 +135,26 @@ class SocialScheduler:
                 f"type={ev.type} arc={ev.arc_id or '-'} content={ev.content[:30]}...",
                 flush=True,
             )
-            # Increment arc.event_count when applicable (P4 will use this)
             if ev.arc_id:
                 await self._bump_arc_count(npc.id, ev.arc_id)
+                bumped_arcs.add(ev.arc_id)
             if self._on_event_written is not None:
                 try:
                     await self._on_event_written(npc, ev)
                 except Exception as e:
                     print(f"[social] event hook failed: {e}", flush=True)
+
+        # Arc advancement: only check arcs that just got a new event (or
+        # arcs at force-resolve threshold — caught inside maybe_advance).
+        # Keeps LLM calls bounded: at most 1 advancement check per event.
+        if bumped_arcs:
+            try:
+                await advance_npc_arcs(
+                    self._llm, npc, self._store,
+                    now=now, model=self._model,
+                )
+            except Exception as e:
+                print(f"[social] arc advance failed for {npc.id}: {e}", flush=True)
 
     async def _bump_arc_count(self, npc_id: str, arc_id: str) -> None:
         state = await self._store.load_state(npc_id)
