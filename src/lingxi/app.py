@@ -221,6 +221,7 @@ async def create_engine(
     from lingxi.facts.writers.inference import InferenceWriter
     from lingxi.facts.writers.world import WorldWriter
     from lingxi.facts.writers.user_statement import UserStatementWriter
+    from lingxi.facts.writers.core_memory import CoreMemoryWriter
     from lingxi.facts.reflector import Reflector
     from lingxi.facts.reflection_trigger import ReflectionTrigger
 
@@ -254,6 +255,7 @@ async def create_engine(
     inference_writer = InferenceWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
     npc_writer = NPCWriter(facts_store, scorer=importance_scorer)
     world_writer = WorldWriter(facts_store, scorer=importance_scorer)
+    core_memory_writer = CoreMemoryWriter(facts_store, scorer=importance_scorer)
 
     # Build reflector + real trigger, then wire into the holder.
     reflector = Reflector(llm_provider, fact_retriever, inference_writer)
@@ -289,6 +291,7 @@ async def create_engine(
         inference_writer=inference_writer,
         world_writer=world_writer,
         user_statement_writer=user_statement_writer,
+        core_memory_writer=core_memory_writer,
         plan_executor=plan_executor,
     )
     # Expose daily_planner on engine so the channel's start() can schedule loops.
