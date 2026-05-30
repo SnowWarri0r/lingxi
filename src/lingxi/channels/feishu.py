@@ -305,6 +305,7 @@ class FeishuBot(OutboundChannel):
         self._reflection_loop: ReflectionLoop | None = None
         self._life_simulator: LifeSimulator | None = None
         self._world_scheduler = None  # WorldScheduler — started below
+        self._social_scheduler = None  # SocialScheduler — started below
 
     @property
     def channel_name(self) -> str:
@@ -425,6 +426,22 @@ class FeishuBot(OutboundChannel):
             )
             asyncio.run_coroutine_threadsafe(
                 self._world_scheduler.start(), self._loop
+            )
+
+        # Social scheduler — generates NPC events on cron ticks so the
+        # "身边的人" block has fresh material. Daytime-only (8-22, every 2h).
+        if (
+            getattr(self.engine, "social_graph", None) is not None
+            and getattr(self.engine, "social_store", None) is not None
+        ):
+            from lingxi.social.scheduler import SocialScheduler
+            self._social_scheduler = SocialScheduler(
+                llm=self.engine.llm,
+                graph=self.engine.social_graph,
+                store=self.engine.social_store,
+            )
+            asyncio.run_coroutine_threadsafe(
+                self._social_scheduler.start(), self._loop
             )
 
         # Build event handler
