@@ -122,3 +122,25 @@ async def test_generate_with_tools_runaway_cap(tmp_path):
         "SYS", [{"role": "user", "content": "hi"}], recipient_key="feishu:x")
     assert eng.llm.calls <= 6  # MAX_TOOL_ITERS(5) + 1 forced
     assert eng.llm._last_tool_choice == {"type": "none"}
+
+
+@pytest.mark.asyncio
+async def test_stream_events_runs_tool_loop(tmp_path):
+    eng, store = await _engine(tmp_path)
+
+    # Isolate the generation/emit path: stub prep so we don't invoke the
+    # orchestrator (which would consume the scripted LLM queue).
+    async def _fake_prep(ui, im, ch, rid):
+        eng._current_recipient_key = "feishu:x"
+        return "SYS", [{"role": "user", "content": ui}]
+    eng._prepare_turn_v2 = _fake_prep
+
+    eng.llm = _ScriptedLLM([
+        _toolcall("core_memory_append", {"block": "human", "content": "流式记一笔"}),
+        _final("流式回复"),
+    ])
+    events = [e async for e in eng.chat_stream_events("hi", channel="feishu", recipient_id="x")]
+    done = [e for e in events if e.type == "done"]
+    assert done and "流式回复" in done[-1].content
+    block = await store.get_core_block("user:feishu:x")
+    assert block is not None and block.content.endswith("流式记一笔")
