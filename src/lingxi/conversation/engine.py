@@ -1039,6 +1039,7 @@ class ConversationEngine:
             temperature=self.persona.sampling.temperature,
             top_p=self.persona.sampling.top_p,
             prefill=prefill,
+            _debug_purpose="chat_stream",
         ):
             if chunk.content:
                 full_response += chunk.content
@@ -1190,6 +1191,7 @@ class ConversationEngine:
                 temperature=self.persona.sampling.temperature,
                 top_p=self.persona.sampling.top_p,
                 prefill=prefill,
+                _debug_purpose="chat_stream_split",
             ):
                 if not chunk.content:
                     continue
