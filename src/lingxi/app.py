@@ -248,9 +248,17 @@ async def create_engine(
     # Facts store + retriever (new unified data layer)
     from lingxi.facts.store import FactStore
     from lingxi.facts.retriever import FactRetriever
+    from lingxi.facts.writers.life import LifeWriter
+    from lingxi.facts.writers.npc import NPCWriter
+    from lingxi.facts.writers.inference import InferenceWriter
+    from lingxi.facts.writers.world import WorldWriter
     facts_store = FactStore(Path(data_dir).parent / "facts.db")
     await facts_store.init()
     fact_retriever = FactRetriever(facts_store)
+    life_writer = LifeWriter(facts_store)
+    npc_writer = NPCWriter(facts_store)
+    inference_writer = InferenceWriter(facts_store)
+    world_writer = WorldWriter(facts_store)
 
     # Create engine
     engine = ConversationEngine(
@@ -270,6 +278,10 @@ async def create_engine(
         social_graph=social_graph,
         social_store=social_store,
         fact_retriever=fact_retriever,
+        life_writer=life_writer,
+        npc_writer=npc_writer,
+        inference_writer=inference_writer,
+        world_writer=world_writer,
     )
 
     # Load persisted state
