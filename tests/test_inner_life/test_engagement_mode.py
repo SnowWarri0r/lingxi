@@ -113,7 +113,8 @@ class TestPromptRendering:
         ) or ""
         assert "心里压着事" in prompt
         assert "沉默是一等选项" in prompt
-        assert "完整周到" in prompt
+        # Permission-shaped — "按你此刻的样子写" beats the old planted "完整周到=错"
+        assert "按你此刻的样子写" in prompt
 
     def test_curt_renders_section(self):
         builder = PromptBuilder(self._persona())
@@ -148,10 +149,9 @@ class TestPromptRendering:
         assert "不完整" in prompt
         assert "字重复" in prompt
         assert "过度解释" in prompt
-        # Anti-garbled-grammar guard (carbon vs garbled distinction)
-        assert "乱码不通" in prompt
+        # Anti-garbled-grammar guard: positive "通顺" framing carries it
         assert "通顺" in prompt
-        # Anti-topic-switch guard
-        assert "无关问题转移焦点" in prompt or "无关问题" in prompt
-        # Anti-fabrication guard (look at system-reminder facts, don't invent)
-        assert "时间/天气/具体数字" in prompt or "不知道就别说" in prompt
+        # Stay-on-topic guard: positive "焦点留在" framing
+        assert "焦点留在" in prompt
+        # Anti-fabrication: look at system-reminder facts
+        assert "时间/天气/具体数字" in prompt
