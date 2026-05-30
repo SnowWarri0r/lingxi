@@ -1,0 +1,139 @@
+"""Plan executor — replaces the random simulator. Every 30min tick,
+finds the plan covering the current hour, generates a concrete
+first-person moment, and writes it as an event fact.
+"""
+
+from __future__ import annotations
+
+import re
+from datetime import datetime, timedelta
+
+from lingxi.facts.models import Fact, FactType, Source
+from lingxi.facts.retriever import FactQuery, FactRetriever
+from lingxi.facts.writers.life import LifeWriter
+from lingxi.planner.daily_planner import DailyPlanner
+from lingxi.providers.base import LLMProvider
+
+
+_SYSTEM = "你是 Aria，正在做今天计划里的某件事。现在写一条记录给自己看。"
+
+
+_MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_window}）
+最近 2 小时我经历过：
+{recent_events}
+
+现在是 {now_hhmm}——我正在做这件事的**某个具体片段**。
+写一条**现在这一刻**——具体细节，不抽象描述（数据/物件/手感/感受任一）。
+1-2 句，第一人称当下时态。
+不要在前面写"我"——直接写动作或观察。
+"""
+
+
+_TW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
+
+
+def _parse_time_window(tag_value: str) -> tuple[int, int] | None:
+    m = _TW_RE.match(tag_value)
+    if not m:
+        return None
+    start_h, _, end_h, _ = map(int, m.groups())
+    return start_h, end_h
+
+
+class PlanExecutor:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        retriever: FactRetriever,
+        life_writer: LifeWriter,
+        planner: DailyPlanner | None = None,
+        model: str | None = None,
+    ):
+        self._llm = llm
+        self._retriever = retriever
+        self._writer = life_writer
+        self._planner = planner
+        self._model = model
+        self._replan_requested = False
+
+    def request_replan(self) -> None:
+        self._replan_requested = True
+
+    async def tick(self) -> None:
+        now = datetime.now()
+
+        if self._replan_requested and self._planner is not None:
+            try:
+                await self._planner.plan_aria()
+            finally:
+                self._replan_requested = False
+
+        current_plan = await self._find_current_plan(now)
+        if current_plan is None:
+            return
+
+        recent_events = await self._retriever.fetch(FactQuery(
+            subject="aria", type=FactType.EVENT,
+            since=now - timedelta(hours=2), limit=3,
+        ))
+        tw = self._tag_value(current_plan, "time_window") or "?"
+        prompt = _MOMENT_PROMPT.format(
+            plan_content=current_plan.content,
+            time_window=tw,
+            recent_events=self._bullets(recent_events) or "（没什么特别的）",
+            now_hhmm=now.strftime("%H:%M"),
+        )
+        try:
+            kwargs = {"model": self._model} if self._model else {}
+            response = await self._llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                system=_SYSTEM,
+                max_tokens=200,
+                temperature=0.8,
+                _debug_purpose="plan_executor_moment",
+                **kwargs,
+            )
+            content = response.content.strip()
+        except Exception as e:
+            print(f"[executor] moment gen failed: {e}", flush=True)
+            return
+
+        if not content:
+            return
+
+        event = Fact(
+            subject="aria",
+            content=content,
+            source=Source.LIFE_SIMULATED,
+            type=FactType.EVENT,
+            ts=now,
+        )
+        await self._writer.write(event)
+
+    async def _find_current_plan(self, now: datetime) -> Fact | None:
+        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        plans = await self._retriever._store.query(
+            subject="aria", type=FactType.PLAN, since=today_start, limit=20,
+        )
+        for plan in plans:
+            tw_value = self._tag_value(plan, "time_window")
+            if not tw_value:
+                continue
+            window = _parse_time_window(tw_value)
+            if window is None:
+                continue
+            start_h, end_h = window
+            if start_h <= now.hour < end_h:
+                return plan
+        return None
+
+    @staticmethod
+    def _tag_value(fact: Fact, key: str) -> str | None:
+        for t in fact.tags:
+            if t.startswith(f"{key}:"):
+                return t[len(key) + 1:]
+        return None
+
+    @staticmethod
+    def _bullets(facts: list[Fact]) -> str:
+        return "\n".join(f"  - {f.content}" for f in facts)
