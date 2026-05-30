@@ -46,6 +46,8 @@ class SocialScheduler:
         rng: random.Random | None = None,
         on_event_written=None,
         npc_writer=None,
+        life_writer=None,
+        retriever=None,
     ):
         self._llm = llm
         self._graph = graph
@@ -58,6 +60,9 @@ class SocialScheduler:
         # and pushes significance≥threshold to Aria.recent_events
         self._on_event_written = on_event_written
         self._npc_writer = npc_writer
+        # Bidirectional interaction deps (aria_interaction events)
+        self._life_writer = life_writer
+        self._retriever = retriever
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -132,7 +137,28 @@ class SocialScheduler:
         bumped_arcs: set[str] = set()
         for ev in events:
             await self._store.append_event(ev)
-            if self._npc_writer is not None:
+            if ev.type == "aria_interaction" and (
+                self._life_writer is not None
+                and self._retriever is not None
+                and self._npc_writer is not None
+            ):
+                # Two-sided write: Aria's view + NPC's view
+                try:
+                    from lingxi.social.interaction import bidirectional_interaction
+                    await bidirectional_interaction(
+                        llm=self._llm,
+                        retriever=self._retriever,
+                        life_writer=self._life_writer,
+                        npc_writer=self._npc_writer,
+                        npc_id=npc.id,
+                        npc_display=npc.name,
+                        scenario=ev.content,
+                        model=self._model,
+                    )
+                except Exception as e:
+                    print(f"[social] bidirectional write failed: {e}", flush=True)
+            elif self._npc_writer is not None:
+                # life events (NPC's private life) — single-sided write only
                 try:
                     from lingxi.facts.models import FactType as _FactType
                     _tags = [ev.type]
