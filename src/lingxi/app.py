@@ -225,6 +225,26 @@ async def create_engine(
     from lingxi.world.store import WorldStore
     world_store = WorldStore(data_dir=data_dir)
 
+    # Social graph — handwritten roster of NPCs in Aria's life (room-
+    # mate / advisor / mom / etc) with persistent arcs + event logs.
+    # Cron in P2 will keep generating events; for P1 just static arcs.
+    from lingxi.social.loader import load_social_graph, seed_initial_arcs
+    from lingxi.social.store import SocialStore
+    social_graph = None
+    social_store = None
+    social_yaml = Path("config/personas/aria_social_graph.yaml")
+    if social_yaml.exists():
+        try:
+            social_graph = load_social_graph(social_yaml)
+            social_store = SocialStore(data_dir=data_dir)
+            seeded = await seed_initial_arcs(social_graph, social_store)
+            if seeded:
+                print(f"[social] seeded initial arcs for {seeded} NPC(s)")
+        except Exception as e:
+            print(f"[social] load failed (non-fatal): {e}")
+            social_graph = None
+            social_store = None
+
     # Create engine
     engine = ConversationEngine(
         persona=persona,
@@ -240,6 +260,8 @@ async def create_engine(
         fewshot_retriever=fewshot_retriever,
         relational_store=relational_store,
         world_store=world_store,
+        social_graph=social_graph,
+        social_store=social_store,
     )
 
     # Load persisted state

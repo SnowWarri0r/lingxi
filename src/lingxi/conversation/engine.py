@@ -141,6 +141,8 @@ class ConversationEngine:
         fewshot_retriever: FewShotRetriever | None = None,
         relational_store=None,
         world_store=None,
+        social_graph=None,
+        social_store=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -150,6 +152,8 @@ class ConversationEngine:
         self.subjective_layer = subjective_layer
         self.relational_store = relational_store
         self.world_store = world_store
+        self.social_graph = social_graph
+        self.social_store = social_store
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -372,6 +376,19 @@ class ConversationEngine:
                 print(f"[world] load failed: {e}", flush=True)
                 daily_briefing = None
 
+        # Social graph: load fresh NPC states on each turn. Cheap — small
+        # files, capped at 30 days of events per NPC. Renderer will pick
+        # top-4 relevant NPCs to keep prompt budget bounded.
+        social_states = None
+        if self.social_graph is not None and self.social_store is not None:
+            try:
+                social_states = {}
+                for npc in self.social_graph.npcs:
+                    social_states[npc.id] = await self.social_store.load_state(npc.id)
+            except Exception as e:
+                print(f"[social] load failed: {e}", flush=True)
+                social_states = None
+
         # Retrieve biographical events relevant to the current turn.
         # Query: user input (most directly topical); later we could also
         # fold in the previous inner_thought for continuity.
@@ -441,6 +458,8 @@ class ConversationEngine:
             pending_agenda=pending_agenda,
             biography_hits=biography_hits,
             relational_memory=relational_memory,
+            social_graph=self.social_graph,
+            social_states=social_states,
             mode=prompt_mode,
         )
         if proactive_nudge:
