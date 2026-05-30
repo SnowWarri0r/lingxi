@@ -43,8 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_facts_source ON facts (source);
 CREATE INDEX IF NOT EXISTS idx_facts_type ON facts (type);
 CREATE INDEX IF NOT EXISTS idx_facts_expires ON facts (expires_at);
 CREATE INDEX IF NOT EXISTS idx_facts_supersedes ON facts (supersedes);
-CREATE INDEX IF NOT EXISTS idx_facts_importance
-    ON facts (importance) WHERE importance IS NOT NULL;
+-- idx_facts_importance is created in init() AFTER the ALTER TABLE migration,
+-- because existing DBs don't have the `importance` column when this script runs.
 
 CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts
     USING fts5(content, tags, content='facts', content_rowid='rowid',
