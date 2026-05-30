@@ -650,13 +650,12 @@ class ConversationEngine:
 
         # 4. Render
         persona_block = build_persona_block(self.persona)
-        # For recipient_key in renderer, pass just the id portion after the
-        # channel prefix (e.g. "feishu:oc_xxx" → renderer matches against
-        # subject "user:oc_xxx" or "user:feishu:oc_xxx" depending on what
-        # the migrator used)
-        rk_for_render = recipient_key.split(":", 1)[-1] if ":" in recipient_key else recipient_key
+        # Migration writes user facts with subject=user:<full_channel:id>
+        # (e.g. "user:feishu:oc_xxx"), so renderer needs the full
+        # "feishu:oc_xxx" to build the matching subject. Don't strip the
+        # channel prefix.
         dynamic_block = await render_dynamic_blocks(
-            self.fact_retriever, decision, recipient_key=rk_for_render,
+            self.fact_retriever, decision, recipient_key=recipient_key,
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
 
