@@ -959,7 +959,10 @@ class PromptBuilder:
                 lines.append(f"- {p.name}：{p.significance}")
 
         if mem.daily_patterns:
-            lines.append("\n**他生活的规律**（你心里记着的）：")
+            lines.append(
+                "\n**他生活的规律**（你过去几次聊天里注意到的印象——**对方这轮明说的事实优先级更高**，"
+                "他这轮说的跟这里有出入就以他这轮的为准）："
+            )
             for d in mem.daily_patterns[:5]:
                 lines.append(f"- {d.pattern}")
 
