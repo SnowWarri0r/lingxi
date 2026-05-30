@@ -801,8 +801,6 @@ class ConversationEngine:
         channel: str | None,
         recipient_id: str | None,
     ) -> AsyncIterator[StreamEvent]:
-        from lingxi.conversation.output_schema import META_DELIMITER
-
         system_prompt, messages = await self._prepare_turn_v2(
             user_input, images, channel, recipient_id
         )
@@ -878,49 +876,21 @@ class ConversationEngine:
             output.speech = cleaned
             output.inner_thought = inner_thought
         else:
-            prefill = pick_prefill(self.persona.style)
-
-            full_response = ""
-            delimiter_seen = False
-            tail = ""
-            tail_size = len(META_DELIMITER) - 1
-
-            async for chunk in self.llm.complete_stream(
-                messages=messages,
-                system=system_prompt,
-                temperature=self.persona.sampling.temperature,
-                top_p=self.persona.sampling.top_p,
-                prefill=prefill,
-                _debug_purpose="chat_stream_split",
-            ):
-                if not chunk.content:
-                    continue
-                full_response += chunk.content
-
-                if delimiter_seen:
-                    continue
-
-                combined = tail + chunk.content
-                idx = combined.find(META_DELIMITER)
-                if idx == -1:
-                    if len(combined) > tail_size:
-                        emit = combined[:-tail_size] if tail_size > 0 else combined
-                        if emit:
-                            yield StreamEvent("chunk", emit)
-                        tail = combined[-tail_size:] if tail_size > 0 else ""
-                    else:
-                        tail = combined
-                else:
-                    before = combined[:idx]
-                    if before:
-                        yield StreamEvent("chunk", before)
-                    delimiter_seen = True
-                    tail = ""
-
-            if not delimiter_seen and tail:
-                yield StreamEvent("chunk", tail)
-
+            # Tool-use precludes token streaming (the model may call memory
+            # tools before replying), so run the agentic loop to completion
+            # then emit — same buffered shape as the compression branch above.
+            rkey = self._current_recipient_key or "_anon"
+            try:
+                full_response = await self._generate_with_tools(
+                    system_prompt, messages, recipient_key=rkey,
+                    prefill=pick_prefill(self.persona.style),
+                    purpose="chat_stream_split")
+            except Exception as e:
+                print(f"[engine] tool-loop generation failed: {e}")
+                full_response = ""
             output = self._process_response(full_response)
+            if not output.speech.strip():
+                output.speech = "嗯 我走神了一下，你再说一遍？"
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later
