@@ -131,6 +131,10 @@ class FactStore:
         row = await asyncio.to_thread(_read)
         return _row_to_fact(row) if row else None
 
+    async def get_by_id(self, fact_id: str) -> Fact | None:
+        """Alias for get(); preferred name for callers resolving stored IDs."""
+        return await self.get(fact_id)
+
     async def query(
         self,
         *,
