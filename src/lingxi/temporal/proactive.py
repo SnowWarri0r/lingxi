@@ -22,9 +22,33 @@ if TYPE_CHECKING:
     from lingxi.conversation.engine import ConversationEngine
 
 from lingxi.channels.outbound import ChannelRegistry
+from lingxi.facts.models import Fact
+from lingxi.facts.retriever import FactRetriever
 from lingxi.fewshot.models import AnnotationTurn
+from lingxi.proactive.share_intent import ShareIntent, ShareIntentStore
 from lingxi.temporal.formatter import format_timedelta_cn
 from lingxi.temporal.tracker import InteractionRecord, InteractionTracker
+
+
+async def find_pending_share(
+    intent_store: ShareIntentStore,
+    retriever: FactRetriever,
+) -> tuple[ShareIntent, Fact] | None:
+    """Pick the highest-significance pending share intent whose fact still exists.
+
+    Cleans up stale intents (intent referencing a missing fact) along the way.
+    Returns (intent, fact) or None if queue is empty / all intents are stale.
+    """
+    intents = await intent_store.pending()
+    if not intents:
+        return None
+    intents.sort(key=lambda i: -i.significance)
+    for intent in intents:
+        fact = await retriever.fetch_by_id(intent.fact_id)
+        if fact is not None:
+            return (intent, fact)
+        await intent_store.consume(intent.fact_id)
+    return None
 
 
 class ProactiveConfig(BaseModel):
@@ -297,11 +321,15 @@ class ProactiveScheduler:
         channel_registry: ChannelRegistry,
         engine: ConversationEngine,
         data_dir: str | None = None,
+        share_intent_store: ShareIntentStore | None = None,
+        fact_retriever: FactRetriever | None = None,
     ):
         self.config = config
         self.tracker = tracker
         self.channels = channel_registry
         self.engine = engine
+        self.share_intent_store = share_intent_store
+        self.fact_retriever = fact_retriever
         self._task: asyncio.Task | None = None
         self._running = False
         # Per-recipient recent proactive messages (to avoid repetition).
@@ -526,51 +554,30 @@ class ProactiveScheduler:
         return {"key": key, "status": "sent", "message": message}
 
     async def _mark_event_shared(self, message: str) -> None:
-        """Find the recent_event whose content overlaps most with `message`
-        and clear its wants_to_share flag.
+        """Find the queued share intent whose fact content overlaps with `message`,
+        consume it from ShareIntentStore.
 
-        Heuristic: sliding char-window overlap. Looking for any 4+ char
-        substring shared between the event content and the proactive
-        message. Cheap, no embedding needed; mismatches are tolerated
-        (TTL decay catches the rest).
-
-        Uses store.update_state for atomic read-modify-write — without it,
-        a sim tick or reactive turn updating state between our load and
-        save would clobber its writes (we'd persist a stale snapshot).
+        Heuristic: sliding char-window overlap (≥4 chars shared). Replaces the
+        old recent_events / wants_to_share mutation path.
         """
-        if self.engine.inner_life_store is None or not message:
+        if self.share_intent_store is None or self.fact_retriever is None or not message:
             return
         msg = message.strip()
-        cleared_event_id: list[str] = []
-        cleared_score: list[int] = []
-
-        def _mutate(state) -> None:
-            if not state.recent_events:
-                return
-            scored = []
-            for ev in state.recent_events:
-                if not ev.wants_to_share:
-                    continue
-                score = _content_overlap(ev.content, msg)
-                if score >= 4:
-                    scored.append((score, ev))
-            if not scored:
-                return
-            scored.sort(key=lambda x: -x[0])
-            top_score, top_event = scored[0]
-            top_event.wants_to_share = False
-            cleared_event_id.append(top_event.content[:30])
-            cleared_score.append(top_score)
-
-        try:
-            await self.engine.inner_life_store.update_state(_mutate)
-            if cleared_event_id:
-                print(
-                    f"[proactive] cleared wants_to_share on event "
-                    f"'{cleared_event_id[0]}...' (score={cleared_score[0]})"
-                )
-        except Exception as e:
-            print(f"[proactive] update_state after share-clear failed: {e}")
+        pending = await self.share_intent_store.pending()
+        best_id: str | None = None
+        best_score = 0
+        for intent in pending:
+            fact = await self.fact_retriever.fetch_by_id(intent.fact_id)
+            if fact is None:
+                continue
+            score = _content_overlap(fact.content, msg)
+            if score >= 4 and score > best_score:
+                best_score = score
+                best_id = intent.fact_id
+        if best_id:
+            await self.share_intent_store.consume(best_id)
+            print(f"[proactive] consumed share intent for fact={best_id[:8]}...",
+                  flush=True)
 
     async def trigger_manually(self) -> list[dict]:
         """Manual trigger for all recipients (for testing). Bypasses silence + cooldown."""
@@ -744,6 +751,30 @@ class ProactiveScheduler:
         except Exception as e:
             print(f"[proactive] history fetch failed: {e}")
 
+        # Pending share intent — highest-significance NPC event queued for voicing.
+        # If one exists, surface its content explicitly so the LLM has a concrete
+        # seed rather than inventing a topic. Without this the LLM defaults to
+        # generic hooks; with it, it can work the actual fact into a natural opener.
+        pending_share_block = ""
+        if self.share_intent_store is not None and self.fact_retriever is not None:
+            try:
+                share_result = await find_pending_share(
+                    self.share_intent_store, self.fact_retriever
+                )
+                if share_result is not None:
+                    _intent, _fact = share_result
+                    pending_share_block = (
+                        f"## 你正想分享的一件事（来自身边的人）\n"
+                        f"{_fact.content}\n\n"
+                        f"（这是你的内心素材——**不要直接念出来**，把它自然带进你的表达里。）\n"
+                    )
+                    print(
+                        f"[proactive] share intent seed: {_fact.content[:40]}...",
+                        flush=True,
+                    )
+            except Exception as e:
+                print(f"[proactive] find_pending_share failed (non-fatal): {e}")
+
         opener_shape = (
             "## 这条消息是 OPENER（你主动起头），形态约束：\n"
             "- **直接进话题**——不寒暄打招呼（不要『嗨/你好/在吗/下午好』起手）\n"
@@ -772,6 +803,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（不要重复套路/比喻/切入点）\n{recent_proactive}\n\n"
+                f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"## 这次试一种语气：【{style['name']}】\n"
                 f"{style['desc']}\n"
@@ -788,6 +820,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（避免重复）\n{recent_proactive}\n\n"
+                f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
                 f"为了发而发不如不发。\n\n"
