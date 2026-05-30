@@ -424,6 +424,7 @@ class FeishuBot(OutboundChannel):
             self._world_scheduler = WorldScheduler(
                 api_key=api_key_for_world,
                 store=self.engine.world_store,
+                world_writer=self.engine.world_writer,
             )
             asyncio.run_coroutine_threadsafe(
                 self._world_scheduler.start(), self._loop

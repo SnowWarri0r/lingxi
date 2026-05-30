@@ -29,6 +29,7 @@ class WorldScheduler:
         check_interval_minutes: int = 30,
         model: str = "claude-sonnet-4-5",
         empty_retry_hours: float = 4.0,
+        world_writer=None,
     ):
         self._api_key = api_key
         self._store = store
@@ -40,6 +41,7 @@ class WorldScheduler:
         # is older than this. Genuinely thin news days get retried a few
         # times then sit until tomorrow's date rollover.
         self._empty_retry = timedelta(hours=empty_retry_hours)
+        self._world_writer = world_writer
         self._task: asyncio.Task | None = None
         self._running = False
 
@@ -105,6 +107,25 @@ class WorldScheduler:
             self._api_key, target_date=today, model=self._model,
         )
         await self._store.save(briefing)
+
+        if self._world_writer is not None and briefing.items:
+            try:
+                from lingxi.facts.models import FactType as _FactType
+                from datetime import datetime as _dt, timedelta as _td
+                for item in briefing.items:
+                    content = (item.aria_voice or item.headline or "").strip()
+                    if not content:
+                        continue
+                    await self._world_writer.write(
+                        subject="world",
+                        content=content,
+                        type=_FactType.EVENT,
+                        ts=_dt.combine(briefing.date, _dt.min.time()),
+                        tags=[item.category],
+                        expires_at=_dt.now() + _td(days=2),
+                    )
+            except Exception as e:
+                print(f"[world] facts write failed: {e}", flush=True)
 
     async def trigger_now(self) -> None:
         """Manual trigger (for /world refresh-style commands or tests)."""
