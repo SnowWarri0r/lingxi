@@ -155,6 +155,8 @@ class ClaudeProvider(LLMProvider):
         temperature: float,
         top_p: float | None = None,
         prefill: str = "",
+        tools: list[dict] | None = None,
+        tool_choice: dict | None = None,
     ) -> dict:
         # If prefill is set, append as trailing assistant message (Anthropic pattern)
         outgoing_messages = list(messages)
@@ -199,7 +201,28 @@ class ClaudeProvider(LLMProvider):
                 if any("cache_control" in b for b in blocks):
                     body["system"] = blocks
 
+        if tools:
+            body["tools"] = tools
+            if tool_choice is not None:
+                body["tool_choice"] = tool_choice
+
         return body
+
+    @staticmethod
+    def _parse_content(blocks: list[dict]) -> tuple[str, list[dict]]:
+        """Split API content blocks into (joined_text, tool_calls)."""
+        text = ""
+        tool_calls: list[dict] = []
+        for block in blocks:
+            if block.get("type") == "text":
+                text += block.get("text", "")
+            elif block.get("type") == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id"),
+                    "name": block.get("name"),
+                    "input": block.get("input", {}),
+                })
+        return text, tool_calls
 
     async def complete(
         self,
@@ -212,7 +235,10 @@ class ClaudeProvider(LLMProvider):
         _debug_purpose: str = "unknown",
         **kwargs,
     ) -> CompletionResult:
-        body = self._build_body(messages, system, max_tokens, temperature, top_p, prefill)
+        body = self._build_body(
+            messages, system, max_tokens, temperature, top_p, prefill,
+            tools=kwargs.get("tools"), tool_choice=kwargs.get("tool_choice"),
+        )
         url = f"{API_BASE}?beta=true" if self._is_oauth else API_BASE
 
         import time as _time
@@ -222,10 +248,8 @@ class ClaudeProvider(LLMProvider):
 
         data = response.json()
 
-        content = ""
-        for block in data.get("content", []):
-            if block.get("type") == "text":
-                content += block.get("text", "")
+        raw_blocks = data.get("content", [])
+        content, tool_calls = self._parse_content(raw_blocks)
 
         # Prepend prefill to content so caller sees full text
         if prefill:
@@ -256,6 +280,8 @@ class ClaudeProvider(LLMProvider):
             model=data.get("model", self.model),
             usage=usage,
             finish_reason=data.get("stop_reason", ""),
+            tool_calls=tool_calls,
+            raw_content_blocks=raw_blocks,
         )
 
     async def _request_with_auto_refresh(self, url: str, body: dict) -> httpx.Response:
