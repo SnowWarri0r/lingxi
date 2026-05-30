@@ -57,6 +57,7 @@ def main() -> None:
             for k, v in get_nested(cfg, "proactive", "silence_thresholds", default={1: 72, 2: 24, 3: 6, 4: 3}).items()
         },
         cooldown_hours=get_nested(cfg, "proactive", "cooldown_hours", default=12.0),
+        max_consecutive_proactive=get_nested(cfg, "proactive", "max_consecutive_proactive", default=2),
         quiet_hours_start=get_nested(cfg, "proactive", "quiet_hours_start", default=23),
         quiet_hours_end=get_nested(cfg, "proactive", "quiet_hours_end", default=8),
     )

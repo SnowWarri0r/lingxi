@@ -70,7 +70,8 @@ proactive:
     2: 4     # 熟悉：4小时
     3: 2     # 信任：2小时
     4: 1     # 亲密：1小时
-  cooldown_hours: 3             # 两次主动消息之间的最小间隔
+  cooldown_hours: 6             # 两次主动消息之间的最小间隔
+  max_consecutive_proactive: 2  # 对方不回复时最多连发几条（IM 朋友最多两次主动）
   quiet_hours_start: 23         # 静默时段开始（23点）
   quiet_hours_end: 8            # 静默时段结束（8点）
 
