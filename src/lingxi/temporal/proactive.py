@@ -596,14 +596,6 @@ class ProactiveScheduler:
         force: bool = False,
     ) -> dict | None:
         rec_key = f"{record.channel}:{record.recipient_id}"
-        memory_context = await self.engine.memory.assemble_context(
-            "", recipient_key=rec_key
-        )
-
-        # NOTE: long-term facts and episodes are still retrieved (via
-        # build_system_prompt below — it consumes memory_context). We don't
-        # need to format them locally any more; the system-prompt path does
-        # that consistently with reactive turns.
 
         # Time-bound user state: pull recent USER turns directly. These
         # carry "what's happening in his life right now" (五一假期 / 在加班 /
@@ -630,31 +622,6 @@ class ProactiveScheduler:
             f"- {m}" for m in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
 
-        # Filter relevant_episodes: drop any episode whose content overlaps
-        # with recent proactive messages. Without this, an episode that
-        # records "Aria 对蜘蛛做梦感到好奇" keeps getting retrieved into the
-        # prompt even after proactive already said it 3 times — the model
-        # sees the episode framed as "her past" and uses it as fresh
-        # proactive material on the next cycle.
-        if memory_context.relevant_episodes and recent_msgs:
-            kept = []
-            dropped = 0
-            for ep in memory_context.relevant_episodes:
-                summary = (ep.summary or "")
-                # If any recent proactive message has 4+ char overlap
-                # with this episode summary, treat it as already-spoken.
-                already = any(
-                    _content_overlap(summary, m) >= 4
-                    for m in recent_msgs[-self._max_recent_proactive:]
-                )
-                if already:
-                    dropped += 1
-                else:
-                    kept.append(ep)
-            if dropped:
-                print(f"[proactive] filtered {dropped} already-said episodes from {rec_key}")
-                memory_context.relevant_episodes = kept
-
         # relationship_level / goals were used by the legacy ad-hoc proactive
         # prompt; they're now rendered consistently inside build_system_prompt
         # below (relationship section + goals are part of persona).
@@ -664,13 +631,6 @@ class ProactiveScheduler:
         # proactive — fixes the "feels like two different people" gap.
         # Inner state, current activity, mood, biography retrieval all flow
         # through identically.
-        try:
-            inner_state = None
-            if self.engine.inner_life_store is not None:
-                inner_state = await self.engine.inner_life_store.load_state()
-        except Exception:
-            inner_state = None
-
         try:
             relationship_record = self.engine.interaction_tracker.get_record(
                 record.channel, record.recipient_id
@@ -686,11 +646,9 @@ class ProactiveScheduler:
             emotion_state = None
 
         system_prompt = self.engine.prompt_builder.build_system_prompt(
-            memory_context=memory_context,
             current_mood=None,
             relationship_level=record.relationship_level,
             emotion_state=emotion_state,
-            inner_state=inner_state,
             mode="single",
         )
 
@@ -702,7 +660,6 @@ class ProactiveScheduler:
         focus_reminder = self.engine.prompt_builder.build_turn_focus_reminder(
             current_time=now,
             last_interaction_time=record.last_interaction,
-            inner_state=inner_state,
             emotion_state=emotion_state,
             current_mood=None,
             recent_proactive_messages=(
