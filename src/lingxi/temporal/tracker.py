@@ -15,6 +15,11 @@ class InteractionRecord(BaseModel):
     channel: str  # "feishu", "web", "cli"
     last_interaction: datetime = Field(default_factory=datetime.now)
     last_proactive_sent: datetime | None = None
+    # Count of consecutive proactive messages sent without user reply in
+    # between. Resets to 0 every time the user actually responds. The
+    # ProactiveScheduler caps this at max_consecutive_proactive to stop
+    # the "Aria sends 4 messages while user is at lunch" pattern.
+    consecutive_proactive_count: int = 0
     relationship_level: int = 1
     total_turns: int = 0
     session_count: int = 0
@@ -89,6 +94,9 @@ class InteractionTracker:
             rec = self._records[key]
             rec.last_interaction = now
             rec.total_turns += 1
+            # User responded → reset the consecutive proactive counter
+            # so Aria can reach out again in the next silence cycle.
+            rec.consecutive_proactive_count = 0
         else:
             rec = InteractionRecord(
                 recipient_id=recipient_id,
@@ -111,6 +119,7 @@ class InteractionTracker:
         key = self._key(channel, recipient_id)
         if key in self._records:
             self._records[key].last_proactive_sent = datetime.now()
+            self._records[key].consecutive_proactive_count += 1
 
     def update_relationship_level(
         self, channel: str, recipient_id: str, new_level: int
