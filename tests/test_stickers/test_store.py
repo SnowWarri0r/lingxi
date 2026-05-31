@@ -55,3 +55,15 @@ async def test_get_by_id(tmp_path):
     await s.add(st)
     got = await s.get(st.id)
     assert got is not None and got.caption == "比心"
+
+
+@pytest.mark.asyncio
+async def test_search_with_double_quote_does_not_crash(tmp_path):
+    # A query containing a double-quote must not raise (FTS5 phrase escaping).
+    s = await _store(tmp_path)
+    await s.add(Sticker(
+        file_path="/img/q.png", content_hash="hq",
+        caption="引用测试", tags=["测试"]))
+    # Should return [] gracefully, not raise OperationalError.
+    hits = await s.search('引用"test', k=5)
+    assert isinstance(hits, list)
