@@ -35,7 +35,7 @@ from lingxi.temporal.relationship import RelationshipEvaluator
 class StreamEvent:
     """A typed event from the streaming response."""
 
-    type: str  # "chunk", "mood", "memory_write", "plan_update", "done"
+    type: str  # "chunk", "mood", "memory_write", "plan_update", "sticker", "done"
     content: str = ""
 
 _DIRECTIVE_TAGS = (
@@ -831,6 +831,7 @@ class ConversationEngine:
             StreamEvent("mood", str)           - from meta.mood (at end)
             StreamEvent("memory_write", text)  - per item (at end)
             StreamEvent("plan_update", text)   - per item (at end)
+            StreamEvent("sticker", path)       - sticker file to send (at end)
             StreamEvent("done", speech)        - final clean speech
         """
         lock = await self._lock_for_recipient(channel, recipient_id)
@@ -972,6 +973,14 @@ class ConversationEngine:
             yield StreamEvent("memory_write", mw)
         for pu in output.plan_updates:
             yield StreamEvent("plan_update", pu)
+
+        # Emit the sticker the agent chose this turn (if any), before `done` so
+        # the channel sends it right after the speech bubble. Pop so a later
+        # turn can't re-emit a stale path.
+        rkey = self._current_recipient_key or "_anon"
+        sticker_path = self._pending_stickers.pop(rkey, None)
+        if sticker_path:
+            yield StreamEvent("sticker", sticker_path)
 
         yield StreamEvent("done", output.speech)
 
