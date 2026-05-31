@@ -32,14 +32,34 @@ def _media_type(path: Path) -> str:
 
 
 def _parse(text: str) -> dict:
-    """Extract the first {...} block and coerce to the expected shape."""
+    """Extract the first flat {...} block and coerce to the expected shape.
+
+    Defensive against real model output: strips markdown code fences, matches
+    a single flat object (the schema has no nested braces), and bails to empty
+    fields on any non-dict / unparseable result so a bad reply never raises.
+    """
     empty = {"caption": "", "emotion": "", "tags": [], "when_to_use": ""}
-    m = re.search(r"\{.*\}", text, re.DOTALL)
+    # Strip ```json / ``` code fences the model often wraps JSON in.
+    cleaned = re.sub(r"```(?:json)?", "", text)
+    # If the entire reply is valid JSON but not a dict (e.g. a bare list),
+    # bail immediately — the regex below would find an inner object and
+    # silently return wrong data.
+    try:
+        top = json.loads(cleaned.strip())
+        if not isinstance(top, dict):
+            return empty
+    except (json.JSONDecodeError, ValueError):
+        pass  # not pure JSON — fall through to embedded-object extraction
+    # Flat object only — the schema has no nested objects, so [^{}] is exact
+    # and avoids the greedy-match-across-two-objects failure mode.
+    m = re.search(r"\{[^{}]*\}", cleaned, re.DOTALL)
     if not m:
         return empty
     try:
         data = json.loads(m.group(0))
     except (json.JSONDecodeError, ValueError):
+        return empty
+    if not isinstance(data, dict):
         return empty
     tags = data.get("tags", [])
     if not isinstance(tags, list):
