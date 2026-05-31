@@ -1,0 +1,170 @@
+"""SQLite-backed sticker library with FTS5 (trigram) search.
+
+Mirrors the structure of facts/store.py: WAL mode, schema applied
+unconditionally on init() via IF NOT EXISTS, sqlite calls dispatched to a
+thread pool. Simpler than FactStore — no supersede/importance, just a
+content_hash unique key for idempotent crawl re-runs.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import sqlite3
+from datetime import datetime
+from pathlib import Path
+
+from lingxi.stickers.models import Sticker
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS stickers (
+    id TEXT PRIMARY KEY,
+    file_path TEXT NOT NULL,
+    source_url TEXT NOT NULL DEFAULT '',
+    content_hash TEXT NOT NULL UNIQUE,
+    caption TEXT NOT NULL DEFAULT '',
+    emotion TEXT NOT NULL DEFAULT '',
+    tags_json TEXT NOT NULL DEFAULT '[]',
+    when_to_use TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS stickers_fts
+    USING fts5(caption, tags, emotion, when_to_use,
+               content='stickers', content_rowid='rowid',
+               tokenize='trigram');
+"""
+
+
+def _row_to_sticker(row: sqlite3.Row) -> Sticker:
+    return Sticker(
+        id=row["id"],
+        file_path=row["file_path"],
+        source_url=row["source_url"],
+        content_hash=row["content_hash"],
+        caption=row["caption"],
+        emotion=row["emotion"],
+        tags=json.loads(row["tags_json"]),
+        when_to_use=row["when_to_use"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+class StickerStore:
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._lock = asyncio.Lock()
+
+    def _conn(self) -> sqlite3.Connection:
+        c = sqlite3.connect(self._path)
+        c.row_factory = sqlite3.Row
+        c.execute("PRAGMA journal_mode=WAL")
+        return c
+
+    async def init(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+
+        def _setup():
+            c = self._conn()
+            c.executescript(_SCHEMA)
+            c.commit()
+            c.close()
+
+        await asyncio.to_thread(_setup)
+
+    async def add(self, sticker: Sticker) -> bool:
+        """Insert a sticker. Returns False (skips) if content_hash already
+        present, so crawl re-runs are idempotent."""
+        def _write() -> bool:
+            c = self._conn()
+            exists = c.execute(
+                "SELECT 1 FROM stickers WHERE content_hash = ?",
+                (sticker.content_hash,),
+            ).fetchone()
+            if exists:
+                c.close()
+                return False
+            c.execute(
+                """INSERT INTO stickers
+                   (id, file_path, source_url, content_hash, caption,
+                    emotion, tags_json, when_to_use, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    sticker.id, sticker.file_path, sticker.source_url,
+                    sticker.content_hash, sticker.caption, sticker.emotion,
+                    json.dumps(sticker.tags, ensure_ascii=False),
+                    sticker.when_to_use, sticker.created_at.isoformat(),
+                ),
+            )
+            rowid = c.execute(
+                "SELECT rowid FROM stickers WHERE id = ?", (sticker.id,)
+            ).fetchone()[0]
+            c.execute(
+                "INSERT INTO stickers_fts(rowid, caption, tags, emotion, when_to_use) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (rowid, sticker.caption, " ".join(sticker.tags),
+                 sticker.emotion, sticker.when_to_use),
+            )
+            c.commit()
+            c.close()
+            return True
+
+        async with self._lock:
+            return await asyncio.to_thread(_write)
+
+    async def get(self, sticker_id: str) -> Sticker | None:
+        def _read():
+            c = self._conn()
+            row = c.execute(
+                "SELECT * FROM stickers WHERE id = ?", (sticker_id,)
+            ).fetchone()
+            c.close()
+            return row
+
+        row = await asyncio.to_thread(_read)
+        return _row_to_sticker(row) if row else None
+
+    async def search(self, query: str, k: int = 5) -> list[Sticker]:
+        """FTS5 MATCH over caption/tags/emotion/when_to_use. Queries shorter
+        than 3 chars fall back to a LIKE scan (trigram needs 3-char tokens)."""
+        query = (query or "").strip()
+        if not query:
+            return []
+        if len(query) < 3:
+            pattern = f"%{query}%"
+            sql = (
+                "SELECT * FROM stickers "
+                "WHERE caption LIKE ? OR tags_json LIKE ? "
+                "OR emotion LIKE ? OR when_to_use LIKE ? "
+                "ORDER BY created_at DESC LIMIT ?"
+            )
+
+            def _read_like():
+                c = self._conn()
+                rows = c.execute(
+                    sql, (pattern, pattern, pattern, pattern, k)
+                ).fetchall()
+                c.close()
+                return rows
+
+            rows = await asyncio.to_thread(_read_like)
+        else:
+            sql = (
+                "SELECT s.* FROM stickers s "
+                "JOIN stickers_fts fts ON s.rowid = fts.rowid "
+                "WHERE stickers_fts MATCH ? "
+                "ORDER BY bm25(stickers_fts) LIMIT ?"
+            )
+
+            def _read():
+                c = self._conn()
+                # FTS5 MATCH chokes on bare punctuation/special chars; wrap the
+                # query as a quoted phrase so arbitrary user text is treated as
+                # a literal token sequence.
+                rows = c.execute(sql, (f'"{query}"', k)).fetchall()
+                c.close()
+                return rows
+
+            rows = await asyncio.to_thread(_read)
+        return [_row_to_sticker(r) for r in rows]
