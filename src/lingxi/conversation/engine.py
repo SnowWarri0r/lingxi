@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -131,6 +132,7 @@ class ConversationEngine:
         user_statement_writer=None,
         core_memory_writer=None,
         plan_executor=None,
+        sticker_store=None,
     ):
         self.persona = persona
         self.llm = llm_provider
@@ -145,6 +147,7 @@ class ConversationEngine:
         self.user_statement_writer = user_statement_writer
         self.core_memory_writer = core_memory_writer
         self.plan_executor = plan_executor
+        self.sticker_store = sticker_store
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -157,6 +160,9 @@ class ConversationEngine:
         self._relationship_level: int = 1
         self._current_recipient_key: str | None = None
         self._last_response_text: str = ""
+        # Sticker chosen by the agent this turn (1/turn cap). Reset at the
+        # start of every turn in _prepare_turn_v2; emitted at turn end.
+        self._pending_sticker: str | None = None
 
         # Per-recipient locks: serialize reactive turns for the SAME recipient
         # so two messages from user A can't interleave through the engine's
@@ -260,6 +266,19 @@ class ConversationEngine:
                     supersedes=current.id if current else None)
                 return "ok"
 
+            if name == "send_sticker":
+                if self._pending_sticker is not None:
+                    return "本轮已经发过一张表情了"
+                if self.sticker_store is None:
+                    return "（表情库未启用）"
+                query = args.get("query", "")
+                hits = await self.sticker_store.search(query, k=5)
+                if not hits:
+                    return f"没找到合适的表情（{query}）"
+                chosen = random.choice(hits)
+                self._pending_sticker = chosen.file_path
+                return f"选好了:{chosen.caption}（会发出去）"
+
             if name == "conversation_search":
                 turns = await self.memory.short_term.snapshot_for_recipient(recipient_key)
                 q = args.get("query", "")
@@ -358,6 +377,8 @@ class ConversationEngine:
         # buffer + relationship level, and record the interaction. (Emotion
         # state was stripped — pure GA, the agent's state IS its memory stream.)
         self._current_recipient_key = recipient_key
+        # Fresh turn: clear any sticker the previous turn selected.
+        self._pending_sticker = None
         if recipient_key:
             await self.memory.short_term.switch_recipient(recipient_key)
 
