@@ -45,3 +45,35 @@ async def test_download_skips_fetch_failures(tmp_path):
         out_dir=out, fetch=fake_fetch, delay=0.0, retries=0)
     assert len(results) == 1
     assert results[0]["source_url"] == "http://x/good.png"
+
+
+@pytest.mark.asyncio
+async def test_download_retries_then_succeeds(tmp_path):
+    calls = {"n": 0}
+
+    async def flaky_fetch(url: str) -> bytes:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient")
+        return b"GOODBYTES"
+
+    out = Path(tmp_path) / "img"
+    results = await download_images(
+        ["http://x/r.png"], out_dir=out, fetch=flaky_fetch,
+        delay=0.0, retries=1)
+    assert len(results) == 1
+    assert calls["n"] == 2  # failed once, retried, succeeded
+
+
+@pytest.mark.asyncio
+async def test_download_webp_magic_detected(tmp_path):
+    # RIFF....WEBP header → .webp extension even when URL has no suffix.
+    webp_bytes = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"rest"
+
+    async def fetch(url: str) -> bytes:
+        return webp_bytes
+
+    out = Path(tmp_path) / "img"
+    results = await download_images(
+        ["http://x/no-ext"], out_dir=out, fetch=fetch, delay=0.0)
+    assert results[0]["file_path"].endswith(".webp")
