@@ -1,0 +1,199 @@
+seeds:
+- id: corpus-douban-278916445-0
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有 但不找别人说 发在一些关注我人不多的社交平台上 乱发疯
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-1
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有，但不知道找谁说，也不好去影响别人，假装一切正常
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-2
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 我现在已经学会了在微博发疯，反正也没人看到，发出来也是一种倾诉和发泄哈哈
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-3
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 压抑到一定程度，倾诉欲就特别强。
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-4
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有，我连写作文都是好多长句跟憋了几年似的
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-5
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 写在文档里。
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-6
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: INFJ一般都会推己及人负能量的话对别人的影响吧……要么就把灾难事件幽默化表述
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-7
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有，在备忘录里发疯，自己专门分了一个发疯小合集出来
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-8
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有！但只会和最懂我的两个朋友说……
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-9
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有 没人倾诉的时候感觉很难受
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-10
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 我会发在不同的社交平台上...因为倾诉欲太强感觉跟人说没用
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-11
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有 只在小团体的群里发 平常也喜欢在平台上发
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-12
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 有，到了嘴边咽回去
+  tags:
+  - 倾诉
+- id: corpus-douban-278916445-13
+  context_summary: 各位infj是否有很强的倾诉欲
+  inner_thought: ''
+  corrected_speech: 我一般憋着，和朋友倾诉越多我反而越孤独越内耗…
+  tags:
+  - 倾诉
+- id: corpus-douban-285333796-0
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 两人寝表示很羡慕…好想自己住
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-1
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 是呀天天一个人从早到晚真的受不了 寝室也没法养小猫小狗
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-2
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 是呀有时候只和食堂阿姨说话 连同事都没有 谈恋爱遇不到合适的对象55
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-3
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 其实，毕业之后也会很孤独的
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-4
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 哈哈哈我一个人住会想两个人住的好，两个人住可能又会想到一个人的好吧
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-5
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: hhh enfp 就觉得工作和生活环境总归要有一个稍微有点人气吧
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-6
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 两个环境总归有一个有人气比较好吧感觉 不然很难支撑
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-7
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 哈哈那能不能去学校找个位置或者图书馆办公呢
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-8
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 想问一下 找谁社交说话呀
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-9
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 我感觉好爽啊……
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-10
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 唉，孤独只能自己调解了
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-11
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 你看看我的ip你就能得到点安慰了……
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-12
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 出去约着玩啊
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-13
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 一个人怎么打球呀
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-14
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 可能真的不可兼得吧
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-17
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 没关系，熬过这段时光，争取早日毕业。
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-19
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 理解，希望你可以找到一个朋友，如果暂时没找到，先和我们做朋友吧
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-20
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 孤独啊，但没有读博孤独痛苦。因为读博消耗了太多的精神能量。
+  tags:
+  - 孤独
+- id: corpus-douban-285333796-21
+  context_summary: 读博每天都一个人好孤单
+  inner_thought: ''
+  corrected_speech: 无人打扰是最好的状态了，德不孤必有邻。
+  tags:
+  - 孤独
