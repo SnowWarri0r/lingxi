@@ -309,6 +309,9 @@ async def create_engine(
     # Bootstrap fewshot seeds (idempotent — skips already-stored samples)
     if fewshot_store is not None:
         added = await engine.bootstrap_fewshot_seeds()
+        corpus_path = "config/fewshot/corpus_seeds.yaml"
+        if Path(corpus_path).exists():
+            added += await engine.bootstrap_fewshot_seeds(seeds_path=corpus_path)
         if added:
             print(f"[fewshot] bootstrapped {added} seeds")
 

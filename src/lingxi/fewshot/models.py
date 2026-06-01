@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-FewShotSource = Literal["seed", "user_correction", "positive"]
+FewShotSource = Literal["seed", "user_correction", "positive", "corpus"]
 AnnotationKind = Literal["none", "positive", "negative"]
 
 
