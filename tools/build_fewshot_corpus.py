@@ -19,11 +19,27 @@ from lingxi.fewshot.corpus.register import clean_and_keep
 from lingxi.fewshot.corpus.deid import deidentify
 from lingxi.fewshot.corpus.builder import build_samples
 
-# Curated in-register threads (emo / 独处 / 倾诉). Verified fetchable 2026-06-01.
+# Curated in-register threads, spanning emotional registers so the pool isn't
+# all-melancholy. Verified fetchable 2026-06-01 (douban IP-rate-limits hard —
+# crawl gently: the 5s delay below + small batches, or it blanket-403s to
+# sec.douban for a cooldown window).
 THREAD_IDS: list[str] = [
+    # 倾诉 / 孤独
     "278916445",   # 各位infj是否有很强的倾诉欲
     "285333796",   # 读博每天都一个人好孤单
-    "312473583",   # 突然闲下来不知道做什么了
+    # 开心 / 温暖
+    "258942714",   # 个人向快乐清单分享
+    "240765736",   # 我很会让自己开心 分享一些快乐技巧
+    # 日常碎碎念
+    "262798242",   # 你今天过的怎么样
+    # 深夜 / 睡不着
+    "275295741",   # 如果你还没有睡
+    "274809956",   # 收留失眠或者还没有睡的朋友
+    # 好奇 / 想问问（241975435 也贴 Aria 的看星星）
+    "241975435",   # 我来推荐几个看星空的app
+    "195561039",   # 想问问大家 这种清洗器算智商税吗
+    # 自由职业（borderline 鸡汤，register 过滤会筛掉长句留短暖句）
+    "122528275",   # 一个自由职业者的简单生活
 ]
 
 OUT = Path("config/fewshot/corpus_seeds.yaml")
@@ -53,7 +69,7 @@ async def main() -> None:
                 "corrected_speech": s.corrected_speech, "tags": s.tags,
             })
         print(f"[corpus] {tid} {title!r}: kept {len(kept)}")
-        await asyncio.sleep(3.0)
+        await asyncio.sleep(5.0)  # gentle — douban throttles bursts hard
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(yaml.safe_dump({"seeds": seeds}, allow_unicode=True,
                                   sort_keys=False), encoding="utf-8")
