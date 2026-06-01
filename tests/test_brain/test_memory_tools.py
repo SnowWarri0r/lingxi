@@ -5,7 +5,7 @@ def test_tools_defined():
     assert TOOL_NAMES == {
         "archival_memory_search", "archival_memory_insert",
         "core_memory_append", "core_memory_replace", "conversation_search",
-        "send_sticker",
+        "search_stickers", "send_sticker",
     }
 
 

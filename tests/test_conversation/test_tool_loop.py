@@ -176,60 +176,74 @@ async def test_stream_events_runs_tool_loop(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dispatch_send_sticker_sets_pending(tmp_path):
+async def test_search_stickers_returns_candidates(tmp_path):
     from lingxi.stickers.store import StickerStore
     from lingxi.stickers.models import Sticker
     eng, _ = await _engine(tmp_path)
     sstore = StickerStore(Path(tmp_path) / "stickers.db")
     await sstore.init()
-    await sstore.add(Sticker(
-        file_path="/img/wuyu.png", content_hash="h1",
-        caption="无语翻白眼", emotion="无语", tags=["无语", "翻白眼"]))
+    st = Sticker(file_path="/img/wuyu.png", content_hash="h1",
+                 caption="无语翻白眼", emotion="无语", tags=["无语"],
+                 when_to_use="对方说离谱的话")
+    await sstore.add(st)
     eng.sticker_store = sstore
 
-    out = await eng._dispatch_memory_tool(
-        "send_sticker", {"query": "无语"}, "feishu:x")
-    assert "选好了" in out
-    assert eng._pending_stickers["feishu:x"] == "/img/wuyu.png"
+    out = await eng._dispatch_memory_tool("search_stickers", {"query": "无语"}, "feishu:x")
+    assert "无语翻白眼" in out
+    assert st.id in out                       # id shown so agent can send it
+    assert eng._sticker_candidates["feishu:x"] == {st.id: "/img/wuyu.png"}
+    # nothing sent yet
+    assert eng._pending_stickers.get("feishu:x") is None
 
 
 @pytest.mark.asyncio
-async def test_dispatch_send_sticker_once_per_turn(tmp_path):
+async def test_send_sticker_by_id_sets_pending(tmp_path):
     from lingxi.stickers.store import StickerStore
     from lingxi.stickers.models import Sticker
     eng, _ = await _engine(tmp_path)
     sstore = StickerStore(Path(tmp_path) / "stickers.db")
     await sstore.init()
-    await sstore.add(Sticker(
-        file_path="/img/a.png", content_hash="h1", caption="无语", tags=["无语"]))
+    st = Sticker(file_path="/img/a.png", content_hash="h1", caption="无语", tags=["无语"])
+    await sstore.add(st)
     eng.sticker_store = sstore
 
-    first = await eng._dispatch_memory_tool("send_sticker", {"query": "无语"}, "feishu:x")
-    second = await eng._dispatch_memory_tool("send_sticker", {"query": "无语"}, "feishu:x")
-    assert "选好了" in first
+    await eng._dispatch_memory_tool("search_stickers", {"query": "无语"}, "feishu:x")
+    out = await eng._dispatch_memory_tool("send_sticker", {"sticker_id": st.id}, "feishu:x")
+    assert "会发出去" in out
+    assert eng._pending_stickers["feishu:x"] == "/img/a.png"
+
+
+@pytest.mark.asyncio
+async def test_send_sticker_rejects_unsearched_id(tmp_path):
+    eng, _ = await _engine(tmp_path)
+    # no search first → candidates empty
+    out = await eng._dispatch_memory_tool("send_sticker", {"sticker_id": "bogus"}, "feishu:x")
+    assert "不在候选里" in out
+    assert eng._pending_stickers.get("feishu:x") is None
+
+
+@pytest.mark.asyncio
+async def test_send_sticker_once_per_turn(tmp_path):
+    from lingxi.stickers.store import StickerStore
+    from lingxi.stickers.models import Sticker
+    eng, _ = await _engine(tmp_path)
+    sstore = StickerStore(Path(tmp_path) / "stickers.db")
+    await sstore.init()
+    st = Sticker(file_path="/img/a.png", content_hash="h1", caption="无语", tags=["无语"])
+    await sstore.add(st)
+    eng.sticker_store = sstore
+    await eng._dispatch_memory_tool("search_stickers", {"query": "无语"}, "feishu:x")
+    first = await eng._dispatch_memory_tool("send_sticker", {"sticker_id": st.id}, "feishu:x")
+    second = await eng._dispatch_memory_tool("send_sticker", {"sticker_id": st.id}, "feishu:x")
+    assert "会发出去" in first
     assert "已经发过" in second
 
 
 @pytest.mark.asyncio
-async def test_dispatch_send_sticker_no_store(tmp_path):
+async def test_search_stickers_no_store(tmp_path):
     eng, _ = await _engine(tmp_path)
-    out = await eng._dispatch_memory_tool(
-        "send_sticker", {"query": "无语"}, "feishu:x")
+    out = await eng._dispatch_memory_tool("search_stickers", {"query": "无语"}, "feishu:x")
     assert "未启用" in out
-    assert eng._pending_stickers.get("feishu:x") is None
-
-
-@pytest.mark.asyncio
-async def test_dispatch_send_sticker_no_hit(tmp_path):
-    from lingxi.stickers.store import StickerStore
-    eng, _ = await _engine(tmp_path)
-    sstore = StickerStore(Path(tmp_path) / "stickers.db")
-    await sstore.init()
-    eng.sticker_store = sstore
-    out = await eng._dispatch_memory_tool(
-        "send_sticker", {"query": "无语"}, "feishu:x")
-    assert "没找到" in out
-    assert eng._pending_stickers.get("feishu:x") is None
 
 
 @pytest.mark.asyncio
@@ -239,19 +253,21 @@ async def test_stream_events_emits_sticker(tmp_path):
     eng, _ = await _engine(tmp_path)
     sstore = StickerStore(Path(tmp_path) / "stickers.db")
     await sstore.init()
-    await sstore.add(Sticker(
-        file_path="/img/wuyu.png", content_hash="h1",
-        caption="无语", emotion="无语", tags=["无语"]))
+    st = Sticker(file_path="/img/wuyu.png", content_hash="h1",
+                 caption="无语", emotion="无语", tags=["无语"])
+    await sstore.add(st)
     eng.sticker_store = sstore
 
     async def _fake_prep(ui, im, ch, rid):
         eng._current_recipient_key = "feishu:x"
         eng._pending_stickers["feishu:x"] = None
+        eng._sticker_candidates["feishu:x"] = {}
         return "SYS", [{"role": "user", "content": ui}]
     eng._prepare_turn_v2 = _fake_prep
 
     eng.llm = _ScriptedLLM([
-        _toolcall("send_sticker", {"query": "无语"}),
+        _toolcall("search_stickers", {"query": "无语"}, tid="t1"),
+        _toolcall("send_sticker", {"sticker_id": st.id}, tid="t2"),
         _final("哈哈对啊"),
     ])
     events = [e async for e in eng.chat_stream_events(
@@ -259,5 +275,4 @@ async def test_stream_events_emits_sticker(tmp_path):
     stickers = [e for e in events if e.type == "sticker"]
     assert len(stickers) == 1
     assert stickers[0].content == "/img/wuyu.png"
-    # cleared after emit
     assert eng._pending_stickers.get("feishu:x") is None

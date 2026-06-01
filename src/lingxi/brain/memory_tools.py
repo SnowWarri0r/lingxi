@@ -67,15 +67,28 @@ MEMORY_TOOLS = [
         },
     },
     {
-        "name": "send_sticker",
+        "name": "search_stickers",
         "description": (
-            "发一张表情包配合你这条消息的情绪。query 用你自己的话描述想发的表情"
-            "(如 '无语'、'笑哭'、'摸鱼累了'、'好奇')。偶尔发、贴当下情绪才发,别每句都甩。"
+            "按情绪/语义搜你的表情库,返回几个候选(每个带 id、画面、情绪、适用场景)。"
+            "想配表情时先搜一下,再读候选自己判断有没有真的贴当下气氛的。"
         ),
         "input_schema": {
             "type": "object",
-            "properties": {"query": {"type": "string"}},
+            "properties": {"query": {"type": "string",
+                "description": "用你自己的话描述想要的表情,如 '无语'、'笑到不行'、'摸鱼累了'"}},
             "required": ["query"],
+        },
+    },
+    {
+        "name": "send_sticker",
+        "description": (
+            "发出候选里的某一张表情(传它的 id)。只在某张真的贴当下情绪/气氛时才发;"
+            "对方在认真说事、掏心窝、或聊伤心事的时候通常别发。每轮最多发一张,不合适就别调这个工具。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"sticker_id": {"type": "string"}},
+            "required": ["sticker_id"],
         },
     },
 ]
