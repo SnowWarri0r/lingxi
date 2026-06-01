@@ -9,10 +9,9 @@ _HTML = '''<html><head><title>各位infj是否有很强的倾诉欲</title></hea
 </body></html>'''
 
 
-def test_parse_topic_extracts_title_op_replies():
-    title, op, replies = parse_topic(_HTML)
+def test_parse_topic_extracts_title_and_deduped_replies():
+    title, replies = parse_topic(_HTML)
     assert title == "各位infj是否有很强的倾诉欲"
-    assert "倾诉欲" in op
     assert replies == ["有 到了嘴边咽回去", "压抑到一定程度，倾诉欲就特别强。"]
 
 
