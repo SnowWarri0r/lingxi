@@ -192,32 +192,11 @@ async def create_engine(
         annotation_store = AnnotationStore(data_dir=fewshot_dir)
         fewshot_retriever = FewShotRetriever(store=fewshot_store, embedder=embedding_provider)
 
-    # Social graph — handwritten roster of NPCs in Aria's life (room-
-    # mate / advisor / mom / etc) with persistent arcs + event logs.
-    # Cron in P2 will keep generating events; for P1 just static arcs.
-    from lingxi.social.loader import load_social_graph, seed_initial_arcs
-    from lingxi.social.store import SocialStore
-    social_graph = None
-    social_store = None
-    social_yaml = Path("config/personas/aria_social_graph.yaml")
-    if social_yaml.exists():
-        try:
-            social_graph = load_social_graph(social_yaml)
-            social_store = SocialStore(data_dir=data_dir)
-            seeded = await seed_initial_arcs(social_graph, social_store)
-            if seeded:
-                print(f"[social] seeded initial arcs for {seeded} NPC(s)")
-        except Exception as e:
-            print(f"[social] load failed (non-fatal): {e}")
-            social_graph = None
-            social_store = None
-
     # Facts store + retriever (new unified data layer)
     from lingxi.facts.store import FactStore
     from lingxi.facts.retriever import FactRetriever
     from lingxi.facts.scorer import ImportanceScorer
     from lingxi.facts.writers.life import LifeWriter
-    from lingxi.facts.writers.npc import NPCWriter
     from lingxi.facts.writers.inference import InferenceWriter
     from lingxi.facts.writers.world import WorldWriter
     from lingxi.facts.writers.user_statement import UserStatementWriter
@@ -258,7 +237,6 @@ async def create_engine(
     life_writer = LifeWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
     user_statement_writer = UserStatementWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
     inference_writer = InferenceWriter(facts_store, scorer=importance_scorer, reflection_trigger=trigger_holder)
-    npc_writer = NPCWriter(facts_store, scorer=importance_scorer)
     world_writer = WorldWriter(facts_store, scorer=importance_scorer)
     core_memory_writer = CoreMemoryWriter(facts_store, scorer=importance_scorer)
 
@@ -273,7 +251,7 @@ async def create_engine(
     from lingxi.planner.executor import PlanExecutor
 
     daily_planner = DailyPlanner(
-        llm_provider, fact_retriever, life_writer, npc_writer=npc_writer
+        llm_provider, fact_retriever, life_writer
     )
     plan_executor = PlanExecutor(
         llm_provider, fact_retriever, life_writer, planner=daily_planner
@@ -288,11 +266,8 @@ async def create_engine(
         fewshot_store=fewshot_store,
         annotation_store=annotation_store,
         fewshot_retriever=fewshot_retriever,
-        social_graph=social_graph,
-        social_store=social_store,
         fact_retriever=fact_retriever,
         life_writer=life_writer,
-        npc_writer=npc_writer,
         inference_writer=inference_writer,
         world_writer=world_writer,
         user_statement_writer=user_statement_writer,

@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from lingxi.social.models import NPCState, SocialGraph
 
 from lingxi.persona.models import PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
@@ -25,8 +21,6 @@ class PromptBuilder:
         last_interaction_time: datetime | None = None,
         biography_hits: list | None = None,
         recent_proactive_messages: list[str] | None = None,
-        social_graph: "SocialGraph | None" = None,
-        social_states: "dict[str, NPCState] | None" = None,
         mode: str = "single",
     ) -> str:
         """Build a complete system prompt combining persona, memory, and plan state.
@@ -77,15 +71,6 @@ class PromptBuilder:
 
         if biography_hits:
             sections.append(self._build_biography_section(biography_hits))
-
-        # Social graph: 身边的人. Background-knowledge block — NPC arcs +
-        # recent events. Sits next to biography because both are "things
-        # about Aria's life outside this conversation".
-        if social_graph is not None and social_states:
-            from lingxi.social.renderer import render_social_section
-            social_block = render_social_section(social_graph, social_states)
-            if social_block:
-                sections.append(social_block)
 
         return "\n\n".join(sections)
 
