@@ -22,8 +22,8 @@ if TYPE_CHECKING:
     from lingxi.conversation.engine import ConversationEngine
 
 from lingxi.channels.outbound import ChannelRegistry
-from lingxi.facts.models import Fact
-from lingxi.facts.retriever import FactRetriever
+from lingxi.facts.models import Fact, FactType
+from lingxi.facts.retriever import FactQuery, FactRetriever
 from lingxi.fewshot.models import AnnotationTurn
 from lingxi.proactive.share_intent import ShareIntent, ShareIntentStore
 from lingxi.temporal.formatter import format_timedelta_cn
@@ -192,6 +192,25 @@ PROACTIVE_FORCE_PROMPT = """你是 {persona_name}。{current_time_cn}
 
 只回复 JSON：
 {{"should_send": true, "message": "消息内容"}}"""
+
+
+def _format_own_life_block(facts: list[Fact]) -> str:
+    """Render Aria's own recent events as an opener-seed block.
+
+    Without this, the proactive prompt only carries user-centric context (what
+    she knows about the user + the user's recent messages), so she fixates on
+    the user's past words. Feeding her own recent life-events lets the opener
+    come from HER world. Empty list → empty string (block omitted)."""
+    if not facts:
+        return ""
+    lines = "\n".join(
+        f"- [{f.ts.strftime('%m-%d %H:%M')}] {f.content}" for f in facts)
+    return (
+        "## 你自己最近在忙/发生的事（**优先从这里挑一件起头**）\n"
+        f"{lines}\n\n"
+        "（这些是你自己的生活——你主动找对方，多半是想说**你这边**某件具体的事，"
+        "而不是追着对方上次说过的话问。挑一件真有触动的，别罗列。）\n"
+    )
 
 
 def _content_overlap(a: str, b: str) -> int:
@@ -692,6 +711,24 @@ class ProactiveScheduler:
             except Exception as e:
                 print(f"[proactive] find_pending_share failed (non-fatal): {e}")
 
+        # Aria's OWN recent life — so the opener can originate from HER world
+        # rather than always circling back to the user's words. She has a real
+        # stream of self-events (life-sim / world / NPC); the share-intent queue
+        # above only surfaces them when something significant is explicitly
+        # queued (often empty), leaving the prompt all user-centric. Pull her
+        # recent events directly so she always has her own material to open with.
+        own_life_block = ""
+        if self.fact_retriever is not None:
+            try:
+                own_facts = await self.fact_retriever.fetch(FactQuery(
+                    subject="aria", type=FactType.EVENT, limit=6))
+                own_life_block = _format_own_life_block(own_facts)
+                if own_facts:
+                    print(f"[proactive] own-life seed: {own_facts[0].content[:40]}...",
+                          flush=True)
+            except Exception as e:
+                print(f"[proactive] own_life fetch failed (non-fatal): {e}")
+
         opener_shape = (
             "## 这条消息是 OPENER（你主动起头），形态约束：\n"
             "- **直接进话题**——不寒暄打招呼（不要『嗨/你好/在吗/下午好』起手）\n"
@@ -720,6 +757,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（不要重复套路/比喻/切入点）\n{recent_proactive}\n\n"
+                f"{own_life_block}"
                 f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"## 这次试一种语气：【{style['name']}】\n"
@@ -737,6 +775,7 @@ class ProactiveScheduler:
                 f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（避免重复）\n{recent_proactive}\n\n"
+                f"{own_life_block}"
                 f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
