@@ -276,3 +276,31 @@ async def test_stream_events_emits_sticker(tmp_path):
     assert len(stickers) == 1
     assert stickers[0].content == "/img/wuyu.png"
     assert eng._pending_stickers.get("feishu:x") is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_turn_v2_injects_current_time(tmp_path, monkeypatch):
+    # Regression: the reactive path must inject the time-awareness reminder so
+    # Aria knows the current time. The pure-GA prompt refactor had dropped it.
+    eng, store = await _engine(tmp_path)
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain import renderer as rend_mod
+    from lingxi.brain.models import OrchestrationDecision
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(register="warm", engage_level=0.5,
+                                     fact_queries=[], skip=[], topic_anchor="")
+
+    async def _fake_render(*a, **k):
+        return ""
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(rend_mod, "render_dynamic_blocks", _fake_render)
+
+    _sys, messages = await eng._prepare_turn_v2("现在几点", None, "feishu", "x")
+    last = messages[-1]
+    assert last["role"] == "user"
+    content = (last["content"] if isinstance(last["content"], str)
+               else " ".join(b.get("text", "") for b in last["content"]))
+    assert "当前真实时间" in content      # time-awareness section restored
+    assert "现在几点" in content          # original user text preserved
