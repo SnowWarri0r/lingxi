@@ -16,27 +16,6 @@ from lingxi.providers.base import LLMProvider
 
 _ARIA_SYSTEM = "你是 Aria，正在早上安排今天打算做什么。"
 
-_NPC_SYSTEM_TEMPLATE = "你是 {name}，正在早上想今天打算做什么。"
-
-_NPC_PROMPT = """新的一天。我想一下今天打算怎么过。
-
-【我是谁】
-{biography}
-
-【最近的事】
-{recent}
-
-【规矩】
-- 2-3 条粗的安排（不用太细）
-- hour 粒度，time_window 形如 "09:00-12:00"
-- 写**具体**的事，第一人称语气
-- 不要在每条前面写"我"——直接写动作
-
-输出 JSON：
-[{{"time_window": "...", "content": "..."}}, ...]
-"""
-
-
 _ARIA_PROMPT = """新的一天。我想一下今天打算怎么过。
 
 【我是谁】
@@ -71,13 +50,11 @@ class DailyPlanner:
         llm: LLMProvider,
         retriever: FactRetriever,
         life_writer: LifeWriter,
-        npc_writer=None,  # NPCWriter | None
         model: str | None = None,
     ):
         self._llm = llm
         self._retriever = retriever
         self._writer = life_writer
-        self._npc_writer = npc_writer
         self._model = model
 
     async def plan_aria(self) -> list[Fact]:
@@ -127,12 +104,6 @@ class DailyPlanner:
         return []
 
     async def _write_plan_facts(self, subject: str, items: list[dict]) -> list[Fact]:
-        writer = self._writer if subject == "aria" else self._npc_writer
-        return await self._write_plan_facts_with(writer, subject, items)
-
-    async def _write_plan_facts_with(
-        self, writer, subject: str, items: list[dict]
-    ) -> list[Fact]:
         if not items:
             return []
         now = datetime.now()
@@ -145,37 +116,16 @@ class DailyPlanner:
             fact = Fact(
                 subject=subject,
                 content=str(item["content"]).strip(),
-                source=Source.NPC_TICKER if subject.startswith("npc:") else Source.LIFE_SIMULATED,
+                source=Source.LIFE_SIMULATED,
                 type=FactType.PLAN,
                 ts=now,
-                importance=6 if subject.startswith("npc:") else 7,
+                importance=7,
                 expires_at=expires,
                 tags=tags,
             )
-            await writer.write_skip_scorer(fact, trigger_observation=False)
+            await self._writer.write_skip_scorer(fact, trigger_observation=False)
             written.append(fact)
         return written
-
-    async def plan_npc(self, npc_id: str, display_name: str | None = None) -> list[Fact]:
-        if self._npc_writer is None:
-            raise RuntimeError("plan_npc requires npc_writer to be configured")
-        subject = f"npc:{npc_id}"
-        name = display_name or npc_id
-
-        bio_facts = await self._retriever.fetch(
-            FactQuery(subject=subject, semantic="身份", limit=3)
-        )
-        recent = await self._retriever.fetch(
-            FactQuery(subject=subject, type=FactType.EVENT, limit=5,
-                      since=datetime.now() - timedelta(days=3))
-        )
-        prompt = _NPC_PROMPT.format(
-            biography=self._bullets(bio_facts) or "（暂无身份摘要）",
-            recent=self._bullets(recent) or "（最近没什么大事）",
-        )
-        system = _NPC_SYSTEM_TEMPLATE.format(name=name)
-        items = await self._call_planner(prompt, system)
-        return await self._write_plan_facts(subject, items)
 
     async def _load_biography_summary(self) -> str:
         bio = await self._retriever.fetch(

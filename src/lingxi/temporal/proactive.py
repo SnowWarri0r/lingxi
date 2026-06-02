@@ -25,30 +25,8 @@ from lingxi.channels.outbound import ChannelRegistry
 from lingxi.facts.models import Fact, FactType
 from lingxi.facts.retriever import FactQuery, FactRetriever
 from lingxi.fewshot.models import AnnotationTurn
-from lingxi.proactive.share_intent import ShareIntent, ShareIntentStore
 from lingxi.temporal.formatter import format_timedelta_cn
 from lingxi.temporal.tracker import InteractionRecord, InteractionTracker
-
-
-async def find_pending_share(
-    intent_store: ShareIntentStore,
-    retriever: FactRetriever,
-) -> tuple[ShareIntent, Fact] | None:
-    """Pick the highest-significance pending share intent whose fact still exists.
-
-    Cleans up stale intents (intent referencing a missing fact) along the way.
-    Returns (intent, fact) or None if queue is empty / all intents are stale.
-    """
-    intents = await intent_store.pending()
-    if not intents:
-        return None
-    intents.sort(key=lambda i: -i.significance)
-    for intent in intents:
-        fact = await retriever.fetch_by_id(intent.fact_id)
-        if fact is not None:
-            return (intent, fact)
-        await intent_store.consume(intent.fact_id)
-    return None
 
 
 class ProactiveConfig(BaseModel):
@@ -214,32 +192,6 @@ def _format_own_life_block(facts: list[Fact]) -> str:
     )
 
 
-def _content_overlap(a: str, b: str) -> int:
-    """Largest contiguous run of 4+ chars from `a` appearing in `b`.
-
-    Used to detect whether an episode summary or event was already
-    voiced in a recent proactive message — overlap≥4 means likely
-    already-spoken; the new message would just repeat it.
-    """
-    if not a or not b:
-        return 0
-    best = 0
-    n = len(a)
-    for i in range(n):
-        j = i + 4
-        if j > n:
-            break
-        if a[i:j] not in b:
-            continue
-        k = j
-        while k < n and a[i:k + 1] in b:
-            k += 1
-        run = k - i
-        if run > best:
-            best = run
-    return best
-
-
 # Tokens that signal "I'm continuing/responding to something just said".
 # Real openers don't start with these — only replies do.
 _RESPONSE_TOKEN_PREFIXES = (
@@ -341,14 +293,12 @@ class ProactiveScheduler:
         channel_registry: ChannelRegistry,
         engine: ConversationEngine,
         data_dir: str | None = None,
-        share_intent_store: ShareIntentStore | None = None,
         fact_retriever: FactRetriever | None = None,
     ):
         self.config = config
         self.tracker = tracker
         self.channels = channel_registry
         self.engine = engine
-        self.share_intent_store = share_intent_store
         self.fact_retriever = fact_retriever
         self._task: asyncio.Task | None = None
         self._running = False
@@ -562,42 +512,7 @@ class ProactiveScheduler:
             del recent[: len(recent) - self._max_recent_proactive]
         self._save_history()
 
-        # Clear wants_to_share on whichever recent event this message
-        # actually voiced — content-match by character n-gram overlap.
-        # Without this, a 📌想说 event stays marked until TTL decay (2h)
-        # and proactive cycles every 5min keep picking it.
-        try:
-            await self._mark_event_shared(message)
-        except Exception as e:
-            print(f"[proactive] mark_event_shared failed: {e}")
-
         return {"key": key, "status": "sent", "message": message}
-
-    async def _mark_event_shared(self, message: str) -> None:
-        """Find the queued share intent whose fact content overlaps with `message`,
-        consume it from ShareIntentStore.
-
-        Heuristic: sliding char-window overlap (≥4 chars shared). Replaces the
-        old recent_events / wants_to_share mutation path.
-        """
-        if self.share_intent_store is None or self.fact_retriever is None or not message:
-            return
-        msg = message.strip()
-        pending = await self.share_intent_store.pending()
-        best_id: str | None = None
-        best_score = 0
-        for intent in pending:
-            fact = await self.fact_retriever.fetch_by_id(intent.fact_id)
-            if fact is None:
-                continue
-            score = _content_overlap(fact.content, msg)
-            if score >= 4 and score > best_score:
-                best_score = score
-                best_id = intent.fact_id
-        if best_id:
-            await self.share_intent_store.consume(best_id)
-            print(f"[proactive] consumed share intent for fact={best_id[:8]}...",
-                  flush=True)
 
     async def trigger_manually(self) -> list[dict]:
         """Manual trigger for all recipients (for testing). Bypasses silence + cooldown."""
@@ -688,36 +603,10 @@ class ProactiveScheduler:
         except Exception as e:
             print(f"[proactive] history fetch failed: {e}")
 
-        # Pending share intent — highest-significance NPC event queued for voicing.
-        # If one exists, surface its content explicitly so the LLM has a concrete
-        # seed rather than inventing a topic. Without this the LLM defaults to
-        # generic hooks; with it, it can work the actual fact into a natural opener.
-        pending_share_block = ""
-        if self.share_intent_store is not None and self.fact_retriever is not None:
-            try:
-                share_result = await find_pending_share(
-                    self.share_intent_store, self.fact_retriever
-                )
-                if share_result is not None:
-                    _intent, _fact = share_result
-                    pending_share_block = (
-                        f"## 你正想分享的一件事（来自身边的人）\n"
-                        f"{_fact.content}\n\n"
-                        f"（这是你的内心素材——**不要直接念出来**，把它自然带进你的表达里。）\n"
-                    )
-                    print(
-                        f"[proactive] share intent seed: {_fact.content[:40]}...",
-                        flush=True,
-                    )
-            except Exception as e:
-                print(f"[proactive] find_pending_share failed (non-fatal): {e}")
-
         # Aria's OWN recent life — so the opener can originate from HER world
         # rather than always circling back to the user's words. She has a real
-        # stream of self-events (life-sim / world / NPC); the share-intent queue
-        # above only surfaces them when something significant is explicitly
-        # queued (often empty), leaving the prompt all user-centric. Pull her
-        # recent events directly so she always has her own material to open with.
+        # stream of self-events (life-sim / world). Pull her recent events
+        # directly so she always has her own material to open with.
         own_life_block = ""
         if self.fact_retriever is not None:
             try:
@@ -759,7 +648,6 @@ class ProactiveScheduler:
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（不要重复套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
-                f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"## 这次试一种语气：【{style['name']}】\n"
                 f"{style['desc']}\n"
@@ -777,7 +665,6 @@ class ProactiveScheduler:
                 f"{user_recent_block}\n\n"
                 f"## 你最近发过的主动消息（避免重复）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
-                f"{pending_share_block}"
                 f"{opener_shape}\n"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
                 f"为了发而发不如不发。\n\n"
