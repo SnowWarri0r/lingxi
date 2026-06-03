@@ -64,7 +64,7 @@ async def chat(
     async with state.lock:
         response = await state.engine.chat(body.message)
 
-    return ChatResponse(response=response, mood=state.engine._current_mood)
+    return ChatResponse(response=response, mood="")
 
 
 @router.get("/persona", response_model=PersonaInfo)
@@ -86,7 +86,7 @@ async def get_persona(
         traits=[t.model_dump() for t in p.personality.traits],
         values=p.personality.values,
         speaking_style=p.speaking_style.model_dump(),
-        mood=state.engine._current_mood,
+        mood="",
     )
 
 
@@ -112,7 +112,7 @@ async def get_mood(
     if not state:
         raise HTTPException(404, f"Session not found: {session_id}")
 
-    return MoodResponse(mood=state.engine._current_mood)
+    return MoodResponse(mood="")
 
 
 @router.post("/session/end", response_model=SessionEndResponse)
