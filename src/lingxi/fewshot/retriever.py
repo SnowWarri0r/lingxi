@@ -53,11 +53,14 @@ class FewShotRetriever:
         scored.sort(key=lambda x: x[0], reverse=True)
         # Threshold filters on raw similarity (not boosted score)
         filtered = [(s, raw_sim, x) for s, raw_sim, x in scored if raw_sim >= threshold]
-        # Dedup by inner_thought near-match (light heuristic)
+        # Dedup by the actual demonstrated speech. (Keying on context/inner
+        # thought collapsed real-corpus samples that share a thread-title
+        # context + empty inner_thought down to one — we want the diverse
+        # LINES, not one line per context.)
         seen: set[str] = set()
         out: list[FewShotSample] = []
         for _, _raw_sim, sample in filtered:
-            key = (sample.inner_thought or sample.context_summary)[:40]
+            key = sample.corrected_speech[:40]
             if key in seen:
                 continue
             seen.add(key)
