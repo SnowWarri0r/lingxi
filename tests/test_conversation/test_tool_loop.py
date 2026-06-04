@@ -304,3 +304,35 @@ async def test_prepare_turn_v2_injects_current_time(tmp_path, monkeypatch):
                else " ".join(b.get("text", "") for b in last["content"]))
     assert "当前真实时间" in content      # time-awareness section restored
     assert "现在几点" in content          # original user text preserved
+
+
+@pytest.mark.asyncio
+async def test_prepare_turn_v2_injects_fewshot_voice_anchors(tmp_path, monkeypatch):
+    # The anti-翻译腔 lever: retrieved real-corpus lines must reach the system
+    # prompt as a voice-cadence block. (Pure-GA refactor had cut this.)
+    eng, store = await _engine(tmp_path)
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain import renderer as rend_mod
+    from lingxi.brain.models import OrchestrationDecision
+    from lingxi.fewshot.models import FewShotSample
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(register="warm", engage_level=0.5,
+                                     fact_queries=[], skip=[], topic_anchor="")
+
+    async def _fake_render(*a, **k):
+        return ""
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(rend_mod, "render_dynamic_blocks", _fake_render)
+
+    class _FakeRetriever:
+        async def retrieve(self, query_text, recipient_key=None, k=4, threshold=0.5):
+            return [FewShotSample(
+                id="x", inner_thought="", corrected_speech="唉，孤独只能自己调解了",
+                context_summary="孤独", tags=[], source="corpus")]
+
+    eng.fewshot_retriever = _FakeRetriever()
+    sys_prompt, _ = await eng._prepare_turn_v2("我好孤独", None, "feishu", "x")
+    assert "你平时说话的语感" in sys_prompt
+    assert "唉，孤独只能自己调解了" in sys_prompt
