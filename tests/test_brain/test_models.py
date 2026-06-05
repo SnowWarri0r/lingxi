@@ -37,6 +37,14 @@ def test_decision_handles_unknown_register_gracefully():
     assert d.register == "warm"  # fallback
 
 
+def test_light_register_is_accepted():
+    # "light" is the casual-banter register — must survive (not coerce to warm),
+    # so everyday chatter doesn't get routed to the deep "warm" 接法.
+    raw = {"engage_level": 0.4, "register": "light",
+           "fact_queries": [], "topic_anchor": "", "skip": []}
+    assert OrchestrationDecision.from_dict(raw).register == "light"
+
+
 def test_decision_clamps_engage_level():
     raw = {
         "engage_level": 1.5, "register": "warm",
