@@ -1015,7 +1015,8 @@ class ConversationEngine:
             from lingxi.conversation.response_cleaner import clean_speech
             cleaned = clean_speech(full_speech)
             if not cleaned.strip():
-                cleaned = "嗯 我刚刚走神了一下，你再说一遍？"
+                # No "走神"/"再说一遍" — IM-anti-pattern (see memory). Plain hiccup.
+                cleaned = "诶 我这边卡了一下"
 
             output = output_pre
             output.speech = cleaned
@@ -1025,17 +1026,25 @@ class ConversationEngine:
             # tools before replying), so run the agentic loop to completion
             # then emit — same buffered shape as the compression branch above.
             rkey = self._current_recipient_key or "_anon"
-            try:
-                full_response = await self._generate_with_tools(
-                    system_prompt, messages, recipient_key=rkey,
-                    prefill=pick_prefill(self.persona.style),
-                    purpose="chat_stream_split")
-            except Exception as e:
-                print(f"[engine] tool-loop generation failed: {e}")
-                full_response = ""
+            full_response = ""
+            for _attempt in range(2):  # retry once — empty gen is usually a transient hiccup
+                try:
+                    full_response = await self._generate_with_tools(
+                        system_prompt, messages, recipient_key=rkey,
+                        prefill=pick_prefill(self.persona.style),
+                        purpose="chat_stream_split")
+                except Exception as e:
+                    print(f"[engine] tool-loop generation failed: {e}")
+                    full_response = ""
+                if full_response.strip():
+                    break
+                print("[engine] empty generation — retrying once", flush=True)
             output = self._process_response(full_response)
             if not output.speech.strip():
-                output.speech = "嗯 我走神了一下，你再说一遍？"
+                # Last resort. Do NOT fabricate inattention ("走神") or ask the
+                # user to repeat — in IM the message is right there in history.
+                # Own a plain technical hiccup instead.
+                output.speech = "诶 我这边卡了一下"
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later
