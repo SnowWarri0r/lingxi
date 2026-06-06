@@ -398,10 +398,15 @@ class ConversationEngine:
         if recipient_key:
             await self.memory.short_term.switch_recipient(recipient_key)
 
+        # Capture the previous interaction time BEFORE record_interaction
+        # overwrites it to now — the time-awareness reminder uses it for the
+        # "how long since we last talked" delta.
+        last_interaction_time: datetime | None = None
         if self.interaction_tracker and channel and recipient_id:
             rec = self.interaction_tracker.get_record(channel, recipient_id)
             if rec:
                 self._relationship_level = rec.relationship_level
+                last_interaction_time = rec.last_interaction
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
         # Text persisted to short-term for the user turn (with image marker).
@@ -491,10 +496,48 @@ class ConversationEngine:
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
 
-        # Append the current user turn (with images as multimodal blocks).
-        messages.append(self._build_user_message(user_input, images))
+        # Append the current user turn, prepending the per-turn focus reminder
+        # (current real time + the utterance Aria just made). The pure-GA
+        # refactor dropped this from the reactive path, which is why Aria lost
+        # track of the time — restore it here.
+        user_msg = self._build_user_message(user_input, images)
+        focus = self._build_focus_reminder(last_interaction_time)
+        if focus:
+            if isinstance(user_msg["content"], str):
+                user_msg["content"] = f"{focus}\n\n{user_msg['content']}"
+            else:
+                user_msg["content"].insert(0, {"type": "text", "text": focus})
+        messages.append(user_msg)
 
         return system_prompt, messages
+
+    def _build_focus_reminder(self, last_interaction_time: datetime | None) -> str | None:
+        """Build the per-turn `<system-reminder>`: current real time + the
+        thing Aria just said (so short user replies are read in context).
+
+        Restores the time-awareness that the pure-GA prompt refactor dropped
+        from the reactive path — without it Aria has no idea what time it is.
+        """
+        from lingxi.conversation.turn_focus import detect_last_assistant_turn
+
+        laq: str | None = None
+        las: str | None = None
+        try:
+            info = detect_last_assistant_turn(self.memory.short_term.get_history())
+            if info is not None:
+                text, is_question = info
+                if is_question:
+                    laq = text
+                else:
+                    las = text
+        except Exception:
+            pass
+        return self.prompt_builder.build_turn_focus_reminder(
+            current_time=datetime.now(),
+            last_interaction_time=last_interaction_time,
+            last_assistant_question=laq,
+            last_assistant_statement=las,
+        )
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
         """Cheapest signal for the retriever: the previous turn's inner_thought.
