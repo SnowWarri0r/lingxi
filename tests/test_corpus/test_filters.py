@@ -7,6 +7,20 @@ def test_keeps_good_register_line():
     assert clean_and_keep("一个人住，一个人一间办公室，很幸福诶") is not None
 
 
+def test_drops_pure_filler_acknowledgment():
+    assert clean_and_keep("嗯嗯好滴！") is None
+    assert clean_and_keep("哦哦好滴哈哈") is None
+    assert clean_and_keep("可以呀！") is None
+    assert clean_and_keep("好的好的") is None
+
+
+def test_filler_reject_keeps_gems_with_particle_chars():
+    # gems carry filler-set chars (好/啊/唉) BUT also real content + spoken
+    # markers → must survive the filler reject
+    assert clean_and_keep("唉，孤独只能自己调解了") is not None
+    assert clean_and_keep("我感觉好爽啊……") is not None
+
+
 def test_drops_too_short_or_too_long():
     assert clean_and_keep("同意") is None
     assert clean_and_keep("好") is None

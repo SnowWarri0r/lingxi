@@ -12,6 +12,11 @@ import re
 _MIN, _MAX = 4, 40
 _SPOKEN = re.compile(r"[啊吧呢啦诶嗯喔哈呀嘛哦唉]|…|。。|\.\.\.|^[有就其实]")
 _AGREEMENT = {"同意", "对", "对对", "是的", "+1", "赞", "同", "顶", "嗯嗯", "哈哈哈"}
+# Lines made up ENTIRELY of acknowledgment tokens + particles + punctuation are
+# pure filler ("嗯嗯好滴！", "可以呀！", "哦哦好滴哈哈") — real, but no signal as a
+# voice example. A genuine line always carries content chars outside this set.
+_FILLER = re.compile(
+    r"^[嗯哦啊呀哈唉喔哒滴好的行对是没事可以同意赞顶ok！!？?。，、~～\s]+$", re.I)
 _DROP_MARKERS = re.compile(
     r"https?://|[@#]|回复\s|￥|\d+元|链接|入手|测评|种草|推荐|优惠|代购|私信|vx|微信")
 _EMOJI = re.compile(
@@ -26,6 +31,8 @@ def clean_and_keep(line: str) -> str | None:
         return None
     bare = _EMOJI.sub("", line).strip()
     if not bare or bare in _AGREEMENT:
+        return None
+    if _FILLER.match(bare):
         return None
     if not (_MIN <= len(bare) <= _MAX):
         return None
