@@ -496,6 +496,26 @@ class ConversationEngine:
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
 
+        # Voice anchors: retrieve real-corpus speech samples whose context
+        # matches this turn, append as a "here's how you talk" block. This is
+        # the anti-翻译腔 lever — the pure-GA refactor had cut it, leaving the
+        # fewshot store loaded but never queried. Threshold-gated so off-topic
+        # turns get nothing (e.g. an emo-only corpus won't surface on a happy
+        # turn). corrected_speech is real human text; we anchor cadence only.
+        if self.fewshot_retriever is not None:
+            try:
+                query_text = self._last_inner_thought_for(recipient_key) or user_input
+                anchors = await self.fewshot_retriever.retrieve(
+                    query_text=query_text, recipient_key=recipient_key,
+                    k=4, threshold=0.5)
+                block = self._render_fewshots_as_text(anchors)
+                if block:
+                    system_prompt = f"{system_prompt}\n\n{block}"
+                    print(f"[fewshot] {len(anchors)} voice anchors injected "
+                          f"(q={query_text[:20]!r})", flush=True)
+            except Exception as e:
+                print(f"[fewshot] retrieve failed (non-fatal): {e}")
+
         # Append the current user turn, prepending the per-turn focus reminder
         # (current real time + the utterance Aria just made). The pure-GA
         # refactor dropped this from the reactive path, which is why Aria lost
@@ -510,6 +530,23 @@ class ConversationEngine:
         messages.append(user_msg)
 
         return system_prompt, messages
+
+    def _render_fewshots_as_text(self, samples: list) -> str:
+        """Render retrieved real-corpus lines as a voice-cadence reference block.
+
+        We anchor on RHYTHM/口气 (碎句/省主语/语气词), not content — a text
+        block ("here's how you talk") suits that better than user/assistant
+        pairs, and avoids the model reading a thread-title context as a real
+        user turn."""
+        lines = [s.corrected_speech for s in samples if s.corrected_speech.strip()]
+        if not lines:
+            return ""
+        body = "\n".join(f"- {ln}" for ln in lines)
+        return (
+            "## 你平时说话的语感（真实示例 —— 学这个**节奏/口气/碎句感**，"
+            "别照搬内容，别当台词）\n"
+            f"{body}"
+        )
 
     def _build_focus_reminder(self, last_interaction_time: datetime | None) -> str | None:
         """Build the per-turn `<system-reminder>`: current real time + the
