@@ -26,6 +26,7 @@ from lingxi.facts.retriever import FactQuery, FactRetriever
 
 
 _REGISTER_HINT = {
+    "light":     "状态：闲聊打趣——跟对方一个分量。他随口你随口，搭个梗、应一声、顺一句就够；这种轻松话停在轻松，是这一档的常态。",
     "warm":      "状态：温暖好奇——自然投入，听到具体的细节会反应。",
     "curt":      "状态：curt（不太想多聊）——短一句够，按当下状态写多长。",
     "curious":   "状态：curious（被勾起兴趣）——会接着问一个具体细节。",

@@ -37,7 +37,14 @@ class StateDigest:
 _PROMPT = """你在替 Aria 做对话调度决策。看完所有 context，决定：
 
 1. engage_level（0-1）：这一轮想投入多少
-2. register：warm | curt | curious | withdrawn | flustered
+2. register：这一轮用什么状态接——**跟对方的分量走**
+   - light：对方在闲聊/打趣/随口一句（"终于周五了""脑子空空""今天好困""在摸鱼"）——轻松搭一句，一个分量
+   - warm：对方在认真说一件具体的事、在分享、值得投入地接
+   - curious：被某个具体细节勾起兴趣，想追问那个细节
+   - curt：不太想多聊，短一句
+   - withdrawn：心里压着事，沉默/一两字
+   - flustered：被戳到/被看穿，节奏乱
+   多数日常其实是 **light**：对方随口的累/困/周五/吐槽，配 light，不是 warm。warm 留给他真的在认真讲一件事的时候。
 3. fact_queries：让 renderer 拉哪些事实进 prompt
 4. **topic_anchor**：用户**真正**在追问什么——捕捉话题的**具体角度/潜台词**，不是复述表层问句。
    例：用户连续几轮在追问"喜欢的事变工作后还剩几分喜欢"，再问"你自己呢"——落点是"你的热情是否被职业化稀释了"，**不是**"用户问 Aria 对工作的感悟"。

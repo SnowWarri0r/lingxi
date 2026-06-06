@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-VALID_REGISTERS = {"warm", "curt", "curious", "withdrawn", "flustered"}
+VALID_REGISTERS = {"light", "warm", "curt", "curious", "withdrawn", "flustered"}
 
 
 @dataclass
