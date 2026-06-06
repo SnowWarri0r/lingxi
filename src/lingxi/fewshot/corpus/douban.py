@@ -14,7 +14,6 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
 _TOPIC_URL = "https://www.douban.com/group/topic/{tid}/"
 
 _TITLE = re.compile(r"<title>(.*?)</title>", re.S)
-_OP = re.compile(r'<div class="topic-richtext">(.*?)</div>', re.S)
 _REPLY = re.compile(
     r'<div class="reply-content">\s*<div class="markdown">(.*?)</div>', re.S)
 _TAGS = re.compile(r"<[^>]+>")
@@ -32,14 +31,14 @@ def _strip(html: str) -> str:
     return re.sub(r"\s+", " ", _TAGS.sub(" ", html)).strip()
 
 
-def parse_topic(html: str) -> tuple[str, str, list[str]]:
-    """Return (title, op_text, replies). Replies tag-stripped + deduped,
-    order preserved."""
+def parse_topic(html: str) -> tuple[str, list[str]]:
+    """Return (title, replies). Replies are tag-stripped + deduped, order
+    preserved. The thread title is the real context label used downstream; the
+    OP body is intentionally not extracted (nested markup makes it unreliable
+    and the builder keys context off the title)."""
     tm = _TITLE.search(html)
     title = _strip(tm.group(1)) if tm else ""
     title = re.split(r"\s*[-|]\s*", title)[0].strip()
-    om = _OP.search(html)
-    op = _strip(om.group(1)) if om else ""
     seen: set[str] = set()
     replies: list[str] = []
     for block in _REPLY.findall(html):
@@ -47,7 +46,7 @@ def parse_topic(html: str) -> tuple[str, str, list[str]]:
         if text and text not in seen:
             seen.add(text)
             replies.append(text)
-    return title, op, replies
+    return title, replies
 
 
 async def fetch_topic(
