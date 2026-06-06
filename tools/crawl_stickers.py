@@ -56,21 +56,27 @@ async def main() -> None:
 
     provider = await _build_provider()
     added = 0
+    failed = 0
     for item in downloaded:
-        tags = await caption_image(provider, item["file_path"])
-        ok = await store.add(Sticker(
-            file_path=item["file_path"],
-            source_url=item["source_url"],
-            content_hash=item["content_hash"],
-            caption=tags["caption"],
-            emotion=tags["emotion"],
-            tags=tags["tags"],
-            when_to_use=tags["when_to_use"],
-        ))
+        try:
+            tags = await caption_image(provider, item["file_path"])
+            ok = await store.add(Sticker(
+                file_path=item["file_path"],
+                source_url=item["source_url"],
+                content_hash=item["content_hash"],
+                caption=tags["caption"],
+                emotion=tags["emotion"],
+                tags=tags["tags"],
+                when_to_use=tags["when_to_use"],
+            ))
+        except Exception as e:
+            failed += 1
+            print(f"  [!] caption/store failed for {item['file_path']}: {e}")
+            continue
         if ok:
             added += 1
         print(f"  [{'+' if ok else 'dup'}] {tags['caption']!r} {tags['tags']}")
-    print(f"Done. {added} new stickers captioned & stored in {DB_PATH}")
+    print(f"Done. {added} new stickers stored, {failed} failed, in {DB_PATH}")
 
 
 async def _build_provider():
