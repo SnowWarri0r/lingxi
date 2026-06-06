@@ -3,10 +3,9 @@
 Pipeline: collect image URLs -> download+dedup (crawler) -> caption (vision LLM)
 -> store (StickerStore). Run manually, NOT part of the serving loop.
 
-The site-specific URL collection (keyword -> image URLs) is intentionally a
-small, swappable function below. SP1 ships with a SEED_URLS fallback so the
-library can be built without committing to a specific site's scraping rules;
-fill `collect_urls` with a real source when one is validated.
+URL collection scrapes doutula.com (斗图啦) search pages for emotion stickers
+by keyword. Any URLs placed in SEED_URLS are also included, so you can hand-seed
+specific stickers without scraping. Personal-use / low-volume only.
 
 Usage:
     .venv/bin/python tools/crawl_stickers.py
@@ -14,7 +13,11 @@ Usage:
 
 import asyncio
 import os
+import re
+import urllib.parse
 from pathlib import Path
+
+import httpx
 
 from lingxi.stickers.crawler import download_images
 from lingxi.stickers.captioner import caption_image
@@ -22,22 +25,88 @@ from lingxi.stickers.store import StickerStore
 from lingxi.stickers.models import Sticker
 
 
-# Replace with real source scraping once a site is validated. Until then, drop
-# direct image URLs (or hand-place files and skip crawling) here.
+# Optional hand-seeded direct image URLs, merged with the scraped ones.
 SEED_URLS: list[str] = [
+]
+
+# Emotion/reaction keywords. doutula's search is single-page per keyword
+# (~70 distinct stickers each; the &page param is ignored), so volume comes
+# from breadth of keywords, not paging.
+STICKER_KEYWORDS: list[str] = [
+    "开心", "无语", "委屈", "生气", "害怕",
+    "惊讶", "得意", "期待", "哭", "尴尬",
+    "笑哭", "摸鱼", "好奇", "困", "谢谢",
 ]
 
 DATA_DIR = os.environ.get("MEMORY_DATA_DIR", "./data/memory")
 IMG_DIR = Path(DATA_DIR).parent / "stickers" / "img"
 DB_PATH = Path(DATA_DIR).parent / "stickers" / "stickers.db"
 
+_DOUTULA_SEARCH = "https://www.doutula.com/search?keyword={kw}"
+_DOUTULA_CDN = "img.doutupk.com"  # primary CDN; OSS backup is byte-identical
+_DATA_ORIGINAL = re.compile(r'data-original="([^"]+)"')
+_SCRAPE_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+    ),
+    "Referer": "https://www.doutula.com/",
+}
+
+
+async def _scrape_doutula(
+    keywords: list[str], per_keyword: int = 40, delay: float = 1.5,
+) -> list[str]:
+    """Scrape doutula.com search pages for emotion sticker image URLs.
+
+    Extracts the lazy-load `data-original` image URLs (primary CDN only — the
+    OSS backup is byte-identical and would dedup anyway). verify=False because
+    doutula serves an expired TLS cert; we only read public HTML.
+    """
+    seen_basename: set[str] = set()
+    out: list[str] = []
+    async with httpx.AsyncClient(
+        timeout=25, follow_redirects=True, verify=False, headers=_SCRAPE_HEADERS
+    ) as client:
+        for i, kw in enumerate(keywords):
+            if i > 0 and delay > 0:
+                await asyncio.sleep(delay)
+            url = _DOUTULA_SEARCH.format(kw=urllib.parse.quote(kw))
+            try:
+                resp = await client.get(url)
+                resp.raise_for_status()
+            except Exception as e:  # noqa: BLE001 — skip a bad keyword, keep going
+                print(f"[collect] keyword {kw!r} failed: {e}")
+                continue
+            count = 0
+            for img_url in _DATA_ORIGINAL.findall(resp.text):
+                if not img_url or img_url.endswith("null") or "loader.gif" in img_url:
+                    continue
+                if _DOUTULA_CDN not in img_url:  # skip OSS backup (identical bytes)
+                    continue
+                basename = img_url.rsplit("/", 1)[-1]
+                if basename in seen_basename:
+                    continue
+                seen_basename.add(basename)
+                out.append(img_url)
+                count += 1
+                if per_keyword and count >= per_keyword:
+                    break
+            print(f"[collect] {kw}: +{count} (total {len(out)})")
+    return out
+
 
 async def collect_urls() -> list[str]:
-    """Site-specific URL collection. Returns image URLs to download.
-
-    SP1 default: SEED_URLS. Fill this with real scraping when a target site is
-    chosen and verified."""
-    return SEED_URLS
+    """Return image URLs to download: hand-seeded SEED_URLS + scraped doutula."""
+    urls = list(SEED_URLS)
+    urls.extend(await _scrape_doutula(STICKER_KEYWORDS))
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            deduped.append(u)
+    return deduped
 
 
 async def main() -> None:
