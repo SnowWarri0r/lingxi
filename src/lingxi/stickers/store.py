@@ -125,11 +125,25 @@ class StickerStore:
         return _row_to_sticker(row) if row else None
 
     async def search(self, query: str, k: int = 5) -> list[Sticker]:
-        """FTS5 MATCH over caption/tags/emotion/when_to_use. Queries shorter
-        than 3 chars fall back to a LIKE scan (trigram needs 3-char tokens)."""
+        """Find stickers by freeform query.
+
+        Two passes: (1) a precise pass — FTS5 phrase MATCH for >=3-char queries,
+        LIKE for shorter ones; (2) if that finds nothing, a recall pass that ORs
+        the query's 2-char sliding windows via LIKE. CJK has no word boundaries,
+        so the bigram windows approximate segmentation: "摸鱼累了" then still
+        finds a sticker tagged "摸鱼". A roughly-relevant sticker beats none for
+        a picker that randomly selects among the results.
+        """
         query = (query or "").strip()
         if not query:
             return []
+        hits = await self._search_precise(query, k)
+        if hits:
+            return hits
+        return await self._search_windows(query, k)
+
+    async def _search_precise(self, query: str, k: int) -> list[Sticker]:
+        """Precise pass: LIKE for <3-char queries, FTS5 phrase MATCH otherwise."""
         if len(query) < 3:
             pattern = f"%{query}%"
             sql = (
@@ -171,4 +185,39 @@ class StickerStore:
                 return rows
 
             rows = await asyncio.to_thread(_read)
+        return [_row_to_sticker(r) for r in rows]
+
+    async def _search_windows(self, query: str, k: int) -> list[Sticker]:
+        """Recall pass: OR the 2-char sliding windows of the query via LIKE."""
+        if len(query) >= 2:
+            windows: list[str] = []
+            for i in range(len(query) - 1):
+                w = query[i:i + 2]
+                if w not in windows:
+                    windows.append(w)
+        else:
+            windows = [query]
+        if not windows:
+            return []
+        clauses: list[str] = []
+        params: list = []
+        for w in windows:
+            p = f"%{w}%"
+            clauses.append(
+                "(caption LIKE ? OR tags_json LIKE ? "
+                "OR emotion LIKE ? OR when_to_use LIKE ?)")
+            params.extend([p, p, p, p])
+        sql = (
+            "SELECT * FROM stickers WHERE " + " OR ".join(clauses) +
+            " ORDER BY created_at DESC LIMIT ?"
+        )
+        params.append(k)
+
+        def _read():
+            c = self._conn()
+            rows = c.execute(sql, params).fetchall()
+            c.close()
+            return rows
+
+        rows = await asyncio.to_thread(_read)
         return [_row_to_sticker(r) for r in rows]
