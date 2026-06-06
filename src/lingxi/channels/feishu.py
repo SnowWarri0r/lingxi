@@ -300,7 +300,6 @@ class FeishuBot(OutboundChannel):
         self._channel_registry.register(self)
         self._proactive_scheduler: ProactiveScheduler | None = None
         self._world_scheduler = None  # WorldScheduler — started below
-        self._social_scheduler = None  # SocialScheduler — started below
 
     @property
     def channel_name(self) -> str:
@@ -362,18 +361,11 @@ class FeishuBot(OutboundChannel):
         loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
         loop_thread.start()
 
-        # Shared data_dir for proactive + social schedulers
+        # Shared data_dir for proactive + world schedulers
         data_dir = (
             getattr(self.engine.memory, "data_dir", None)
             or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
         )
-
-        # Build share_intent_store early so both ProactiveScheduler and
-        # SocialPromoter share the same queue (promoter writes, proactive reads).
-        _share_intent_store = None
-        if getattr(self.engine, "life_writer", None) is not None:
-            from lingxi.proactive.share_intent import ShareIntentStore
-            _share_intent_store = ShareIntentStore(data_dir)
 
         # Start proactive scheduler on our dedicated loop
         if self._proactive_config.enabled and self.engine.interaction_tracker:
@@ -385,7 +377,6 @@ class FeishuBot(OutboundChannel):
                 channel_registry=self._channel_registry,
                 engine=self.engine,
                 data_dir=str(data_dir),
-                share_intent_store=_share_intent_store,
                 fact_retriever=getattr(self.engine, "fact_retriever", None),
             )
             asyncio.run_coroutine_threadsafe(
@@ -413,42 +404,6 @@ class FeishuBot(OutboundChannel):
             )
             asyncio.run_coroutine_threadsafe(
                 self._world_scheduler.start(), self._loop
-            )
-
-        # Social scheduler — generates NPC events on cron ticks so the
-        # "身边的人" block has fresh material. Daytime-only (8-22, every 2h).
-        # Promoter pushes significance≥0.6 events to Aria's facts store +
-        # ShareIntentStore so the proactive opener can surface them.
-        if (
-            getattr(self.engine, "social_graph", None) is not None
-            and getattr(self.engine, "social_store", None) is not None
-            and getattr(self.engine.social_graph, "npcs", None)  # skip when NPC roster empty
-        ):
-            from lingxi.social.promoter import SocialPromoter
-            from lingxi.social.scheduler import SocialScheduler
-
-            promoter_hook = None
-            if _share_intent_store is not None:
-                # Reuse the same ShareIntentStore instance created above so
-                # promoter writes and proactive reads share one queue file.
-                promoter = SocialPromoter(
-                    life_writer=self.engine.life_writer,
-                    share_intent_store=_share_intent_store,
-                    social_store=self.engine.social_store,
-                )
-                promoter_hook = promoter.maybe_promote
-            self._social_scheduler = SocialScheduler(
-                llm=self.engine.llm,
-                graph=self.engine.social_graph,
-                store=self.engine.social_store,
-                on_event_written=promoter_hook,
-                npc_writer=self.engine.npc_writer,
-                life_writer=getattr(self.engine, "life_writer", None),
-                retriever=getattr(self.engine, "fact_retriever", None),
-                fact_retriever=getattr(self.engine, "fact_retriever", None),
-            )
-            asyncio.run_coroutine_threadsafe(
-                self._social_scheduler.start(), self._loop
             )
 
         # Plan executor tick (every 30min) + morning planner (daily 7am).
@@ -635,13 +590,6 @@ class FeishuBot(OutboundChannel):
             print(f"[feishu] card action handler failed: {e}\n{traceback.format_exc()}", flush=True)
             return P2CardActionTriggerResponse({})
 
-    def _npc_registry(self):
-        """Return the list of NPC objects from the engine's social_graph (may be empty)."""
-        graph = getattr(self.engine, "social_graph", None)
-        if graph is None:
-            return []
-        return list(graph.npcs)
-
     async def _start_plan_loops(self) -> None:
         """Start DailyPlanner morning tick + PlanExecutor 30-min tick.
 
@@ -684,12 +632,6 @@ class FeishuBot(OutboundChannel):
                         await daily_planner.plan_aria()
                 except Exception as e:
                     print(f"[planner] morning tick failed: {e}", flush=True)
-                for npc in self._npc_registry():
-                    try:
-                        if daily_planner is not None:
-                            await daily_planner.plan_npc(npc.id, display_name=npc.name)
-                    except Exception as e:
-                        print(f"[planner] NPC {npc.id} plan failed: {e}", flush=True)
 
         async def _ensure_today_plan() -> None:
             if daily_planner is None or facts_store is None:
@@ -703,16 +645,6 @@ class FeishuBot(OutboundChannel):
                     await daily_planner.plan_aria()
             except Exception as e:
                 print(f"[planner] startup plan failed: {e}", flush=True)
-            for npc in self._npc_registry():
-                try:
-                    npc_plans = await facts_store.query(
-                        subject=f"npc:{npc.id}", type=FactType.PLAN,
-                        since=today_start, limit=1,
-                    )
-                    if not npc_plans:
-                        await daily_planner.plan_npc(npc.id, display_name=npc.name)
-                except Exception as e:
-                    print(f"[planner] startup plan_npc({npc.id}) failed: {e}", flush=True)
 
         asyncio.ensure_future(_ensure_today_plan())
         asyncio.ensure_future(_executor_loop())
