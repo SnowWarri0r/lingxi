@@ -227,6 +227,11 @@ async def create_engine(
 
     facts_store = FactStore(Path(data_dir).parent / "facts.db")
     await facts_store.init()
+
+    from lingxi.stickers.store import StickerStore
+    sticker_store = StickerStore(Path(data_dir).parent / "stickers" / "stickers.db")
+    await sticker_store.init()
+
     fact_retriever = FactRetriever(facts_store)
     importance_scorer = ImportanceScorer(llm_provider)
 
@@ -293,6 +298,7 @@ async def create_engine(
         user_statement_writer=user_statement_writer,
         core_memory_writer=core_memory_writer,
         plan_executor=plan_executor,
+        sticker_store=sticker_store,
     )
     # Expose daily_planner on engine so the channel's start() can schedule loops.
     engine.daily_planner = daily_planner
