@@ -883,8 +883,9 @@ class FeishuBot(OutboundChannel):
         raised, so a sticker problem never breaks the turn.
         """
         from pathlib import Path as _Path
+        path = _Path(file_path)
         try:
-            data = _Path(file_path).read_bytes()
+            data = path.read_bytes()
         except Exception as e:
             print(f"[sticker] read failed {file_path}: {e}", flush=True)
             return
@@ -899,13 +900,16 @@ class FeishuBot(OutboundChannel):
                     f"{FEISHU_BASE}/im/v1/images",
                     headers=headers,
                     data={"image_type": "message"},
-                    files={"image": (_Path(file_path).name, data)},
+                    files={"image": (path.name, data)},
                 )
                 up_data = up.json()
                 if up_data.get("code") != 0:
                     print(f"[sticker] upload failed: {up_data}", flush=True)
                     return
-                image_key = up_data["data"]["image_key"]
+                image_key = up_data.get("data", {}).get("image_key")
+                if not image_key:
+                    print(f"[sticker] upload ok but no image_key: {up_data}", flush=True)
+                    return
 
                 send = await client.post(
                     f"{FEISHU_BASE}/im/v1/messages?receive_id_type=chat_id",
@@ -1340,8 +1344,10 @@ class FeishuBot(OutboundChannel):
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
 
-            # Send the sticker as a separate image message after the text.
-            if pending_sticker:
+            # Send the sticker as a separate image message after the text —
+            # but not on an errored turn (a reaction after a failure message
+            # reads wrong).
+            if pending_sticker and stream_error is None:
                 try:
                     await self._send_image(chat_id, pending_sticker)
                 except Exception as e:
