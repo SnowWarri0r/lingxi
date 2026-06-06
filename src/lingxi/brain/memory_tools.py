@@ -66,6 +66,18 @@ MEMORY_TOOLS = [
             "required": ["query"],
         },
     },
+    {
+        "name": "send_sticker",
+        "description": (
+            "发一张表情包配合你这条消息的情绪。query 用你自己的话描述想发的表情"
+            "(如 '无语'、'笑哭'、'摸鱼累了'、'好奇')。偶尔发、贴当下情绪才发,别每句都甩。"
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    },
 ]
 
 TOOL_NAMES = {t["name"] for t in MEMORY_TOOLS}
