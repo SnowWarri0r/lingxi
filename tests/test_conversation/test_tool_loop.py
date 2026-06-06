@@ -173,3 +173,60 @@ async def test_stream_events_runs_tool_loop(tmp_path):
     assert done and "流式回复" in done[-1].content
     block = await store.get_core_block("user:feishu:x")
     assert block is not None and block.content.endswith("流式记一笔")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_send_sticker_sets_pending(tmp_path):
+    from lingxi.stickers.store import StickerStore
+    from lingxi.stickers.models import Sticker
+    eng, _ = await _engine(tmp_path)
+    sstore = StickerStore(Path(tmp_path) / "stickers.db")
+    await sstore.init()
+    await sstore.add(Sticker(
+        file_path="/img/wuyu.png", content_hash="h1",
+        caption="无语翻白眼", emotion="无语", tags=["无语", "翻白眼"]))
+    eng.sticker_store = sstore
+
+    out = await eng._dispatch_memory_tool(
+        "send_sticker", {"query": "无语"}, "feishu:x")
+    assert "选好了" in out
+    assert eng._pending_sticker == "/img/wuyu.png"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_send_sticker_once_per_turn(tmp_path):
+    from lingxi.stickers.store import StickerStore
+    from lingxi.stickers.models import Sticker
+    eng, _ = await _engine(tmp_path)
+    sstore = StickerStore(Path(tmp_path) / "stickers.db")
+    await sstore.init()
+    await sstore.add(Sticker(
+        file_path="/img/a.png", content_hash="h1", caption="无语", tags=["无语"]))
+    eng.sticker_store = sstore
+
+    first = await eng._dispatch_memory_tool("send_sticker", {"query": "无语"}, "feishu:x")
+    second = await eng._dispatch_memory_tool("send_sticker", {"query": "无语"}, "feishu:x")
+    assert "选好了" in first
+    assert "已经发过" in second
+
+
+@pytest.mark.asyncio
+async def test_dispatch_send_sticker_no_store(tmp_path):
+    eng, _ = await _engine(tmp_path)
+    out = await eng._dispatch_memory_tool(
+        "send_sticker", {"query": "无语"}, "feishu:x")
+    assert "未启用" in out
+    assert eng._pending_sticker is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_send_sticker_no_hit(tmp_path):
+    from lingxi.stickers.store import StickerStore
+    eng, _ = await _engine(tmp_path)
+    sstore = StickerStore(Path(tmp_path) / "stickers.db")
+    await sstore.init()
+    eng.sticker_store = sstore
+    out = await eng._dispatch_memory_tool(
+        "send_sticker", {"query": "无语"}, "feishu:x")
+    assert "没找到" in out
+    assert eng._pending_sticker is None
