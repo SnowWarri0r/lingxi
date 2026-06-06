@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -166,6 +165,11 @@ class ConversationEngine:
         # start in _prepare_turn_v2; read at turn end to emit (wired by the
         # streaming path in a follow-on task).
         self._pending_stickers: dict[str, str | None] = {}
+        # Candidates surfaced by search_stickers this turn, per recipient:
+        # {recipient_key: {sticker_id: file_path}}. send_sticker can only send
+        # an id the agent actually searched (it must read the candidate's
+        # emotion/when_to_use first), and judges fit itself.
+        self._sticker_candidates: dict[str, dict[str, str]] = {}
 
         # Per-recipient locks: serialize reactive turns for the SAME recipient
         # so two messages from user A can't interleave through the engine's
@@ -269,18 +273,31 @@ class ConversationEngine:
                     supersedes=current.id if current else None)
                 return "ok"
 
-            if name == "send_sticker":
-                if self._pending_stickers.get(recipient_key) is not None:
-                    return "本轮已经发过一张表情了"
+            if name == "search_stickers":
                 if self.sticker_store is None:
                     return "（表情库未启用）"
                 query = args.get("query", "")
-                hits = await self.sticker_store.search(query, k=5)
+                hits = await self.sticker_store.search(query, k=6)
                 if not hits:
-                    return f"没找到合适的表情（{query}）"
-                chosen = random.choice(hits)
-                self._pending_stickers[recipient_key] = chosen.file_path
-                return f"选好了:{chosen.caption}（会发出去）"
+                    return "（没找到相关表情,这轮就别发了）"
+                self._sticker_candidates[recipient_key] = {
+                    h.id: h.file_path for h in hits}
+                lines = [
+                    f"[{h.id}] {h.caption}（{h.emotion}）— {h.when_to_use}"
+                    for h in hits]
+                return (
+                    "候选表情(挑一张真的贴当下气氛的,用 send_sticker 发它的 id;"
+                    "都不合适就别发):\n" + "\n".join(lines))
+
+            if name == "send_sticker":
+                if self._pending_stickers.get(recipient_key) is not None:
+                    return "本轮已经发过一张表情了"
+                cands = self._sticker_candidates.get(recipient_key, {})
+                sid = args.get("sticker_id", "")
+                if sid not in cands:
+                    return "这个 id 不在候选里,先用 search_stickers 看看有哪些,再发里面的 id"
+                self._pending_stickers[recipient_key] = cands[sid]
+                return "好,这张会发出去"
 
             if name == "conversation_search":
                 turns = await self.memory.short_term.snapshot_for_recipient(recipient_key)
@@ -383,6 +400,7 @@ class ConversationEngine:
         # Fresh turn: clear any sticker the previous turn selected for this
         # recipient.
         self._pending_stickers[recipient_key] = None
+        self._sticker_candidates[recipient_key] = {}
         if recipient_key:
             await self.memory.short_term.switch_recipient(recipient_key)
 
