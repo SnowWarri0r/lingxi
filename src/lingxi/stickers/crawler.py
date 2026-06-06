@@ -29,7 +29,6 @@ _EXT_BY_MAGIC = [
     (b"\x89PNG", ".png"),
     (b"\xff\xd8\xff", ".jpg"),
     (b"GIF8", ".gif"),
-    (b"RIFF", ".webp"),  # RIFF....WEBP
 ]
 
 
@@ -37,8 +36,13 @@ def _guess_ext(data: bytes, url: str) -> str:
     for magic, ext in _EXT_BY_MAGIC:
         if data.startswith(magic):
             return ext
-    for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
-        if url.lower().endswith(ext):
+    # WebP is a RIFF container — verify the WEBP fourcc, since RIFF also
+    # heads wav/avi.
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    for suffix, ext in ((".png", ".png"), (".jpg", ".jpg"), (".jpeg", ".jpg"),
+                        (".gif", ".gif"), (".webp", ".webp")):
+        if url.lower().endswith(suffix):
             return ext
     return ".png"
 
@@ -56,6 +60,8 @@ async def download_images(
     Returns a list of {file_path, source_url, content_hash} for newly stored
     images. Failed fetches are skipped (logged), the sleep between requests is
     a politeness rate-limit.
+    `retries` is the number of EXTRA attempts after the first (retries=0 → one
+    attempt total). Both the inter-URL delay and inter-retry backoff use `delay`.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -76,7 +82,7 @@ async def download_images(
                     data = None
                 else:
                     await asyncio.sleep(delay)
-        if not data:
+        if data is None:
             continue
         h = hashlib.sha256(data).hexdigest()
         if h in seen:
