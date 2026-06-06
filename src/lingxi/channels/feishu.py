@@ -875,6 +875,53 @@ class FeishuBot(OutboundChannel):
                 },
             )
 
+    async def _send_image(self, chat_id: str, file_path: str) -> None:
+        """Upload a local image to Feishu and send it as an image message.
+
+        Two calls: POST /im/v1/images (multipart) -> image_key, then
+        POST /im/v1/messages with msg_type=image. Failures are logged, not
+        raised, so a sticker problem never breaks the turn.
+        """
+        from pathlib import Path as _Path
+        try:
+            data = _Path(file_path).read_bytes()
+        except Exception as e:
+            print(f"[sticker] read failed {file_path}: {e}", flush=True)
+            return
+
+        # Upload: multipart, no JSON Content-Type (httpx sets the boundary).
+        headers = self.token_mgr.headers()
+        headers = {k: v for k, v in headers.items()
+                   if k.lower() != "content-type"}
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                up = await client.post(
+                    f"{FEISHU_BASE}/im/v1/images",
+                    headers=headers,
+                    data={"image_type": "message"},
+                    files={"image": (_Path(file_path).name, data)},
+                )
+                up_data = up.json()
+                if up_data.get("code") != 0:
+                    print(f"[sticker] upload failed: {up_data}", flush=True)
+                    return
+                image_key = up_data["data"]["image_key"]
+
+                send = await client.post(
+                    f"{FEISHU_BASE}/im/v1/messages?receive_id_type=chat_id",
+                    headers=self.token_mgr.headers(),
+                    json={
+                        "receive_id": chat_id,
+                        "msg_type": "image",
+                        "content": json.dumps({"image_key": image_key}),
+                    },
+                )
+                send_data = send.json()
+                if send_data.get("code") != 0:
+                    print(f"[sticker] send failed: {send_data}", flush=True)
+        except Exception as e:
+            print(f"[sticker] _send_image error: {e}", flush=True)
+
     async def _send_static_card_async(self, chat_id: str, text: str) -> str:
         """Send a non-streaming card with the given text already baked in.
 
@@ -1181,6 +1228,7 @@ class FeishuBot(OutboundChannel):
             accumulated = ""
             last_update = 0.0
             turn_id: str | None = None
+            pending_sticker: str | None = None
 
             stream_error: Exception | None = None
             try:
@@ -1214,6 +1262,9 @@ class FeishuBot(OutboundChannel):
                             except Exception:
                                 pass
                             last_update = now
+
+                    elif event.type == "sticker":
+                        pending_sticker = event.content
 
                     elif event.type == "turn_id":
                         turn_id = event.content
@@ -1288,4 +1339,11 @@ class FeishuBot(OutboundChannel):
                         await card.append_elements(footer)
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
+
+            # Send the sticker as a separate image message after the text.
+            if pending_sticker:
+                try:
+                    await self._send_image(chat_id, pending_sticker)
+                except Exception as e:
+                    print(f"[feishu] sticker send failed: {e}", flush=True)
 
