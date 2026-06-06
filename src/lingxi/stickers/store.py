@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS stickers (
 
 CREATE VIRTUAL TABLE IF NOT EXISTS stickers_fts
     USING fts5(caption, tags, emotion, when_to_use,
-               content='stickers', content_rowid='rowid',
                tokenize='trigram');
 """
 
@@ -157,12 +156,17 @@ class StickerStore:
                 "ORDER BY bm25(stickers_fts) LIMIT ?"
             )
 
+            # Escape embedded double-quotes (double them) then wrap as a phrase
+            # literal so arbitrary user text is treated as a literal token
+            # sequence — FTS5 MATCH otherwise chokes on operators/punctuation.
+            safe_query = query.replace('"', '""')
+
             def _read():
                 c = self._conn()
-                # FTS5 MATCH chokes on bare punctuation/special chars; wrap the
-                # query as a quoted phrase so arbitrary user text is treated as
-                # a literal token sequence.
-                rows = c.execute(sql, (f'"{query}"', k)).fetchall()
+                try:
+                    rows = c.execute(sql, (f'"{safe_query}"', k)).fetchall()
+                except sqlite3.OperationalError:
+                    rows = []
                 c.close()
                 return rows
 
