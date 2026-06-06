@@ -67,3 +67,38 @@ async def test_search_with_double_quote_does_not_crash(tmp_path):
     # Should return [] gracefully, not raise OperationalError.
     hits = await s.search('引用"test', k=5)
     assert isinstance(hits, list)
+
+
+@pytest.mark.asyncio
+async def test_search_multiword_query_recalls_partial(tmp_path):
+    # The core SP1.1 fix: a multi-word query must still find a sticker tagged
+    # with one of its parts. "摸鱼累了" has no contiguous match, but the 摸鱼
+    # window should recall the 摸鱼 sticker.
+    s = await _store(tmp_path)
+    await s.add(Sticker(
+        file_path="/img/moyu.png", content_hash="hm",
+        caption="摸鱼", emotion="懒", tags=["摸鱼", "上班"],
+        when_to_use="上班划水"))
+    hits = await s.search("摸鱼累了", k=5)
+    assert any(h.caption == "摸鱼" for h in hits)
+
+
+@pytest.mark.asyncio
+async def test_search_precise_still_wins(tmp_path):
+    # When the precise pass finds something, the recall pass must not run /
+    # override it (precise hit is returned).
+    s = await _store(tmp_path)
+    await s.add(Sticker(
+        file_path="/img/wuyu.png", content_hash="hw",
+        caption="无语翻白眼", tags=["翻白眼"]))
+    hits = await s.search("翻白眼", k=5)
+    assert len(hits) >= 1
+    assert hits[0].caption == "无语翻白眼"
+
+
+@pytest.mark.asyncio
+async def test_search_no_match_returns_empty(tmp_path):
+    s = await _store(tmp_path)
+    await s.add(Sticker(file_path="/img/a.png", content_hash="h1", caption="开心"))
+    hits = await s.search("完全不相关的查询内容", k=5)
+    assert hits == []
