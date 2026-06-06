@@ -989,12 +989,9 @@ class FeishuBot(OutboundChannel):
             )
 
         if cmd == "/mood":
-            top = self.engine._emotion_state.top_k(k=5)
-            lines = [f"💭 心情: {self.engine._current_mood}"]
-            for name, val in top:
-                bar = "█" * int(val * 10)
-                lines.append(f"  {name} {val:.2f} {bar}")
-            return "\n".join(lines)
+            # Emotion scalar was stripped (pure GA: state IS the memory
+            # stream). No _emotion_state / _current_mood anymore.
+            return "💭 心情维度已移除（纯 GA：状态即记忆流，没有独立情绪标量了）"
 
         if cmd == "/memories":
             query = arg or None

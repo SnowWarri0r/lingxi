@@ -505,12 +505,9 @@ async def run_cli() -> None:
                 continue
 
             if user_input == "/mood":
-                top = engine._emotion_state.top_k(k=5)
-                print(f"\n[心情] {engine._current_mood}")
-                for name, val in top:
-                    bar = "█" * int(val * 20)
-                    print(f"   {name:6s} {val:.2f} {bar}")
-                print()
+                # Emotion scalar was stripped (pure GA: state IS the memory
+                # stream). No _emotion_state / _current_mood anymore.
+                print("\n[心情] 已移除（纯 GA：状态即记忆流，无独立情绪标量）\n")
                 continue
 
             if user_input.startswith("/memories"):
