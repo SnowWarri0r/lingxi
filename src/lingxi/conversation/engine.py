@@ -160,9 +160,12 @@ class ConversationEngine:
         self._relationship_level: int = 1
         self._current_recipient_key: str | None = None
         self._last_response_text: str = ""
-        # Sticker chosen by the agent this turn (1/turn cap). Reset at the
-        # start of every turn in _prepare_turn_v2; emitted at turn end.
-        self._pending_sticker: str | None = None
+        # Sticker the agent chose this turn, keyed by recipient_key (1/turn
+        # cap). Per-recipient (not a singleton field) so concurrent turns for
+        # different chats can't overwrite each other's choice. Reset at turn
+        # start in _prepare_turn_v2; read at turn end to emit (wired by the
+        # streaming path in a follow-on task).
+        self._pending_stickers: dict[str, str | None] = {}
 
         # Per-recipient locks: serialize reactive turns for the SAME recipient
         # so two messages from user A can't interleave through the engine's
@@ -267,7 +270,7 @@ class ConversationEngine:
                 return "ok"
 
             if name == "send_sticker":
-                if self._pending_sticker is not None:
+                if self._pending_stickers.get(recipient_key) is not None:
                     return "本轮已经发过一张表情了"
                 if self.sticker_store is None:
                     return "（表情库未启用）"
@@ -276,7 +279,7 @@ class ConversationEngine:
                 if not hits:
                     return f"没找到合适的表情（{query}）"
                 chosen = random.choice(hits)
-                self._pending_sticker = chosen.file_path
+                self._pending_stickers[recipient_key] = chosen.file_path
                 return f"选好了:{chosen.caption}（会发出去）"
 
             if name == "conversation_search":
@@ -377,8 +380,9 @@ class ConversationEngine:
         # buffer + relationship level, and record the interaction. (Emotion
         # state was stripped — pure GA, the agent's state IS its memory stream.)
         self._current_recipient_key = recipient_key
-        # Fresh turn: clear any sticker the previous turn selected.
-        self._pending_sticker = None
+        # Fresh turn: clear any sticker the previous turn selected for this
+        # recipient.
+        self._pending_stickers[recipient_key] = None
         if recipient_key:
             await self.memory.short_term.switch_recipient(recipient_key)
 
