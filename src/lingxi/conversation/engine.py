@@ -121,11 +121,8 @@ class ConversationEngine:
         fewshot_store: FewShotStore | None = None,
         annotation_store: AnnotationStore | None = None,
         fewshot_retriever: FewShotRetriever | None = None,
-        social_graph=None,
-        social_store=None,
         fact_retriever=None,
         life_writer=None,
-        npc_writer=None,
         inference_writer=None,
         world_writer=None,
         user_statement_writer=None,
@@ -136,11 +133,8 @@ class ConversationEngine:
         self.persona = persona
         self.llm = llm_provider
         self.memory = memory_manager
-        self.social_graph = social_graph
-        self.social_store = social_store
         self.fact_retriever = fact_retriever
         self.life_writer = life_writer
-        self.npc_writer = npc_writer
         self.inference_writer = inference_writer
         self.world_writer = world_writer
         self.user_statement_writer = user_statement_writer
