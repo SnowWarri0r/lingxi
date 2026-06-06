@@ -853,7 +853,13 @@ class ConversationEngine:
         )
 
         if self.persona.compression.enabled:
-            # Two-call streaming: think (non-stream) then compress (stream)
+            # Two-call streaming: think (non-stream) then compress (stream).
+            # NOTE: _run_think does NOT pass tools, so memory tools AND
+            # send_sticker cannot fire on this branch. Aria runs with
+            # compression disabled (the else branch below, which uses the
+            # agentic tool loop), so stickers work on the live path. If you
+            # ever enable compression on a sticker-using persona, wire tools
+            # into _run_think or stickers/memory-edits will silently no-op here.
             try:
                 think_raw = await self._run_think(system_prompt, messages)
                 output_pre = self._process_response(think_raw)
