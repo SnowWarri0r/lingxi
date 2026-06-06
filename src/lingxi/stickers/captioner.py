@@ -1,0 +1,73 @@
+"""Vision LLM tagging for stickers.
+
+caption_image reads one image, asks the provider to describe it as a sticker,
+and parses a JSON tag blob out of the reply. Parsing is defensive — a reply
+that isn't valid JSON yields empty fields rather than raising, so a single bad
+image can't abort a batch crawl.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import re
+from pathlib import Path
+
+
+_PROMPT = (
+    "这是一张聊天表情包。用 JSON 描述它,方便以后按情绪检索。"
+    "只输出 JSON,字段:"
+    '{"caption":"≤12字概括画面/文字","emotion":"一个情绪词",'
+    '"tags":["3-6个检索关键词"],"when_to_use":"一句话说什么场合发"}'
+)
+
+_MEDIA_BY_SUFFIX = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".webp": "image/webp",
+}
+
+
+def _media_type(path: Path) -> str:
+    return _MEDIA_BY_SUFFIX.get(path.suffix.lower(), "image/png")
+
+
+def _parse(text: str) -> dict:
+    """Extract the first {...} block and coerce to the expected shape."""
+    empty = {"caption": "", "emotion": "", "tags": [], "when_to_use": ""}
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        return empty
+    try:
+        data = json.loads(m.group(0))
+    except (json.JSONDecodeError, ValueError):
+        return empty
+    tags = data.get("tags", [])
+    if not isinstance(tags, list):
+        tags = []
+    return {
+        "caption": str(data.get("caption", "") or ""),
+        "emotion": str(data.get("emotion", "") or ""),
+        "tags": [str(t) for t in tags],
+        "when_to_use": str(data.get("when_to_use", "") or ""),
+    }
+
+
+async def caption_image(provider, image_path: str | Path) -> dict:
+    """Return {caption, emotion, tags, when_to_use} for one sticker image."""
+    path = Path(image_path)
+    data_b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "image", "source": {
+                "type": "base64",
+                "media_type": _media_type(path),
+                "data": data_b64,
+            }},
+            {"type": "text", "text": _PROMPT},
+        ],
+    }]
+    result = await provider.complete(
+        messages=messages, max_tokens=512, temperature=0.3,
+        _debug_purpose="sticker_caption")
+    return _parse(result.content)
