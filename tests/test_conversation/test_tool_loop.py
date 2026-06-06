@@ -230,3 +230,34 @@ async def test_dispatch_send_sticker_no_hit(tmp_path):
         "send_sticker", {"query": "无语"}, "feishu:x")
     assert "没找到" in out
     assert eng._pending_stickers.get("feishu:x") is None
+
+
+@pytest.mark.asyncio
+async def test_stream_events_emits_sticker(tmp_path):
+    from lingxi.stickers.store import StickerStore
+    from lingxi.stickers.models import Sticker
+    eng, _ = await _engine(tmp_path)
+    sstore = StickerStore(Path(tmp_path) / "stickers.db")
+    await sstore.init()
+    await sstore.add(Sticker(
+        file_path="/img/wuyu.png", content_hash="h1",
+        caption="无语", emotion="无语", tags=["无语"]))
+    eng.sticker_store = sstore
+
+    async def _fake_prep(ui, im, ch, rid):
+        eng._current_recipient_key = "feishu:x"
+        eng._pending_stickers["feishu:x"] = None
+        return "SYS", [{"role": "user", "content": ui}]
+    eng._prepare_turn_v2 = _fake_prep
+
+    eng.llm = _ScriptedLLM([
+        _toolcall("send_sticker", {"query": "无语"}),
+        _final("哈哈对啊"),
+    ])
+    events = [e async for e in eng.chat_stream_events(
+        "hi", channel="feishu", recipient_id="x")]
+    stickers = [e for e in events if e.type == "sticker"]
+    assert len(stickers) == 1
+    assert stickers[0].content == "/img/wuyu.png"
+    # cleared after emit
+    assert eng._pending_stickers.get("feishu:x") is None
