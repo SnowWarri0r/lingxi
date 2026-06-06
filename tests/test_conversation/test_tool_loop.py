@@ -190,7 +190,7 @@ async def test_dispatch_send_sticker_sets_pending(tmp_path):
     out = await eng._dispatch_memory_tool(
         "send_sticker", {"query": "无语"}, "feishu:x")
     assert "选好了" in out
-    assert eng._pending_sticker == "/img/wuyu.png"
+    assert eng._pending_stickers["feishu:x"] == "/img/wuyu.png"
 
 
 @pytest.mark.asyncio
@@ -216,7 +216,7 @@ async def test_dispatch_send_sticker_no_store(tmp_path):
     out = await eng._dispatch_memory_tool(
         "send_sticker", {"query": "无语"}, "feishu:x")
     assert "未启用" in out
-    assert eng._pending_sticker is None
+    assert eng._pending_stickers.get("feishu:x") is None
 
 
 @pytest.mark.asyncio
@@ -229,4 +229,4 @@ async def test_dispatch_send_sticker_no_hit(tmp_path):
     out = await eng._dispatch_memory_tool(
         "send_sticker", {"query": "无语"}, "feishu:x")
     assert "没找到" in out
-    assert eng._pending_sticker is None
+    assert eng._pending_stickers.get("feishu:x") is None
