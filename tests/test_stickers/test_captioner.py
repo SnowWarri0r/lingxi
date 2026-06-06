@@ -50,3 +50,37 @@ async def test_caption_image_bad_json_is_safe(tmp_path):
     result = await caption_image(prov, img)
     assert result["caption"] == ""
     assert result["tags"] == []
+
+
+@pytest.mark.asyncio
+async def test_caption_image_strips_code_fence(tmp_path):
+    prov = _FakeProvider(
+        '```json\n{"caption":"摸鱼","emotion":"懒","tags":["摸鱼"],'
+        '"when_to_use":"上班划水"}\n```')
+    img = _write_png(tmp_path)
+    result = await caption_image(prov, img)
+    assert result["caption"] == "摸鱼"
+    assert result["tags"] == ["摸鱼"]
+
+
+@pytest.mark.asyncio
+async def test_caption_image_json_list_is_safe(tmp_path):
+    # A bare JSON array parses fine but is not a dict → must return empty,
+    # not raise AttributeError.
+    prov = _FakeProvider('[{"caption":"x"}]')
+    img = _write_png(tmp_path)
+    result = await caption_image(prov, img)
+    assert result["caption"] == ""
+    assert result["tags"] == []
+
+
+@pytest.mark.asyncio
+async def test_caption_image_trailing_braces_ok(tmp_path):
+    # Prose with a flat JSON object followed by an empty {} must still parse
+    # the real object, not greedily span to the trailing braces.
+    prov = _FakeProvider(
+        '这是 {"caption":"无语","emotion":"无语","tags":["无语"],'
+        '"when_to_use":"离谱"} 备注 {}')
+    img = _write_png(tmp_path)
+    result = await caption_image(prov, img)
+    assert result["caption"] == "无语"
