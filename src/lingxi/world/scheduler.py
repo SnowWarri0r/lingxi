@@ -27,19 +27,17 @@ class WorldScheduler:
 
     def __init__(
         self,
-        api_key: str,
+        llm,
         *,
         morning_after_hour: int = 6,
         check_interval_minutes: int = 30,
-        model: str = "claude-sonnet-4-5",
         empty_retry_hours: float = 4.0,
         world_writer=None,
         fact_retriever=None,
     ):
-        self._api_key = api_key
+        self._llm = llm
         self._morning_after_hour = morning_after_hour
         self._check_interval = check_interval_minutes * 60
-        self._model = model
         self._empty_retry = timedelta(hours=empty_retry_hours)
         self._world_writer = world_writer
         self._fact_retriever = fact_retriever
@@ -106,7 +104,7 @@ class WorldScheduler:
         print(f"[world] no briefing for {today}, fetching...", flush=True)
 
         briefing = await fetch_daily_briefing(
-            self._api_key, target_date=today, model=self._model,
+            self._llm, target_date=today,
         )
 
         if self._world_writer is not None and briefing.items:
@@ -132,7 +130,7 @@ class WorldScheduler:
         """Manual trigger (for /world refresh-style commands or tests)."""
         today = date.today()
         briefing = await fetch_daily_briefing(
-            self._api_key, target_date=today, model=self._model,
+            self._llm, target_date=today,
         )
         if self._world_writer is not None and briefing.items:
             try:
