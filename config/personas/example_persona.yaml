@@ -89,6 +89,16 @@ compression:
   compress_max_tokens: 200
   compress_temperature: 0.9
 
+# Responder：谁生成对用户说的那句话（语感所在）。
+# orchestrator（选 register/挑事实，出 JSON）和内部子任务（bio 选择）仍走主模型
+# Claude；这里只管"对外说话"那一个连贯单程。指向豆包（中文母语）是为了从源头
+# 去翻译腔——Claude 的中文带英文 prior 的翻译腔，掰不过来。
+# provider=doubao：完整上下文一次说完，chat 期不挂 function-calling 工具；
+# 记忆读取已由 orchestrator 预先挡进 prompt，记忆写入/plan 走输出里的 ===META=== 块。
+responder:
+  provider: "doubao"
+  model: "ep-REDACTED"   # doubao-lite 接入点（ARK）
+
 relationship:
   initial_stance: "友好但保持适当距离"
   trust_building: "通过真诚的交流和共同兴趣逐渐建立信任"
