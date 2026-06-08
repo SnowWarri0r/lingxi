@@ -663,6 +663,38 @@ class ConversationEngine:
         self._responder_llm = self.llm
         return self._responder_llm
 
+    @staticmethod
+    def _to_openai_messages(messages: list[dict]) -> list[dict]:
+        """Convert Anthropic-format messages to OpenAI/ARK format.
+
+        History turns are plain strings (unchanged). The current user turn may
+        carry Anthropic multimodal blocks (image + text); doubao is multimodal
+        too, it just wants the OpenAI shape: image blocks become image_url with
+        a data: URI. This is what lets image turns ride the doubao responder
+        instead of being split off to Claude."""
+        out: list[dict] = []
+        for m in messages:
+            content = m.get("content")
+            if not isinstance(content, list):
+                out.append(m)
+                continue
+            parts: list[dict] = []
+            for block in content:
+                btype = block.get("type")
+                if btype == "text":
+                    parts.append({"type": "text", "text": block.get("text", "")})
+                elif btype == "image":
+                    src = block.get("source", {})
+                    mt = src.get("media_type", "image/png")
+                    data = src.get("data", "")
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mt};base64,{data}"},
+                    })
+                # tool_use / tool_result don't occur on the no-tool single-pass path
+            out.append({"role": m.get("role", "user"), "content": parts})
+        return out
+
     async def _generate_single_pass(
         self, system_prompt: str, messages: list[dict], *, purpose: str = "chat",
     ) -> str:
@@ -672,12 +704,13 @@ class ConversationEngine:
         Buffers the stream (META + clean_speech are global) and returns the
         full raw text. Retries once on empty generation (transient hiccup)."""
         llm = self._get_responder_llm()
+        oai_messages = self._to_openai_messages(messages)
         full = ""
         for _attempt in range(2):
             full = ""
             try:
                 async for chunk in llm.complete_stream(
-                    messages=messages,
+                    messages=oai_messages,
                     system=system_prompt,
                     temperature=self.persona.sampling.temperature,
                     top_p=self.persona.sampling.top_p,
@@ -877,10 +910,9 @@ class ConversationEngine:
             speech = await self._run_compress(inner_thought, user_input)
             output.speech = speech
             output.inner_thought = inner_thought
-        elif self._responder_is_external() and not images:
+        elif self._responder_is_external():
             # Single coherent pass on the external responder (doubao), no tools.
-            # Image turns fall through to the Claude path (ARK endpoint can't
-            # take Anthropic multimodal blocks).
+            # Multimodal turns ride doubao too (blocks converted to OpenAI form).
             raw = await self._generate_single_pass(
                 system_prompt, messages, purpose="chat_full_single_pass")
             output = self._process_response(raw)
@@ -1089,13 +1121,12 @@ class ConversationEngine:
             output = output_pre
             output.speech = cleaned
             output.inner_thought = inner_thought
-        elif self._responder_is_external() and not images:
+        elif self._responder_is_external():
             # Single coherent pass on the external responder (e.g. doubao):
             # full context in, prose + ===META=== out, NO chat-time tools.
             # Recall is front-loaded by the orchestrator; memory writes ride
-            # the META block. This is the live path for native-Chinese voice.
-            # Image turns fall through to the Claude path below (the ARK
-            # OpenAI endpoint can't take Anthropic multimodal blocks).
+            # the META block. Image turns ride doubao too (multimodal) —
+            # _generate_single_pass converts the blocks to OpenAI format.
             full_response = await self._generate_single_pass(
                 system_prompt, messages, purpose="chat_single_pass")
             output = self._process_response(full_response)
