@@ -106,9 +106,11 @@ async def create_engine(
     """Create and initialize a conversation engine."""
     config = load_config(config_path)
 
-    # Load persona
+    # Load persona. Explicit arg wins; else PERSONA_PATH env (lets a deploy
+    # switch personas without code/CLI changes); else the default.
     if persona_path is None:
-        persona_path = "config/personas/example_persona.yaml"
+        persona_path = os.environ.get(
+            "PERSONA_PATH", "config/personas/example_persona.yaml")
     persona = load_persona(persona_path)
 
     # Set up auth and LLM provider
