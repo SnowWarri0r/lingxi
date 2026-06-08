@@ -65,6 +65,16 @@ contemplative 内向但好奇心强。她**不**用新闻播报口吻——她�
 
 def _strip_json_fences(text: str) -> str:
     text = text.strip()
+    # web_search replies often wrap the JSON in a prose preamble + a ```json
+    # fence ("Based on my searches… ```json{…}```"). Prefer the fenced block's
+    # contents wherever it sits; fall back to the widest {...} span; else strip
+    # leading/trailing fences as before.
+    fenced = re.search(r"```(?:json)?\s*(.+?)\s*```", text, re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    first, last = text.find("{"), text.rfind("}")
+    if 0 <= first < last:
+        return text[first:last + 1].strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
@@ -89,35 +99,29 @@ def _extract_text_from_blocks(content_blocks: list) -> str:
 
 
 async def fetch_daily_briefing(
-    api_key: str,
+    llm,
     target_date: date | None = None,
     *,
-    model: str = "claude-sonnet-4-5",
     max_tokens: int = 4000,
     max_searches: int = 5,
 ) -> DailyBriefing:
-    """Fetch today's briefing using Claude + web_search tool.
+    """Fetch today's briefing using the LLM provider + web_search tool.
 
-    Returns an empty briefing on any failure (parse error, network
-    timeout, tool unavailable). The caller (scheduler / chat path)
-    treats empty == "no briefing today" gracefully.
+    Routes through the shared ClaudeProvider so the call reuses whatever auth
+    the bot runs on (OAuth Bearer or API key) — the OAuth path supports the
+    web_search server tool, so no separate ANTHROPIC_API_KEY is needed.
+
+    Returns an empty briefing on any failure (parse error, network timeout,
+    tool unavailable). The caller treats empty == "no briefing today".
     """
     if target_date is None:
         target_date = date.today()
 
-    try:
-        from anthropic import AsyncAnthropic
-    except ImportError:
-        print("[world] anthropic SDK not installed", flush=True)
-        return DailyBriefing(date=target_date)
-
-    client = AsyncAnthropic(api_key=api_key)
-
     prompt = _FETCH_PROMPT.format(today=target_date.isoformat())
 
     try:
-        response = await client.messages.create(
-            model=model,
+        result = await llm.complete(
+            messages=[{"role": "user", "content": prompt}],
             max_tokens=max_tokens,
             tools=[
                 {
@@ -126,13 +130,16 @@ async def fetch_daily_briefing(
                     "max_uses": max_searches,
                 }
             ],
-            messages=[{"role": "user", "content": prompt}],
+            _debug_purpose="world_fetch",
         )
     except Exception as e:
         print(f"[world] fetch API call failed: {e}", flush=True)
         return DailyBriefing(date=target_date)
 
-    text = _extract_text_from_blocks(response.content)
+    # result.content already concatenates text blocks (search-result blocks are
+    # dropped); fall back to raw blocks if a provider leaves content empty.
+    text = result.content or _extract_text_from_blocks(
+        getattr(result, "raw_content_blocks", []))
     if not text:
         print("[world] fetch returned no text content", flush=True)
         return DailyBriefing(date=target_date)

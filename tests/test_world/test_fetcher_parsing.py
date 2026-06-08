@@ -6,7 +6,8 @@ tests exercise that path by mocking the Anthropic client.
 
 import json
 from datetime import date
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -15,6 +16,17 @@ from lingxi.world.fetcher import (
     _strip_json_fences,
     fetch_daily_briefing,
 )
+
+
+def _fake_llm(text: str = "", *, error: Exception | None = None):
+    """A stand-in LLM provider whose .complete() returns the given text (as
+    result.content) or raises. The fetcher now routes through the shared
+    provider, so we mock that instead of the raw Anthropic SDK."""
+    complete = AsyncMock(
+        side_effect=error if error is not None else None,
+        return_value=SimpleNamespace(content=text, raw_content_blocks=[]),
+    )
+    return SimpleNamespace(complete=complete)
 
 
 class TestParsingHelpers:
@@ -26,6 +38,15 @@ class TestParsingHelpers:
 
     def test_strip_fences_no_lang(self):
         assert _strip_json_fences('```\n{"a":1}\n```') == '{"a":1}'
+
+    def test_strip_fences_prose_preamble(self):
+        # web_search replies preface the JSON with explanation text.
+        raw = 'Based on my searches, here it is:\n\n```json\n{"a":1}\n```'
+        assert _strip_json_fences(raw) == '{"a":1}'
+
+    def test_strip_fences_bare_object_with_preamble(self):
+        # No fence, just prose then a JSON object.
+        assert _strip_json_fences('Here you go: {"a":1} done') == '{"a":1}'
 
     def test_extract_text_from_dict_blocks(self):
         blocks = [
@@ -57,15 +78,7 @@ async def test_fetcher_parses_well_formed_response():
         ],
     })
 
-    class FakeResponse:
-        content = [{"type": "text", "text": payload}]
-
-    fake_messages = AsyncMock()
-    fake_messages.create = AsyncMock(return_value=FakeResponse())
-    fake_client = type("X", (), {"messages": fake_messages})()
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client):
-        b = await fetch_daily_briefing("test-key", date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
 
     assert len(b.items) == 1
     assert b.items[0].category == "天文"
@@ -74,27 +87,15 @@ async def test_fetcher_parses_well_formed_response():
 
 @pytest.mark.asyncio
 async def test_fetcher_returns_empty_on_garbage_response():
-    class FakeResponse:
-        content = [{"type": "text", "text": "not json at all"}]
-
-    fake_messages = AsyncMock()
-    fake_messages.create = AsyncMock(return_value=FakeResponse())
-    fake_client = type("X", (), {"messages": fake_messages})()
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client):
-        b = await fetch_daily_briefing("test-key", date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm("not json at all"), date(2026, 5, 9))
 
     assert b.is_empty()
 
 
 @pytest.mark.asyncio
 async def test_fetcher_returns_empty_on_api_error():
-    fake_messages = AsyncMock()
-    fake_messages.create = AsyncMock(side_effect=RuntimeError("network down"))
-    fake_client = type("X", (), {"messages": fake_messages})()
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client):
-        b = await fetch_daily_briefing("test-key", date(2026, 5, 9))
+    llm = _fake_llm(error=RuntimeError("network down"))
+    b = await fetch_daily_briefing(llm, date(2026, 5, 9))
 
     assert b.is_empty()
 
@@ -108,15 +109,7 @@ async def test_fetcher_invalid_category_falls_to_其他():
         }],
     })
 
-    class FakeResponse:
-        content = [{"type": "text", "text": payload}]
-
-    fake_messages = AsyncMock()
-    fake_messages.create = AsyncMock(return_value=FakeResponse())
-    fake_client = type("X", (), {"messages": fake_messages})()
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client):
-        b = await fetch_daily_briefing("test-key", date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
 
     assert b.items[0].category == "其他"
 
@@ -132,15 +125,7 @@ async def test_fetcher_skips_items_missing_required_fields():
         ],
     })
 
-    class FakeResponse:
-        content = [{"type": "text", "text": payload}]
-
-    fake_messages = AsyncMock()
-    fake_messages.create = AsyncMock(return_value=FakeResponse())
-    fake_client = type("X", (), {"messages": fake_messages})()
-
-    with patch("anthropic.AsyncAnthropic", return_value=fake_client):
-        b = await fetch_daily_briefing("test-key", date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
 
     assert len(b.items) == 1
     assert b.items[0].headline == "ok"
