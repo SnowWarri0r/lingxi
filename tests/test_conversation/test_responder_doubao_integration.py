@@ -58,6 +58,30 @@ async def test_doubao_responder_generates_reply(sample_persona, mock_llm, tmp_pa
 
 @_needs_ark
 @pytest.mark.asyncio
+async def test_doubao_responder_streams_chunks(sample_persona, mock_llm, tmp_path):
+    # The events path must emit incremental `chunk` events (live streaming),
+    # not just a single buffered `done`.
+    sample_persona.responder.provider = "doubao"
+    sample_persona.responder.model = "ep-REDACTED"
+    engine = ConversationEngine(
+        persona=sample_persona, llm_provider=mock_llm,
+        memory_manager=MemoryManager(data_dir=str(tmp_path / "memory")),
+    )
+    chunks, done = [], None
+    async for ev in engine.chat_stream_events(
+        "随便说点啥逗我开心", channel="feishu", recipient_id="t1"):
+        if ev.type == "chunk":
+            chunks.append(ev.content)
+        elif ev.type == "done":
+            done = ev.content
+    assert len(chunks) >= 2, f"expected streamed chunks, got {len(chunks)}"
+    assert done and done.strip()
+    assert "===META===" not in "".join(chunks)  # delimiter never streamed
+    print(f"\n[streamed {len(chunks)} chunks] done={done!r}")
+
+
+@_needs_ark
+@pytest.mark.asyncio
 async def test_doubao_responder_handles_image_turn(sample_persona, mock_llm, tmp_path):
     # Image turn must NOT split off to Claude — it rides doubao via conversion.
     sample_persona.responder.provider = "doubao"
