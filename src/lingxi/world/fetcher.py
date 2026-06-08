@@ -47,7 +47,8 @@ contemplative 内向但好奇心强。她**不**用新闻播报口吻——她�
 ❌ "上海今日预计降水概率 80%"
 ✅ "今天上海要下大雨"
 
-输出严格 JSON（不要 markdown 包裹）：
+输出严格 JSON（不要 markdown 包裹，不要前后加说明文字）。
+**字符串值里不要出现英文双引号 "**——要引用就用中文「」，否则 JSON 会解析失败。
 {{
   "items": [
     {{
@@ -119,36 +120,47 @@ async def fetch_daily_briefing(
 
     prompt = _FETCH_PROMPT.format(today=target_date.isoformat())
 
-    try:
-        result = await llm.complete(
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            tools=[
-                {
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": max_searches,
-                }
-            ],
-            _debug_purpose="world_fetch",
-        )
-    except Exception as e:
-        print(f"[world] fetch API call failed: {e}", flush=True)
-        return DailyBriefing(date=target_date)
+    # Retry once on empty/unparseable output: the model occasionally emits
+    # invalid JSON (e.g. an unescaped " inside a value), which is random, so a
+    # re-generation usually lands clean. Auth/network errors are NOT retried —
+    # they won't fix themselves on a second call.
+    data: Any = None
+    for attempt in range(2):
+        try:
+            result = await llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=max_tokens,
+                tools=[
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": max_searches,
+                    }
+                ],
+                _debug_purpose="world_fetch",
+            )
+        except Exception as e:
+            print(f"[world] fetch API call failed: {e}", flush=True)
+            return DailyBriefing(date=target_date)
 
-    # result.content already concatenates text blocks (search-result blocks are
-    # dropped); fall back to raw blocks if a provider leaves content empty.
-    text = result.content or _extract_text_from_blocks(
-        getattr(result, "raw_content_blocks", []))
-    if not text:
-        print("[world] fetch returned no text content", flush=True)
-        return DailyBriefing(date=target_date)
+        # result.content already concatenates text blocks (search-result blocks
+        # are dropped); fall back to raw blocks if content is empty.
+        text = result.content or _extract_text_from_blocks(
+            getattr(result, "raw_content_blocks", []))
+        if not text:
+            print("[world] fetch returned no text content", flush=True)
+            continue
 
-    cleaned = _strip_json_fences(text)
-    try:
-        data: Any = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        print(f"[world] fetch JSON parse failed: {e}; raw[:200]={cleaned[:200]!r}", flush=True)
+        cleaned = _strip_json_fences(text)
+        try:
+            data = json.loads(cleaned)
+            break
+        except json.JSONDecodeError as e:
+            print(f"[world] fetch JSON parse failed (attempt {attempt + 1}): "
+                  f"{e}; raw[:200]={cleaned[:200]!r}", flush=True)
+            data = None
+
+    if data is None:
         return DailyBriefing(date=target_date)
 
     items_raw = data.get("items") if isinstance(data, dict) else None
