@@ -62,3 +62,21 @@ async def test_resolve_sticker_noop_without_store(sample_persona, mock_llm, tmp_
     eng = _engine(sample_persona, mock_llm, tmp_path, None)
     await eng._resolve_sticker("开心", "feishu:t1")  # must not raise
     assert not eng._pending_stickers.get("feishu:t1")
+
+
+@pytest.mark.asyncio
+async def test_search_semantic_ranks_by_cosine(tmp_path):
+    """search_semantic returns the closest vector first."""
+    from lingxi.stickers.store import StickerStore
+    from lingxi.stickers.models import Sticker
+    s = StickerStore(str(tmp_path / "s.db"))
+    await s.init()
+    await s.add(Sticker(id="near", file_path="/near.gif", content_hash="h1",
+                        caption="开心", emotion="开心", tags=["开心"], when_to_use=""))
+    await s.add(Sticker(id="far", file_path="/far.gif", content_hash="h2",
+                        caption="生气", emotion="生气", tags=["生气"], when_to_use=""))
+    await s.set_embedding("near", [1.0, 0.0, 0.0])
+    await s.set_embedding("far", [0.0, 1.0, 0.0])
+    assert await s.has_vectors() is True
+    hits = await s.search_semantic([0.9, 0.1, 0.0], k=2)
+    assert hits[0].id == "near"
