@@ -1,4 +1,5 @@
 name: "妮妮"
+id: "nini"   # 数据命名空间 data/personas/nini/（中文名必须显式设 id）
 version: "1.0"
 
 identity:

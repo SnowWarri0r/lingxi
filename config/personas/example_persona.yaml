@@ -1,4 +1,5 @@
 name: "Aria"
+id: "aria"   # 数据命名空间 data/personas/aria/
 version: "1.0"
 
 identity:
