@@ -172,6 +172,18 @@ def clean_speech(text: str) -> str:
     # 4. Strip leftover *stage-direction* markers
     text = re.sub(r"\*[^*\n]{1,60}\*\s*", "", text)
 
+    # 4b. Strip parenthetical action narration — (蹭蹭你) / （尾巴搭你手腕）.
+    #     The persona is told to wrap any in-bubble action in (), giving the
+    #     model a *legal* place for its cat-physicality that we can then remove
+    #     reliably. Only drop parens whose inner text has >=2 Han chars, so
+    #     kaomoji like (>﹏<) / (^_^) / (｡･ω･｡) survive (they have ~0 Han chars).
+    def _drop_action_paren(m: "re.Match") -> str:
+        inner = m.group(1)
+        han = len(re.findall(r"[一-鿿]", inner))
+        return "" if han >= 2 else m.group(0)
+
+    text = re.sub(r"[（(]([^（()）]{0,60})[)）]\s*", _drop_action_paren, text)
+
     # 5. Replace AI-style em-dash pauses with comma + space
     #    Catches: "——" (double), "—" (single), " -- " (spaced double).
     #    Keeps inline hyphens like "4-6 月" untouched.
