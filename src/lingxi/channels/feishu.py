@@ -1172,8 +1172,20 @@ class FeishuBot(OutboundChannel):
         """Create streaming card and push LLM chunks."""
         async with httpx.AsyncClient(timeout=60) as http:
             card = StreamingCardSender(self.token_mgr, http)
-            await card.create_card()
-            await card.send_to_chat(chat_id)
+            # Feishu CardKit occasionally returns a card_id that isn't yet valid
+            # for send (race: "cardid is invalid"). Retry once with a fresh card;
+            # if it still fails, card_ok=False and we deliver the reply as plain
+            # static cards at the end so the turn is never lost.
+            card_ok = False
+            for _attempt in range(2):
+                try:
+                    await card.create_card()
+                    await card.send_to_chat(chat_id)
+                    card_ok = True
+                    break
+                except Exception as e:
+                    print(f"[feishu] card setup failed (attempt {_attempt + 1}): {e}",
+                          flush=True)
 
             accumulated = ""
             last_update = 0.0
@@ -1248,15 +1260,21 @@ class FeishuBot(OutboundChannel):
                 first_bubble = bubbles[0] if bubbles else final_speech
                 extras = bubbles[1:] if len(bubbles) > 1 else []
                 if first_bubble:
-                    try:
-                        await card.update_content(first_bubble)
-                    except Exception:
-                        pass
+                    if card_ok:
+                        try:
+                            await card.update_content(first_bubble)
+                        except Exception:
+                            pass
+                    else:
+                        # The streaming card never got delivered — send the first
+                        # bubble as a static card too so the reply isn't lost.
+                        extras = [first_bubble] + extras
 
-            try:
-                await card.finish()
-            except Exception as e:
-                print(f"[feishu] finish() failed: {e}", flush=True)
+            if card_ok:
+                try:
+                    await card.finish()
+                except Exception as e:
+                    print(f"[feishu] finish() failed: {e}", flush=True)
 
             print(
                 f"[feishu] stream done, turn_id={turn_id!r}, err={stream_error!r}, "
@@ -1284,8 +1302,8 @@ class FeishuBot(OutboundChannel):
                     if last_extra_card_id is not None:
                         # Annotation footer on the LAST extra card
                         await self._append_to_card_id(last_extra_card_id, footer)
-                    else:
-                        # No extras → buttons on the first (only) card
+                    elif card_ok:
+                        # No extras → buttons on the first (only) streaming card
                         await card.append_elements(footer)
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
