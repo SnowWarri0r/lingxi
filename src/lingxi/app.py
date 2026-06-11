@@ -163,8 +163,13 @@ async def create_engine(
             print(f"[embedding] probe failed, falling back to keyword search: {e}")
             embedding_provider = None
 
-    # Create memory manager with the right embedding_dim
-    data_dir = os.environ.get("MEMORY_DATA_DIR", "./data/memory")
+    # Create memory manager with the right embedding_dim.
+    # Data root is namespaced per persona (data/personas/<slug>/) so switching
+    # PERSONA_PATH switches the whole memory with it. MEMORY_DATA_DIR overrides.
+    from lingxi.paths import persona_data_root
+    data_dir = persona_data_root(persona)
+    print(f"[app] persona='{persona.name}' (slug={persona.slug}) "
+          f"data_dir={data_dir}", flush=True)
     memory_config = config.get("memory", {})
     memory_manager = MemoryManager(
         data_dir=data_dir,
@@ -187,7 +192,7 @@ async def create_engine(
     annotation_store = None
     fewshot_retriever = None
     if embedding_dim is not None and embedding_dim > 0 and embedding_provider is not None:
-        fewshot_dir = Path(data_dir).parent / "fewshot"
+        fewshot_dir = Path(data_dir) / "fewshot"  # per-persona (voice corpus)
         fewshot_dir.mkdir(parents=True, exist_ok=True)
         fewshot_store = FewShotStore(data_dir=fewshot_dir, embedding_dim=embedding_dim)
         await fewshot_store.init()
