@@ -10,9 +10,11 @@ from lingxi.conversation.engine import ConversationEngine
 from lingxi.memory.manager import MemoryManager
 
 
+_DOUBAO_EP = os.environ.get("DOUBAO_RESPONDER_MODEL", "")
+
 _needs_ark = pytest.mark.skipif(
-    not os.environ.get("ARK_API_KEY"),
-    reason="needs ARK_API_KEY for the live doubao responder",
+    not (os.environ.get("ARK_API_KEY") and _DOUBAO_EP),
+    reason="needs ARK_API_KEY + DOUBAO_RESPONDER_MODEL for the live doubao responder",
 )
 
 # 16x16 PNG, base64 (content irrelevant — we only assert the call succeeds)
@@ -44,7 +46,7 @@ def test_to_openai_messages_converts_image_blocks():
 @pytest.mark.asyncio
 async def test_doubao_responder_generates_reply(sample_persona, mock_llm, tmp_path):
     sample_persona.responder.provider = "doubao"
-    sample_persona.responder.model = "ep-REDACTED"
+    sample_persona.responder.model = _DOUBAO_EP
     engine = ConversationEngine(
         persona=sample_persona, llm_provider=mock_llm,
         memory_manager=MemoryManager(data_dir=str(tmp_path / "memory")),
@@ -62,7 +64,7 @@ async def test_doubao_responder_streams_chunks(sample_persona, mock_llm, tmp_pat
     # The events path must emit incremental `chunk` events (live streaming),
     # not just a single buffered `done`.
     sample_persona.responder.provider = "doubao"
-    sample_persona.responder.model = "ep-REDACTED"
+    sample_persona.responder.model = _DOUBAO_EP
     engine = ConversationEngine(
         persona=sample_persona, llm_provider=mock_llm,
         memory_manager=MemoryManager(data_dir=str(tmp_path / "memory")),
@@ -85,7 +87,7 @@ async def test_doubao_responder_streams_chunks(sample_persona, mock_llm, tmp_pat
 async def test_doubao_responder_handles_image_turn(sample_persona, mock_llm, tmp_path):
     # Image turn must NOT split off to Claude — it rides doubao via conversion.
     sample_persona.responder.provider = "doubao"
-    sample_persona.responder.model = "ep-REDACTED"
+    sample_persona.responder.model = _DOUBAO_EP
     engine = ConversationEngine(
         persona=sample_persona, llm_provider=mock_llm,
         memory_manager=MemoryManager(data_dir=str(tmp_path / "memory")),
