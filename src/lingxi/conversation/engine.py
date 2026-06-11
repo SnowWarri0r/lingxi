@@ -468,6 +468,7 @@ class ConversationEngine:
             self.llm, user_input, digest, catalog,
             history=messages,
             prev_thread_summary=prev_summary,
+            agent_name=self.persona.name,
         )
         print(
             f"[brain] orch decision: register={decision.register} "

@@ -206,7 +206,12 @@ async def create_engine(
     from lingxi.facts.reflector import Reflector
     from lingxi.facts.reflection_trigger import ReflectionTrigger
 
-    facts_store = FactStore(Path(data_dir).parent / "facts.db")
+    # facts.db lives INSIDE the data dir so each persona/data-dir is isolated.
+    # Previously it sat in the parent (shared across personas), which is how a
+    # catgirl ended up reading Aria's subject="aria" facts. The "aria" subject
+    # is the agent's own-facts partition (a role like "world"/"user:X"), not a
+    # persona name — keeping it is fine now that each persona has its own db.
+    facts_store = FactStore(Path(data_dir) / "facts.db")
     await facts_store.init()
 
     from lingxi.stickers.store import StickerStore
