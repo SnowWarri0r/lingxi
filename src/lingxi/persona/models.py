@@ -511,5 +511,10 @@ class PersonaConfig(BaseModel):
     biography: Biography = Field(default_factory=Biography)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     responder: ResponderConfig = Field(default_factory=ResponderConfig)
+    # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
+    # subject="aria" inner-life events)? On for a persona with a rich simulated
+    # life (Aria); off for a simple companion (a house catgirl) whose proactive
+    # should come from the relationship/time, not invented existential musings.
+    life_sim_enabled: bool = True
     decision_axes: DecisionAxes = Field(default_factory=DecisionAxes)
     message_habits: MessageHabits = Field(default_factory=MessageHabits)

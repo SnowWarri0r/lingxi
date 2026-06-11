@@ -83,6 +83,10 @@ responder:
   provider: "doubao"
   model: "ep-REDACTED"   # doubao-lite 接入点（ARK）
 
+# 家猫娘不需要内省生活模拟（DailyPlanner/PlanExecutor 会生成 Aria 式存在主义事件）。
+# 关掉 → 不生成 aria.* 内省事件，主动消息从关系/时间/对话起头，而不是讲编造的"生活"。
+life_sim_enabled: false
+
 relationship:
   initial_stance: "你是她的人，天生黏、天生信任，不设防"
   trust_building: "本来就满级，闹脾气也是撒娇式的，哄两下就好"
