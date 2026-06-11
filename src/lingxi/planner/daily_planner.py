@@ -14,9 +14,11 @@ from lingxi.facts.writers.life import LifeWriter
 from lingxi.providers.base import LLMProvider
 
 
-_ARIA_SYSTEM = "你是 Aria，正在早上安排今天打算做什么。"
+# {self} = persona self-context. Plan content is driven by 【我是谁】(biography)
+# + the persona, NOT hardcoded work hours / astronomy.
+_SYSTEM_TMPL = "{self} 你在早上想一下今天打算怎么过。"
 
-_ARIA_PROMPT = """新的一天。我想一下今天打算怎么过。
+_PLAN_PROMPT = """新的一天。我想一下今天打算怎么过。
 
 【我是谁】
 {biography}
@@ -27,16 +29,15 @@ _ARIA_PROMPT = """新的一天。我想一下今天打算怎么过。
 【最近一周我注意到的模式】
 {patterns}
 
-【我自己定的规矩】
-- 6-10 条今天的安排
-- 覆盖白天工作时间（9-12, 14-18）+ 晚上 + 早晚习惯
+【怎么安排】
+- 6-10 条今天的安排，覆盖一天不同时段（早、白天、晚上）+ 你的日常习惯
 - hour 粒度，time_window 形如 "09:00-12:00"
-- 写**具体**的事（"跑光变曲线第三组分析"而不是"工作"——自己心里知道在做什么）
-- 至少 2 条对应到长期在做的事
+- 写**具体**符合**你这个人/你这种日子**的事（不是"工作""休息"这种笼统词——写你心里清楚在做的那件具体的事）
+- 至少 2 条对应到你长期在惦记/在做的事
 
 输出 JSON：
 [{{"time_window": "07:00-08:00", "content": "...", "goal": "..."}}, ...]
-content 用自己想事情的语气，第一人称，但不要在每条前面写"我"——直接写动作。
+content 用你自己想事情的语气，第一人称，但不要在每条前面写"我"——直接写动作。
 """
 
 
@@ -51,11 +52,15 @@ class DailyPlanner:
         retriever: FactRetriever,
         life_writer: LifeWriter,
         model: str | None = None,
+        persona=None,
     ):
         self._llm = llm
         self._retriever = retriever
         self._writer = life_writer
         self._model = model
+        from lingxi.persona.self_context import build_self_context
+        self._self_ctx = (build_self_context(persona)
+                          if persona is not None else "你是 Aria。")
 
     async def plan_aria(self) -> list[Fact]:
         biography = await self._load_biography_summary()
@@ -73,12 +78,13 @@ class DailyPlanner:
                       since=week_ago, limit=10)
         )
 
-        prompt = _ARIA_PROMPT.format(
+        prompt = _PLAN_PROMPT.format(
             biography=biography,
             reflections=self._bullets(reflections) or "（昨天没特别的反思）",
             patterns=self._bullets(patterns) or "（最近没新模式）",
         )
-        items = await self._call_planner(prompt, _ARIA_SYSTEM)
+        items = await self._call_planner(
+            prompt, _SYSTEM_TMPL.format(self=self._self_ctx))
         return await self._write_plan_facts("aria", items)
 
     async def _call_planner(self, prompt: str, system: str) -> list[dict]:

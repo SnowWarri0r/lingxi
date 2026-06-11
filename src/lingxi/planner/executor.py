@@ -15,7 +15,9 @@ from lingxi.planner.daily_planner import DailyPlanner
 from lingxi.providers.base import LLMProvider
 
 
-_SYSTEM = "你是 Aria，正在做今天计划里的某件事。现在写一条记录给自己看。"
+# {self} = persona self-context (build_self_context). The persona drives the
+# flavor — a catgirl logs cat moments, a writer logs a writer's.
+_SYSTEM_TMPL = "{self} 你正在做今天计划里的某件事，现在记一条此刻给自己看。"
 
 
 _MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_window}）
@@ -23,8 +25,8 @@ _MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_wind
 {recent_events}
 
 现在是 {now_hhmm}——我正在做这件事的**某个具体片段**。
-写一条**现在这一刻**——具体细节，不抽象描述（数据/物件/手感/感受任一）。
-1-2 句，第一人称当下时态。
+写一条**现在这一刻**——具体细节，不抽象（眼前的东西／身体感觉／此刻的念头／一个动作，任一就好）。
+1-2 句，第一人称当下时态，符合你自己的口吻。
 不要在前面写"我"——直接写动作或观察。
 """
 
@@ -48,6 +50,7 @@ class PlanExecutor:
         life_writer: LifeWriter,
         planner: DailyPlanner | None = None,
         model: str | None = None,
+        persona=None,
     ):
         self._llm = llm
         self._retriever = retriever
@@ -55,6 +58,9 @@ class PlanExecutor:
         self._planner = planner
         self._model = model
         self._replan_requested = False
+        from lingxi.persona.self_context import build_self_context
+        self._self_ctx = (build_self_context(persona)
+                          if persona is not None else "你是 Aria。")
 
     def request_replan(self) -> None:
         self._replan_requested = True
@@ -87,7 +93,7 @@ class PlanExecutor:
             kwargs = {"model": self._model} if self._model else {}
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system=_SYSTEM,
+                system=_SYSTEM_TMPL.format(self=self._self_ctx),
                 max_tokens=200,
                 temperature=0.8,
                 _debug_purpose="plan_executor_moment",

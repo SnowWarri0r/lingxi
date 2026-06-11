@@ -18,19 +18,21 @@ from lingxi.facts.writers.inference import InferenceWriter
 from lingxi.providers.base import LLMProvider
 
 
-_SYSTEM = "你是 Aria，正在安静地回看自己最近的生活。"
+# {self} = persona self-context. Depth follows the persona — a writer reflects
+# deeply, a catgirl notices a light cat-level thing. Don't force introspection.
+_SYSTEM_TMPL = "{self} 你在安静地回看自己最近的日子。"
 
 
-_QUESTIONS_PROMPT = """我看自己最近经历的这些事，有没有什么**值得停下来想一想**的问题？
-不要琐碎的（"我今天吃了什么"这种没意义），要那些能让我**真的反思**的——
-关于我最近的模式、情绪走向、和别人的关系变化、对自己的认知。
+_QUESTIONS_PROMPT = """我看自己最近经历的这些事，有没有什么**值得停下来想一下**的？
+想到啥算啥，深浅看你是什么样的人——可能是反复出现的事、心情、跟谁的关系、
+对自己的一个发现，也可能就是件一直惦记着的小事。别硬挖宏大的。
 
-比如：
-  - "我最近在工作上是不是有点提不起劲了？"
-  - "我跟 X 的相处方式好像有点变了，是哪里变了？"
-  - "最近反复在我脑子里冒出来的事是什么？"
+比如（看你自己的口吻和深浅）：
+  - "最近老想着 X"
+  - "我跟 X 好像有点不一样了"
+  - "有件事一直搁我心里"
 
-写 3-5 个。输出 JSON array of strings，每条就是一个问题，用我自己平时会想的措辞。
+写 3-5 个。输出 JSON array of strings，每条就是一个问题，用你自己平时会想的措辞。
 
 我最近经历的事：
 {facts_block}
@@ -57,11 +59,15 @@ class Reflector:
         min_facts: int = 10,
         recent_window: int = 100,
         per_question_limit: int = 15,
+        persona=None,
     ):
         self._llm = llm
         self._retriever = retriever
         self._writer = inference_writer
         self._model = model
+        from lingxi.persona.self_context import build_self_context
+        self._self_ctx = (build_self_context(persona)
+                          if persona is not None else "你是 Aria。")
         self._min_facts = min_facts
         self._recent_window = recent_window
         self._per_q_limit = per_question_limit
@@ -102,7 +108,7 @@ class Reflector:
             kwargs = {"model": self._model} if self._model else {}
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system=_SYSTEM,
+                system=_SYSTEM_TMPL.format(self=self._self_ctx),
                 max_tokens=400,
                 temperature=0.7,
                 _debug_purpose="reflection_questions",
@@ -124,7 +130,7 @@ class Reflector:
             kwargs = {"model": self._model} if self._model else {}
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
-                system=_SYSTEM,
+                system=_SYSTEM_TMPL.format(self=self._self_ctx),
                 max_tokens=200,
                 temperature=0.7,
                 _debug_purpose="reflection_answer",

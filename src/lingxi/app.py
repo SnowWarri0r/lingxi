@@ -242,28 +242,27 @@ async def create_engine(
     world_writer = WorldWriter(facts_store, scorer=importance_scorer)
     core_memory_writer = CoreMemoryWriter(facts_store, scorer=importance_scorer)
 
-    # Build reflector + real trigger, then wire into the holder.
-    reflector = Reflector(llm_provider, fact_retriever, inference_writer)
-    trigger_holder.set(ReflectionTrigger(reflector))
-
-    # Daily planner + plan executor (D.7)
-    # DailyPlanner: generates Aria's daily task plan as Facts at 7am.
-    # PlanExecutor: runs every 30min to execute plan steps, replans on conflict.
-    # Gated by persona.life_sim_enabled. The life-sim generates a rich
-    # introspective inner life (subject="aria" events) — right for Aria, wrong
-    # for a simple companion persona (a house catgirl shouldn't be musing about
-    # existential validation systems). When off, no planner/executor is built,
-    # so no such events are written and proactive opens from the relationship.
+    # The life-sim (plan→event→reflect) is ONE unified loop; the PERSONA drives
+    # what it produces (build_self_context). Gated by persona.life_sim_enabled:
+    # on → the persona gets a simulated inner life (a catgirl logs cat moments,
+    # a writer logs a writer's); off → no inner-life events, proactive opens
+    # from the relationship. All three take persona= so nothing is hardcoded to
+    # Aria anymore.
     daily_planner = None
     plan_executor = None
+    reflector = None
     if getattr(persona, "life_sim_enabled", True):
         from lingxi.planner.daily_planner import DailyPlanner
         from lingxi.planner.executor import PlanExecutor
+        reflector = Reflector(
+            llm_provider, fact_retriever, inference_writer, persona=persona)
+        trigger_holder.set(ReflectionTrigger(reflector))
         daily_planner = DailyPlanner(
-            llm_provider, fact_retriever, life_writer
+            llm_provider, fact_retriever, life_writer, persona=persona
         )
         plan_executor = PlanExecutor(
-            llm_provider, fact_retriever, life_writer, planner=daily_planner
+            llm_provider, fact_retriever, life_writer, planner=daily_planner,
+            persona=persona,
         )
 
     # Create engine
