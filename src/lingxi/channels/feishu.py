@@ -499,11 +499,11 @@ class FeishuBot(OutboundChannel):
                         pass  # skip mentions
             text = "".join(text_parts).strip()
         elif msg_type == "sticker":
-            # Feishu stickers carry only a file_key (no emoji name), so we can't
-            # tell Aria *which* one. Rather than a robotic "not supported" reply,
-            # pass a light nonverbal beat so she reacts in character — a sticker
-            # is usually just a vibe, not a literal message.
-            text = "（对方发来一个表情包）"
+            # A sticker is just an image. Download it (file_key) and feed it to
+            # the multimodal responder so Aria actually SEES it and reacts to
+            # what was sent. Falls back to a light nonverbal beat in
+            # _handle_reply_safe if the download fails.
+            image_keys.append(content_data.get("file_key", ""))
         else:
             asyncio.run_coroutine_threadsafe(
                 self._send_card_or_text(chat_id, f"暂不支持 {msg_type} 类型的消息 ☺️"),
@@ -746,6 +746,12 @@ class FeishuBot(OutboundChannel):
                         if img:
                             images.append(img)
 
+            # Media-only message whose download(s) all failed (e.g. a sticker
+            # that isn't downloadable) — give Aria a light nonverbal beat so she
+            # still reacts in character instead of getting an empty turn.
+            if image_keys and not images and not text.strip():
+                text = "（对方发来一个表情包）"
+
             await self._stream_reply(chat_id, text, images=images)
 
             # Persist interaction tracker so proactive loop sees latest state
@@ -786,16 +792,24 @@ class FeishuBot(OutboundChannel):
         headers = self.token_mgr.headers()
         # Remove Content-Type for GET
         headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
-        url = (
-            f"{FEISHU_BASE}/im/v1/messages/{message_id}/resources/{image_key}"
-            f"?type=image"
-        )
-        resp = await http.get(url, headers=headers)
-        if resp.status_code != 200:
-            print(f"[image] download failed {resp.status_code}: {resp.text[:200]}")
+        base = f"{FEISHU_BASE}/im/v1/messages/{message_id}/resources/{image_key}"
+        # Photos download as type=image; stickers may download as type=file.
+        # Try image first, fall back to file before giving up.
+        resp = None
+        for res_type in ("image", "file"):
+            resp = await http.get(f"{base}?type={res_type}", headers=headers)
+            if resp.status_code == 200:
+                break
+            print(f"[image] download {res_type} failed {resp.status_code}: "
+                  f"{resp.text[:160]}")
+        if resp is None or resp.status_code != 200:
             return None
 
         media_type = resp.headers.get("content-type", "image/png").split(";")[0]
+        # A sticker resource may report a non-image content-type; the responder
+        # needs an image/* media_type to render it, so default unknowns to png.
+        if not media_type.startswith("image/"):
+            media_type = "image/png"
         data_b64 = base64.standard_b64encode(resp.content).decode("ascii")
         print(f"[image] downloaded {image_key}: {len(resp.content)} bytes, {media_type}")
         return {"media_type": media_type, "data": data_b64}
