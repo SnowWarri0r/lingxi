@@ -498,6 +498,12 @@ class FeishuBot(OutboundChannel):
                     elif ntype == "at":
                         pass  # skip mentions
             text = "".join(text_parts).strip()
+        elif msg_type == "sticker":
+            # Feishu stickers carry only a file_key (no emoji name), so we can't
+            # tell Aria *which* one. Rather than a robotic "not supported" reply,
+            # pass a light nonverbal beat so she reacts in character — a sticker
+            # is usually just a vibe, not a literal message.
+            text = "（对方发来一个表情包）"
         else:
             asyncio.run_coroutine_threadsafe(
                 self._send_card_or_text(chat_id, f"暂不支持 {msg_type} 类型的消息 ☺️"),
