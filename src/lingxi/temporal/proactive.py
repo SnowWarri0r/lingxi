@@ -608,7 +608,8 @@ class ProactiveScheduler:
         # stream of self-events (life-sim / world). Pull her recent events
         # directly so she always has her own material to open with.
         own_life_block = ""
-        if self.fact_retriever is not None:
+        life_sim_on = getattr(self.engine.persona, "life_sim_enabled", True)
+        if self.fact_retriever is not None and life_sim_on:
             try:
                 own_facts = await self.fact_retriever.fetch(FactQuery(
                     subject="aria", type=FactType.EVENT, limit=6))
