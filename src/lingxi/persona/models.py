@@ -499,6 +499,11 @@ class PersonaConfig(BaseModel):
     """Root configuration for a virtual persona."""
 
     name: str
+    # Stable slug that namespaces ALL of this persona's state on disk
+    # (data/personas/<id>/: facts.db, short_term, proactive, fewshot). Switching
+    # PERSONA_PATH switches the whole memory with it. Falls back to a slug of
+    # `name` if unset.
+    id: str = ""
     version: str = "1.0"
     identity: Identity
     personality: PersonalityProfile = Field(default_factory=PersonalityProfile)
@@ -518,3 +523,13 @@ class PersonaConfig(BaseModel):
     life_sim_enabled: bool = True
     decision_axes: DecisionAxes = Field(default_factory=DecisionAxes)
     message_habits: MessageHabits = Field(default_factory=MessageHabits)
+
+    @property
+    def slug(self) -> str:
+        """Filesystem-safe namespace key: explicit `id`, else a slug of `name`,
+        else 'default'. Non-ASCII names (妮妮) must set `id` explicitly."""
+        if self.id.strip():
+            return self.id.strip()
+        import re
+        s = re.sub(r"[^a-z0-9]+", "-", self.name.lower()).strip("-")
+        return s or "default"
