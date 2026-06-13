@@ -249,15 +249,22 @@ async def create_engine(
     # Daily planner + plan executor (D.7)
     # DailyPlanner: generates Aria's daily task plan as Facts at 7am.
     # PlanExecutor: runs every 30min to execute plan steps, replans on conflict.
-    from lingxi.planner.daily_planner import DailyPlanner
-    from lingxi.planner.executor import PlanExecutor
-
-    daily_planner = DailyPlanner(
-        llm_provider, fact_retriever, life_writer
-    )
-    plan_executor = PlanExecutor(
-        llm_provider, fact_retriever, life_writer, planner=daily_planner
-    )
+    # Gated by persona.life_sim_enabled. The life-sim generates a rich
+    # introspective inner life (subject="aria" events) — right for Aria, wrong
+    # for a simple companion persona (a house catgirl shouldn't be musing about
+    # existential validation systems). When off, no planner/executor is built,
+    # so no such events are written and proactive opens from the relationship.
+    daily_planner = None
+    plan_executor = None
+    if getattr(persona, "life_sim_enabled", True):
+        from lingxi.planner.daily_planner import DailyPlanner
+        from lingxi.planner.executor import PlanExecutor
+        daily_planner = DailyPlanner(
+            llm_provider, fact_retriever, life_writer
+        )
+        plan_executor = PlanExecutor(
+            llm_provider, fact_retriever, life_writer, planner=daily_planner
+        )
 
     # Create engine
     engine = ConversationEngine(
