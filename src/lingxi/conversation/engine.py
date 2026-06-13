@@ -651,10 +651,14 @@ class ConversationEngine:
             import os
             from lingxi.providers.openai_provider import OpenAIProvider
             ark_key = os.environ.get("ARK_API_KEY", "")
-            if ark_key and rc.model:
+            # The ARK endpoint id is infra config, not committed in the persona
+            # yaml — read it from env (DOUBAO_RESPONDER_MODEL) with the yaml as
+            # an optional override for non-secret setups.
+            model = rc.model or os.environ.get("DOUBAO_RESPONDER_MODEL", "")
+            if ark_key and model:
                 self._responder_llm = OpenAIProvider(
                     api_key=ark_key,
-                    model=rc.model,
+                    model=model,
                     base_url="https://ark.cn-beijing.volces.com/api/v3",
                     # doubao-seed models reason for ~15s before emitting content,
                     # which kills perceived streaming (card sits blank, then the
