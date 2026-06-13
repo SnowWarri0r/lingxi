@@ -732,6 +732,26 @@ class ConversationEngine:
             print("[engine] empty generation — retrying once", flush=True)
         return full
 
+    async def _resolve_sticker(self, query: str, recipient_key: str) -> None:
+        """The persona put a sticker intent (a mood/emotion) in META — search
+        the store and stage the best match for the turn-end emit. Takes the top
+        FTS hit (not a random pick) so the sticker tracks the stated mood. No-op
+        on no store / no match / one already staged this turn."""
+        if not query or self.sticker_store is None:
+            return
+        if self._pending_stickers.get(recipient_key):
+            return
+        try:
+            hits = await self.sticker_store.search(query, k=6)
+        except Exception as e:
+            print(f"[sticker] search failed for {query!r}: {e}", flush=True)
+            return
+        if not hits:
+            print(f"[sticker] no match for {query!r}", flush=True)
+            return
+        self._pending_stickers[recipient_key] = hits[0].file_path
+        print(f"[sticker] {query!r} → {hits[0].file_path}", flush=True)
+
     async def _run_think(self, system_prompt: str, messages: list[dict]) -> str:
         """Call the main LLM in think mode. Returns raw text (inner_thought + meta).
 
@@ -1163,6 +1183,12 @@ class ConversationEngine:
             output = self._process_response(raw)
             if not output.speech.strip():
                 output.speech = "诶 我这边卡了一下"
+            # No chat-time tools on this path, so a sticker the persona wanted
+            # rides the META block: resolve the intent → stage a sticker file,
+            # which the turn-end emit below sends.
+            if output.sticker:
+                await self._resolve_sticker(
+                    output.sticker, self._current_recipient_key or "_anon")
         else:
             # Tool-use precludes token streaming (the model may call memory
             # tools before replying), so run the agentic loop to completion
