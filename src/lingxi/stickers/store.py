@@ -67,10 +67,63 @@ class StickerStore:
         def _setup():
             c = self._conn()
             c.executescript(_SCHEMA)
+            # Semantic-search vectors (one per sticker). Kept in a sidecar table
+            # so re-captioning / FTS rebuilds don't disturb it.
+            c.execute(
+                "CREATE TABLE IF NOT EXISTS sticker_vecs ("
+                "sticker_id TEXT PRIMARY KEY, vec TEXT NOT NULL)")
             c.commit()
             c.close()
 
         await asyncio.to_thread(_setup)
+
+    async def set_embedding(self, sticker_id: str, vec: list[float]) -> None:
+        def _w():
+            c = self._conn()
+            c.execute(
+                "INSERT OR REPLACE INTO sticker_vecs(sticker_id, vec) VALUES (?, ?)",
+                (sticker_id, json.dumps(vec)))
+            c.commit()
+            c.close()
+        async with self._lock:
+            await asyncio.to_thread(_w)
+
+    async def has_vectors(self) -> bool:
+        def _r():
+            c = self._conn()
+            try:
+                n = c.execute("SELECT COUNT(*) FROM sticker_vecs").fetchone()[0]
+            except sqlite3.OperationalError:
+                n = 0
+            c.close()
+            return n
+        return (await asyncio.to_thread(_r)) > 0
+
+    async def search_semantic(self, query_vec: list[float], k: int = 5) -> list[Sticker]:
+        """Cosine-similarity match over precomputed sticker vectors. Robust to
+        free-form mood queries where FTS keyword overlap fails ('想抱抱' has no
+        shared token with a 撒娇 sticker, but is semantically close)."""
+        def _r():
+            c = self._conn()
+            rows = c.execute(
+                "SELECT s.*, v.vec AS vec FROM stickers s "
+                "JOIN sticker_vecs v ON v.sticker_id = s.id").fetchall()
+            c.close()
+            return rows
+        rows = await asyncio.to_thread(_r)
+        if not rows:
+            return []
+        import math
+        qn = math.sqrt(sum(x * x for x in query_vec)) or 1.0
+
+        def score(vec_json: str) -> float:
+            v = json.loads(vec_json)
+            dot = sum(a * b for a, b in zip(query_vec, v))
+            vn = math.sqrt(sum(b * b for b in v)) or 1.0
+            return dot / (qn * vn)
+
+        ranked = sorted(rows, key=lambda r: score(r["vec"]), reverse=True)
+        return [_row_to_sticker(r) for r in ranked[:k]]
 
     async def add(self, sticker: Sticker) -> bool:
         """Insert a sticker. Returns False (skips) if content_hash already

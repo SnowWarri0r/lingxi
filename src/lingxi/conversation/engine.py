@@ -742,7 +742,12 @@ class ConversationEngine:
         if self._pending_stickers.get(recipient_key):
             return
         try:
-            hits = await self.sticker_store.search(query, k=6)
+            emb = self.memory.embedding_provider
+            if emb is not None and await self.sticker_store.has_vectors():
+                qv = await emb.embed(query)
+                hits = await self.sticker_store.search_semantic(qv, k=6)
+            else:
+                hits = await self.sticker_store.search(query, k=6)
         except Exception as e:
             print(f"[sticker] search failed for {query!r}: {e}", flush=True)
             return
