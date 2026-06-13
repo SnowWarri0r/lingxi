@@ -277,15 +277,25 @@ class PromptBuilder:
 ```
 <对白：对方会看到的字，纯文本，神态动作不写在这里>
 ===META===
-{"expression":"", "action":"", "mood":"", "emotion":{}, "memory_writes":[], "plan_updates":[], "inner":""}
+{"expression":"", "action":"", "mood":"", "emotion":{}, "memory_writes":[], "plan_updates":[], "inner":"", "sticker":""}
 ```
 
 字段都可选，最简就是一行对白 + `{}`。神态/动作/情绪一律进 JSON。
+
+想发个表情包时（情绪到了、好玩、撒娇、想逗对方），在 `sticker` 里用几个字写你想发的那种表情的情绪/动作（例：`开心打滚`、`委屈巴巴`、`卖萌求摸头`、`无语`），系统会挑一张贴当下气氛的图发出去。**是偶尔助兴不是每条都发**；不想发就留空。
 
 ```
 知道啊 你是程序员 怎么了
 ===META===
 {"expression":"有点困惑", "action":"稍微停顿"}
+```
+
+情绪到了想发个表情包，就给 `sticker` 写上那种表情的情绪（偶尔，不是每条）：
+
+```
+哇 小鱼干！太喜欢了
+===META===
+{"action":"扑过来蹭", "mood":"超开心", "sticker":"开心打滚求表扬"}
 ```
 
 神态/动作只进 JSON 字段，对白里全是纯文本。
