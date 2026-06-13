@@ -302,6 +302,28 @@ class SamplingConfig(BaseModel):
     top_p: float = Field(default=0.95, ge=0.0, le=1.0)
 
 
+class ResponderConfig(BaseModel):
+    """Which model generates the user-facing chat reply (the voice).
+
+    The orchestrator (pre-turn fact/register selection) and internal subtasks
+    stay on the main LLM regardless — this only governs the single coherent
+    pass that produces what the user reads. Pointing it at a Chinese-native
+    model (doubao via the ARK OpenAI-compatible endpoint) removes the
+    translationese a Claude responder carries from its English-prior attention.
+
+    provider:
+      "main"   — use the main LLM (Claude); chat runs the agentic tool loop.
+      "doubao" — single coherent pass on doubao (full context, NO chat-time
+                 function-calling). Memory recall is already front-loaded into
+                 the prompt by the orchestrator; memory writes / plan updates
+                 ride the ===META=== block the model emits (parsed downstream).
+    model: ARK endpoint id (ep-xxx) when provider == "doubao".
+    """
+
+    provider: str = "main"  # "main" | "doubao"
+    model: str = ""
+
+
 class CompressionConfig(BaseModel):
     """Two-call (think → compress-to-speech) pipeline.
 
@@ -488,5 +510,6 @@ class PersonaConfig(BaseModel):
     sampling: SamplingConfig = Field(default_factory=SamplingConfig)
     biography: Biography = Field(default_factory=Biography)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
+    responder: ResponderConfig = Field(default_factory=ResponderConfig)
     decision_axes: DecisionAxes = Field(default_factory=DecisionAxes)
     message_habits: MessageHabits = Field(default_factory=MessageHabits)
