@@ -685,9 +685,16 @@ class ProactiveScheduler:
         # actually said today) + the proactive trigger as the latest user msg
         final_messages = recent_history_msgs + [{"role": "user", "content": user_prompt}]
 
+        # Generate in the SAME voice as reactive chat: route through the chat
+        # responder (doubao) so a proactive ping doesn't sound like a different
+        # person (Claude). The responder also makes the should_send call here;
+        # the scheduler's caps (consecutive/silence) bound any over-eagerness.
         try:
-            result = await self.engine.llm.complete(
-                messages=final_messages,
+            llm = self.engine._get_responder_llm()
+            msgs = (self.engine._to_openai_messages(final_messages)
+                    if self.engine._responder_is_external() else final_messages)
+            result = await llm.complete(
+                messages=msgs,
                 system=system_prompt,
                 max_tokens=600,
                 temperature=0.9,
