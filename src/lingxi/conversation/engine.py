@@ -1122,14 +1122,39 @@ class ConversationEngine:
             output.speech = cleaned
             output.inner_thought = inner_thought
         elif self._responder_is_external():
-            # Single coherent pass on the external responder (e.g. doubao):
-            # full context in, prose + ===META=== out, NO chat-time tools.
-            # Recall is front-loaded by the orchestrator; memory writes ride
-            # the META block. Image turns ride doubao too (multimodal) —
-            # _generate_single_pass converts the blocks to OpenAI format.
-            full_response = await self._generate_single_pass(
-                system_prompt, messages, purpose="chat_single_pass")
-            output = self._process_response(full_response)
+            # Single coherent pass on the external responder (e.g. doubao),
+            # STREAMED: emit prose as chunk events so the card updates live.
+            # Cut at the META delimiter so the metadata JSON never flashes;
+            # memory writes ride that block (parsed from the full raw at end).
+            # Image turns ride doubao too (blocks converted to OpenAI form).
+            from lingxi.conversation.output_schema import META_DELIMITER
+            llm = self._get_responder_llm()
+            oai_messages = self._to_openai_messages(messages)
+            raw = ""
+            sent = 0  # chars of prose already emitted as chunks
+            try:
+                async for chunk in llm.complete_stream(
+                    messages=oai_messages,
+                    system=system_prompt,
+                    temperature=self.persona.sampling.temperature,
+                    top_p=self.persona.sampling.top_p,
+                    _debug_purpose="chat_single_pass",
+                ):
+                    if not chunk.content:
+                        continue
+                    raw += chunk.content
+                    cut = raw.find(META_DELIMITER)
+                    prose = raw if cut == -1 else raw[:cut]
+                    # Hold back a tail that could be a partial delimiter so we
+                    # never stream a half-written "===MET" into the bubble.
+                    emit_upto = (len(prose) if cut != -1
+                                 else max(0, len(prose) - (len(META_DELIMITER) - 1)))
+                    if emit_upto > sent:
+                        yield StreamEvent("chunk", prose[sent:emit_upto])
+                        sent = emit_upto
+            except Exception as e:
+                print(f"[engine] single-pass stream failed: {e}")
+            output = self._process_response(raw)
             if not output.speech.strip():
                 output.speech = "诶 我这边卡了一下"
         else:
