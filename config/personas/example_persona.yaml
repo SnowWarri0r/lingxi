@@ -97,7 +97,7 @@ compression:
 # 记忆读取已由 orchestrator 预先挡进 prompt，记忆写入/plan 走输出里的 ===META=== 块。
 responder:
   provider: "doubao"
-  model: "ep-REDACTED"   # doubao-lite 接入点（ARK）
+  model: ""   # ARK 接入点 ep-xxx：放 .env 的 DOUBAO_RESPONDER_MODEL，不提交进 repo
 
 relationship:
   initial_stance: "友好但保持适当距离"

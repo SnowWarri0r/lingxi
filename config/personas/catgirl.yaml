@@ -81,7 +81,7 @@ compression:
 # 详见 example_persona.yaml 里的 responder 说明。
 responder:
   provider: "doubao"
-  model: "ep-REDACTED"   # doubao-lite 接入点（ARK）
+  model: ""   # ARK 接入点 ep-xxx：放 .env 的 DOUBAO_RESPONDER_MODEL，不提交进 repo
 
 # 生活模拟（plan→event→reflect）现在按人设驱动（build_self_context），开它
 # 妮妮就有自己的猫生活（晒太阳/瞪橘猫/等你回家），主动消息有料且在角色里。
