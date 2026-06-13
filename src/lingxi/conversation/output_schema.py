@@ -54,6 +54,11 @@ class TurnOutput(BaseModel):
     # Inner thought (not spoken)
     inner_thought: str = ""
 
+    # Sticker intent: a short mood/emotion description the persona wants to
+    # send as a 表情包 this turn. The engine searches the sticker store with
+    # this and resolves it to an actual image (empty = no sticker).
+    sticker: str = ""
+
     # Raw LLM output (for debugging)
     raw: str = ""
 
@@ -121,5 +126,7 @@ def parse_turn_output(raw: str) -> TurnOutput:
     inner = data.get("inner") or data.get("inner_thought")
     if isinstance(inner, str):
         out.inner_thought = inner.strip()
+
+    out.sticker = str(data.get("sticker", "") or "").strip()[:60]
 
     return out
