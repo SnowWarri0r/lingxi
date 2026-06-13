@@ -656,6 +656,12 @@ class ConversationEngine:
                     api_key=ark_key,
                     model=rc.model,
                     base_url="https://ark.cn-beijing.volces.com/api/v3",
+                    # doubao-seed models reason for ~15s before emitting content,
+                    # which kills perceived streaming (card sits blank, then the
+                    # whole reply dumps in <1s). Disable thinking → first token in
+                    # ~0.5s and the reply streams char-by-char. Harmless on
+                    # non-reasoning endpoints (ARK ignores it).
+                    extra_body={"thinking": {"type": "disabled"}},
                 )
                 return self._responder_llm
             print("[engine] responder=doubao but ARK_API_KEY/model missing "

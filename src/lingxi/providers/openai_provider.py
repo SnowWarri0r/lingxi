@@ -20,10 +20,15 @@ class OpenAIProvider(LLMProvider):
         api_key: str = "",
         model: str = "gpt-4o",
         base_url: str | None = None,
+        extra_body: dict | None = None,
     ):
         self.model = model
         self._api_key = api_key
         self._base_url = base_url
+        # Vendor-specific params merged into every create() call (e.g. doubao's
+        # {"thinking": {"type": "disabled"}} to skip the multi-second reasoning
+        # phase so chat replies start streaming immediately).
+        self._extra_body = extra_body or {}
         self._client: openai.AsyncOpenAI | None = None
 
     def _get_client(self) -> openai.AsyncOpenAI:
@@ -61,6 +66,8 @@ class OpenAIProvider(LLMProvider):
         )
         if top_p is not None:
             create_kwargs["top_p"] = top_p
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
         response = await self._get_client().chat.completions.create(**create_kwargs)
 
         choice = response.choices[0]
@@ -100,6 +107,8 @@ class OpenAIProvider(LLMProvider):
         )
         if top_p is not None:
             create_kwargs["top_p"] = top_p
+        if self._extra_body:
+            create_kwargs["extra_body"] = self._extra_body
         stream = await self._get_client().chat.completions.create(**create_kwargs)
 
         async for chunk in stream:
