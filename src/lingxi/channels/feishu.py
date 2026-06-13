@@ -389,16 +389,13 @@ class FeishuBot(OutboundChannel):
         # ReflectionLoop and LifeSimulator were retired.
 
         # World scheduler — fetches today's news briefing each morning.
-        # Requires the LLM provider's api_key to issue the web_search call.
-        # Skip silently if no api_key available (e.g. dev/test config).
-        api_key_for_world = getattr(self.engine.llm, "_api_key", "") or ""
-        if (
-            getattr(self.engine, "world_writer", None) is not None
-            and api_key_for_world
-        ):
+        # Routes the web_search call through the shared LLM provider so it
+        # reuses the bot's auth (OAuth Bearer works for the web_search server
+        # tool — no separate ANTHROPIC_API_KEY needed).
+        if getattr(self.engine, "world_writer", None) is not None:
             from lingxi.world.scheduler import WorldScheduler
             self._world_scheduler = WorldScheduler(
-                api_key=api_key_for_world,
+                llm=self.engine.llm,
                 world_writer=self.engine.world_writer,
                 fact_retriever=getattr(self.engine, "fact_retriever", None),
             )
