@@ -54,10 +54,13 @@ class StatePoller(QObject):
         if not isinstance(data, dict):
             return
 
-        # Only emit when sprite changes — every other field can fluctuate
-        # without needing a redraw.
+        # Emit when the sprite changes OR a new speech line arrives (the pet
+        # can speak without changing pose, e.g. a comment while you keep
+        # working — both want a redraw).
         new_sprite = data.get("sprite")
         old_sprite = self._last.get("sprite") if self._last else None
+        new_seq = data.get("speech_seq", 0)
+        old_seq = self._last.get("speech_seq", 0) if self._last else 0
         self._last = data
-        if new_sprite != old_sprite:
+        if new_sprite != old_sprite or new_seq != old_seq:
             self.state_changed.emit(data)
