@@ -42,7 +42,7 @@ class Live2DWindow(QWebEngineView):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
-        self.resize(*size)
+        self.setFixedSize(*size)
 
         # The local index.html (file://) fetches the placeholder model from a
         # CDN — allow that. (V2 vendors the model locally and this can drop.)
