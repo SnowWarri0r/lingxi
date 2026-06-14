@@ -68,9 +68,18 @@ def main() -> None:
     window.activateWindow()
 
     poller = StatePoller(url=state_url)
-    poller.state_changed.connect(
-        lambda data: window.show_sprite(data.get("sprite", "idle_default"))
-    )
+
+    _last_speech_seq = {"v": 0}
+
+    def on_state(data: dict) -> None:
+        window.show_sprite(data.get("sprite", "idle_default"))
+        seq = data.get("speech_seq", 0)
+        text = data.get("speech", "")
+        if seq and seq != _last_speech_seq["v"] and text:
+            _last_speech_seq["v"] = seq
+            window.show_speech(text)
+
+    poller.state_changed.connect(on_state)
     poller.start()
 
     print(f"[pet] running. sprites={sprite_dir} state={state_url}")

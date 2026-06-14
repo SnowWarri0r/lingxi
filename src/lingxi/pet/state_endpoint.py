@@ -87,10 +87,24 @@ def build_pet_state_app(engine) -> FastAPI:
             except Exception:
                 activity_name = None
 
+        # Desktop companion: what the user is doing with their coding agent +
+        # any in-character line the pet wants to say about it.
+        comp = getattr(engine, "pet_companion", None)
+        snap = comp.snapshot() if comp is not None else {}
+        activity = snap.get("activity")  # tool_running / thinking / awaiting_user / idle
+
+        # Map coding-activity → sprite (overrides the time fallback). The pet is
+        # focused while you work, sleepy when you've stepped away.
+        activity_kind = None
+        if activity in ("tool_running", "thinking"):
+            activity_kind = "work"
+        elif activity == "idle":
+            activity_kind = "sleep"
+
         sprite = pick_sprite(
             engagement_mode="full",
             emotion_family="NEUTRAL",
-            activity_kind=None,
+            activity_kind=activity_kind,
             hour=datetime.now().hour,
         )
 
@@ -98,8 +112,12 @@ def build_pet_state_app(engine) -> FastAPI:
             "sprite": sprite,
             "engagement_mode": "full",
             "emotion_family": "NEUTRAL",
-            "activity_kind": None,
+            "activity_kind": activity_kind,
             "activity_name": activity_name,
+            "coding_activity": activity,
+            "coding_detail": snap.get("activity_detail", ""),
+            "speech": snap.get("speech", ""),
+            "speech_seq": snap.get("speech_seq", 0),
             "mood_narrative": None,
             "ts": datetime.now().isoformat(),
         }
