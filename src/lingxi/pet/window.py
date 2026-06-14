@@ -250,29 +250,26 @@ class PetWindow(QWidget):
 
     # --- breathing animation ----------------------------------------------
 
-    def _start_breathing(self, base_pix: QPixmap) -> None:
-        """Pre-render a few subtle scale variants and cycle through them.
+    # Gentle vertical bob (in px). Moving the whole sprite a few pixels reads
+    # as a soft float/breath — unlike scaling a flat image, which looks like
+    # the picture is swelling. A real fix (blink/sway) needs a layered rig.
+    _BREATH_BOB = (0, -1, -2, -3, -3, -2, -1, 0)
 
-        4 frames at 800ms = 3.2s per breath cycle. Scale range ±1.5% is
-        barely perceptible per frame but reads as a clear sign of life
-        across the cycle. No new assets needed.
-        """
-        scales = (1.000, 1.010, 1.020, 1.010)
-        self._breath_frames = [
-            self._scale_for_display(base_pix, scale=s) for s in scales
-        ]
+    def _start_breathing(self, base_pix: QPixmap) -> None:
         self._breath_phase = 0
-        self._breath_timer.start(800)
+        self._breath_frames = [base_pix]  # non-empty marker for _tick guard
+        self._breath_timer.start(430)  # 8 steps × 430ms ≈ 3.4s per cycle
 
     def _stop_breathing(self) -> None:
         self._breath_timer.stop()
         self._breath_frames = []
+        self.label.move(0, 0)
 
     def _tick_breath(self) -> None:
-        if not self._breath_frames:
-            return
-        self._breath_phase = (self._breath_phase + 1) % len(self._breath_frames)
-        self.label.setPixmap(self._breath_frames[self._breath_phase])
+        if not self._breath_frames or self._snap is not None:
+            return  # don't bob while snapped/hidden at a screen edge
+        self._breath_phase = (self._breath_phase + 1) % len(self._BREATH_BOB)
+        self.label.move(0, self._BREATH_BOB[self._breath_phase])
 
     # --- drag to move ------------------------------------------------------
 
