@@ -44,6 +44,10 @@ class ProactiveConfig(BaseModel):
     # maybe twice tops. After that you wait for them. Without this cap, a
     # 24h user silence at cooldown=3h yields 8 proactives — stalkery.
     max_consecutive_proactive: int = 2
+    # ...but the cap shouldn't mean "silent forever until they reply". A clingy
+    # friend who's been ignored for most of a day pokes once more ("还在忙呀").
+    # If this long has passed since the last proactive, allow one past the cap.
+    reengage_after_hours: float = 14.0
     quiet_hours_start: int = 23  # inclusive
     quiet_hours_end: int = 8  # exclusive
 
@@ -425,6 +429,14 @@ class ProactiveScheduler:
         if (
             not force
             and record.consecutive_proactive_count >= self.config.max_consecutive_proactive
+            # Re-engage gate: once it's been a long while since the last
+            # proactive, let a clingy persona poke again instead of going mute
+            # forever. (last_proactive_sent is None on a fresh record.)
+            and (
+                record.last_proactive_sent is None
+                or (now - record.last_proactive_sent)
+                < timedelta(hours=self.config.reengage_after_hours)
+            )
         ):
             return {
                 "key": key, "status": "skipped_consecutive_cap",
