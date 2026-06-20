@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 
 from PyQt6.QtCore import QPoint, Qt, QTimer
-from PyQt6.QtGui import QAction, QGuiApplication, QMovie, QPixmap
+from PyQt6.QtGui import QAction, QGuiApplication, QImage, QMovie, QPixmap
 from PyQt6.QtWidgets import QApplication, QLabel, QMenu, QWidget
 
 
@@ -140,6 +140,10 @@ class PetWindow(QWidget):
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
+            # Kill the macOS frameless-window drop shadow — with the sprite
+            # animating, the shadow tracks the changing silhouette and reads
+            # as a faint floating layer behind the pet.
+            | Qt.WindowType.NoDropShadowWindowHint
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
@@ -163,6 +167,14 @@ class PetWindow(QWidget):
         self._breath_timer.timeout.connect(self._tick_breath)
         self._breath_frames: list[QPixmap] = []
         self._breath_phase = 0
+
+        # APNG frame player (full alpha — Qt's QMovie can't animate APNG, and
+        # GIF only has 1-bit transparency, so we decode frames ourselves).
+        self._anim_timer = QTimer(self)
+        self._anim_timer.setSingleShot(True)
+        self._anim_timer.timeout.connect(self._tick_anim)
+        self._anim_frames: list[tuple[QPixmap, int]] = []  # (pixmap, duration_ms)
+        self._anim_idx = 0
 
         # Peek timer — slides back to hidden after mouse leaves the body
         self._unpeek_timer = QTimer(self)
@@ -188,13 +200,19 @@ class PetWindow(QWidget):
         if name == self._current_sprite:
             return
 
-        # Try animated formats first; fall back to static PNG.
-        for ext in ("apng", "gif"):
-            anim_path = self.sprite_dir / f"{name}.{ext}"
-            if anim_path.exists() and self._show_animated(anim_path):
-                self._current_sprite = name
-                self._stop_breathing()
-                return
+        # APNG → our own full-alpha frame player (QMovie can't animate APNG).
+        apng = self.sprite_dir / f"{name}.apng"
+        if apng.exists() and self._play_apng(apng):
+            self._current_sprite = name
+            return
+
+        # GIF → QMovie (works, but only 1-bit transparency).
+        gif = self.sprite_dir / f"{name}.gif"
+        if gif.exists() and self._show_animated(gif):
+            self._current_sprite = name
+            self._stop_breathing()
+            self._stop_anim()
+            return
 
         path = self.sprite_dir / f"{name}.png"
         if not path.exists():
@@ -204,6 +222,7 @@ class PetWindow(QWidget):
             return
 
         self._stop_movie()
+        self._stop_anim()
         scaled = self._scale_for_display(pix)
         self.label.setPixmap(scaled)
         self._current_sprite = name
@@ -214,6 +233,52 @@ class PetWindow(QWidget):
             self._start_breathing(pix)
         else:
             self._stop_breathing()
+
+    # --- APNG frame player (full alpha) ------------------------------------
+
+    def _play_apng(self, path: Path) -> bool:
+        """Decode an APNG into RGBA frames and cycle them with full alpha."""
+        try:
+            from PIL import Image, ImageSequence
+        except Exception:
+            return False
+        try:
+            im = Image.open(str(path))
+            frames: list[tuple[QPixmap, int]] = []
+            for fr in ImageSequence.Iterator(im):
+                rgba = fr.convert("RGBA")
+                dur = int(fr.info.get("duration", 120)) or 120
+                qimg = QImage(
+                    rgba.tobytes("raw", "RGBA"),
+                    rgba.width, rgba.height,
+                    QImage.Format.Format_RGBA8888,
+                ).copy()
+                frames.append((self._scale_for_display(QPixmap.fromImage(qimg)), dur))
+        except Exception:
+            return False
+        if len(frames) < 2:
+            return False
+
+        self._stop_movie()
+        self._stop_breathing()
+        self._anim_frames = frames
+        self._anim_idx = 0
+        self.label.move(0, 0)
+        self.label.setPixmap(frames[0][0])
+        self._anim_timer.start(frames[0][1])
+        return True
+
+    def _tick_anim(self) -> None:
+        if not self._anim_frames:
+            return
+        self._anim_idx = (self._anim_idx + 1) % len(self._anim_frames)
+        pix, dur = self._anim_frames[self._anim_idx]
+        self.label.setPixmap(pix)
+        self._anim_timer.start(dur)
+
+    def _stop_anim(self) -> None:
+        self._anim_timer.stop()
+        self._anim_frames = []
 
     def _show_animated(self, path: Path) -> bool:
         """Display an APNG/GIF via QMovie. Returns True on success."""
