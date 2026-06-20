@@ -411,6 +411,17 @@ class FeishuBot(OutboundChannel):
                 self._start_plan_loops(), self._loop
             )
 
+        # Desktop companion: senses what the user is doing with their coding
+        # agent (Claude Code logs) and has the pet pipe up in-character. Lives
+        # on the engine so the /pet/state endpoint can read its snapshot.
+        try:
+            from lingxi.desktop.companion import PetCompanion
+            companion = PetCompanion(self.engine)
+            self.engine.pet_companion = companion
+            asyncio.run_coroutine_threadsafe(companion.run(), self._loop)
+        except Exception as e:
+            print(f"[pet-companion] not started: {e}", flush=True)
+
         # Build event handler
         handler = (
             lark.EventDispatcherHandler.builder("", "")

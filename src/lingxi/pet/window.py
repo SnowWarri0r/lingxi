@@ -46,6 +46,73 @@ _EDGE_SNAP_PX = 24
 _HIDE_FRACTION = 0.65
 
 
+class SpeechBubble(QWidget):
+    """A small frameless bubble that floats above the pet when she speaks.
+
+    Separate top-level window (not a child of the sprite) so it can sit above
+    the pet without enlarging the sprite window or fighting its breathing /
+    edge-hide geometry. Shows without stealing focus, auto-hides after a few
+    seconds.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(None)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Don't grab focus — the user is typing in their editor.
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+
+        self.label = QLabel(self)
+        self.label.setWordWrap(True)
+        self.label.setMaximumWidth(260)
+        self.label.setStyleSheet(
+            "QLabel {"
+            "  background: rgba(255,255,255,238);"
+            "  color: #3a3a4a;"
+            "  border: 2px solid rgba(150,150,190,190);"
+            "  border-radius: 14px;"
+            "  padding: 9px 13px;"
+            "  font-size: 14px;"
+            "  font-family: 'PingFang SC','Microsoft YaHei',sans-serif;"
+            "}"
+        )
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self.hide)
+
+    def show_text(self, text: str, anchor: QPoint, pet_width: int) -> None:
+        """Show `text` in a bubble centered above the pet.
+
+        `anchor` is the pet window's top-left in global coords; `pet_width`
+        its width — we center on the pet and sit just above its top.
+        """
+        text = (text or "").strip()
+        if not text:
+            return
+        self.label.setText(text)
+        self.label.adjustSize()
+        self.resize(self.label.size())
+
+        cx = anchor.x() + pet_width // 2
+        x = cx - self.width() // 2
+        y = anchor.y() - self.height() - 4
+        # keep on-screen
+        screen = QGuiApplication.primaryScreen().availableGeometry()
+        x = max(screen.left() + 4, min(x, screen.right() - self.width() - 4))
+        y = max(screen.top() + 4, y)
+        self.move(x, y)
+
+        self.show()
+        self.raise_()
+        # Linger longer for longer lines (reading time), 5–11s.
+        ms = max(5000, min(11000, 2500 + len(text) * 180))
+        self._hide_timer.start(ms)
+
+
 class PetWindow(QWidget):
     """Frameless transparent window that displays a (possibly animated) sprite."""
 
@@ -102,8 +169,18 @@ class PetWindow(QWidget):
         self._unpeek_timer.setSingleShot(True)
         self._unpeek_timer.timeout.connect(self._slide_to_hidden)
 
+        # Speech bubble (lazily shown above the pet when she comments).
+        self._bubble = SpeechBubble()
+
         self._restore_pos()
         self.show_sprite("idle_default")
+
+    def show_speech(self, text: str) -> None:
+        """Float a speech bubble above the pet (called on a new companion line)."""
+        try:
+            self._bubble.show_text(text, self.pos(), self.width())
+        except Exception:
+            pass
 
     # --- sprite display ----------------------------------------------------
 
