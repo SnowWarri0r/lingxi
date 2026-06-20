@@ -40,3 +40,6 @@ config/*.local.yaml
 
 # Claude Code local state
 .claude/
+
+# Derived pet idle animations — regenerate with tools/make_idle_apng.py
+assets/pet/sprites/*.apng
