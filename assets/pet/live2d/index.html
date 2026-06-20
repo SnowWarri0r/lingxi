@@ -1,0 +1,101 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  /* In-page speech bubble (driven from Python via window.petSay) */
+  #bubble {
+    position: fixed; left: 50%; top: 10px; transform: translateX(-50%);
+    max-width: 78%; padding: 9px 13px; border-radius: 14px;
+    background: rgba(255,255,255,.94); color: #3a3a4a;
+    border: 2px solid rgba(150,150,190,.75);
+    font: 14px/1.4 "PingFang SC","Microsoft YaHei",sans-serif;
+    box-shadow: 0 6px 18px rgba(0,0,0,.18);
+    opacity: 0; transition: opacity .25s; pointer-events: none; white-space: pre-wrap;
+  }
+  #bubble.show { opacity: 1; }
+  #err { position: fixed; left: 6px; bottom: 6px; color: #c33; font: 11px monospace; }
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div id="bubble"></div>
+<div id="err"></div>
+
+<!-- Libs are vendored locally (no remote executable code). The model below is
+     still fetched from CDN for V1 — it's data, and gets replaced by the real
+     妮妮 model in V2; vendor it then for fully-offline. -->
+<script src="vendor/live2dcubismcore.min.js"></script>
+<script src="vendor/pixi.min.js"></script>
+<script src="vendor/cubism4.min.js"></script>
+<script>
+// Model URL is passed in via ?model=... by the Python window (env-overridable),
+// so swapping bodies — free sample → bought → commissioned 妮妮 — needs no code
+// change. Falls back to a Live2D official sample.
+const MODEL_URL =
+  new URLSearchParams(location.search).get("model") ||
+  "https://cdn.jsdelivr.net/gh/Live2D/CubismWebSamples@master/Samples/Resources/Mao/Mao.model3.json";
+
+let app, model;
+let bubbleTimer = null;
+
+function showErr(msg) { document.getElementById("err").textContent = msg; }
+
+// Python calls these via runJavaScript.
+window.petSay = function (text) {
+  const b = document.getElementById("bubble");
+  if (!text) { b.classList.remove("show"); return; }
+  b.textContent = text;
+  b.classList.add("show");
+  if (bubbleTimer) clearTimeout(bubbleTimer);
+  const ms = Math.max(5000, Math.min(11000, 2500 + text.length * 180));
+  bubbleTimer = setTimeout(() => b.classList.remove("show"), ms);
+  // a little reaction when she speaks
+  try { model && model.motion && model.motion("TapBody"); } catch (e) {}
+};
+
+// Point the model toward a global cursor position handed in from Python
+// (px relative to this window's top-left). Lets her eyes follow the mouse
+// even when it's outside the transparent window.
+window.petFocus = function (x, y) {
+  if (model) model.focus(x, y);
+};
+
+function fit() {
+  if (!model || !app) return;
+  // app.screen is in CSS px (stage coords); renderer buffer is DPR-scaled.
+  const W = app.screen.width, H = app.screen.height;
+  const s = Math.min(W / model.internalModel.width,
+                     H / model.internalModel.height) * 0.92;
+  model.scale.set(s);
+  model.x = W / 2;
+  model.y = H / 2;
+}
+
+async function main() {
+  try {
+    if (!window.PIXI || !PIXI.live2d) { showErr("pixi/live2d not loaded"); return; }
+    app = new PIXI.Application({
+      view: document.getElementById("stage"),
+      autoStart: true, resizeTo: window,
+      backgroundAlpha: 0, antialias: true,
+      // Render at the screen's physical pixel density — without this the
+      // canvas is upscaled on Retina and looks blurry.
+      resolution: window.devicePixelRatio || 1,
+      autoDensity: true,
+    });
+    model = await PIXI.live2d.Live2DModel.from(MODEL_URL, { autoInteract: true });
+    model.anchor.set(0.5, 0.5);
+    app.stage.addChild(model);
+    fit();
+    window.addEventListener("resize", fit);
+  } catch (e) {
+    showErr("load failed: " + (e && e.message ? e.message : e));
+  }
+}
+window.addEventListener("load", main);
+</script>
+</body>
+</html>

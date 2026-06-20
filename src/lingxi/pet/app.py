@@ -55,9 +55,53 @@ def main() -> None:
     )
     pos_file = Path.home() / ".lingxi" / "pet_pos.json"
 
+    live2d = os.environ.get("LINGXI_PET_LIVE2D", "").strip() not in ("", "0", "false")
+    if live2d:
+        # QtWebEngine requires this attribute set BEFORE the QApplication is
+        # constructed (otherwise: "must be imported ... before a QCoreApplication").
+        from PyQt6.QtCore import Qt as _Qt
+        QApplication.setAttribute(_Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
+
     app = QApplication(sys.argv)
     # Keep alive when window is hidden via right-click menu
     app.setQuitOnLastWindowClosed(False)
+
+    # Live2D mode: a rigged, genuinely-animated body (breathing/blink/sway/
+    # eye-tracking) instead of the flat sprite. Opt-in via env while it's V1.
+    if live2d:
+        from lingxi.pet.live2d_window import Live2DWindow
+        from lingxi.pet.poller import StatePoller
+
+        html_path = (
+            Path(os.environ.get("LINGXI_PET_LIVE2D_HTML", "").strip())
+            if os.environ.get("LINGXI_PET_LIVE2D_HTML", "").strip()
+            else sprite_dir.parent / "live2d" / "index.html"
+        )
+        if not html_path.exists():
+            print(f"[pet] live2d html not found: {html_path}")
+            sys.exit(1)
+
+        pos_file = Path.home() / ".lingxi" / "pet_pos.json"
+        # LINGXI_PET_MODEL = any Live2D model3.json URL (free sample / bought /
+        # commissioned 妮妮). Empty → the page's built-in default.
+        model_url = os.environ.get("LINGXI_PET_MODEL", "").strip()
+        window = Live2DWindow(html_path, pos_file, model_url=model_url)
+        window.show()
+
+        poller = StatePoller(url=state_url)
+        _last = {"v": 0}
+
+        def on_state(data: dict) -> None:
+            seq = data.get("speech_seq", 0)
+            text = data.get("speech", "")
+            if seq and seq != _last["v"] and text:
+                _last["v"] = seq
+                window.say(text)
+
+        poller.state_changed.connect(on_state)
+        poller.start()
+        print(f"[pet] live2d running. html={html_path} state={state_url}")
+        sys.exit(app.exec())
 
     window = PetWindow(sprite_dir=sprite_dir, pos_file=pos_file)
     window.show()
