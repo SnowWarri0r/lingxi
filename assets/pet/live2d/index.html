@@ -80,7 +80,9 @@ async function main() {
     app = new PIXI.Application({
       view: document.getElementById("stage"),
       autoStart: true, resizeTo: window,
-      backgroundAlpha: 0, antialias: true,
+      // Fully transparent clear — antialias on a transparent WebGL surface in
+      // QtWebEngine can leave a white haze, so off.
+      backgroundAlpha: 0, backgroundColor: 0x000000, antialias: false,
       // Render at the screen's physical pixel density — without this the
       // canvas is upscaled on Retina and looks blurry.
       resolution: window.devicePixelRatio || 1,

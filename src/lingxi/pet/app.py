@@ -57,8 +57,16 @@ def main() -> None:
 
     live2d = os.environ.get("LINGXI_PET_LIVE2D", "").strip() not in ("", "0", "false")
     if live2d:
-        # QtWebEngine requires this attribute set BEFORE the QApplication is
-        # constructed (otherwise: "must be imported ... before a QCoreApplication").
+        # QtWebEngine composites the WebGL canvas as an OPAQUE surface by
+        # default → a white veil over the desktop even with backgroundAlpha=0.
+        # These Chromium flags make the compositor honour the page's alpha so
+        # only the character shows. Must be set BEFORE QApplication exists.
+        # (--disable-gpu falls WebGL back to SwiftShader; fine for one small pet.)
+        os.environ.setdefault(
+            "QTWEBENGINE_CHROMIUM_FLAGS",
+            "--enable-transparent-visuals",
+        )
+        # AA_ShareOpenGLContexts must also be set before the QApplication.
         from PyQt6.QtCore import Qt as _Qt
         QApplication.setAttribute(_Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
