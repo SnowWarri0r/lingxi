@@ -116,7 +116,7 @@ async def create_engine(
     # Set up auth and LLM provider
     ProviderRegistry.register_defaults()
     provider_name = get_nested(config, "llm", "provider", default="claude")
-    model = get_nested(config, "llm", "model", default="claude-sonnet-4-20250514")
+    model = get_nested(config, "llm", "model", default="claude-sonnet-4-6")
 
     auth_method_str = get_nested(config, "llm", "auth_method", default="oauth_pkce")
     auth_method = AuthMethod(auth_method_str)

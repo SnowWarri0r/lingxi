@@ -93,18 +93,17 @@ class DailyPlanner:
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
                 system=system,
-                max_tokens=800,
+                # 6-10 verbose Chinese plan items easily exceed 800 tokens →
+                # truncated JSON ("Unterminated string"). Give it room.
+                max_tokens=2000,
                 temperature=0.5,
                 _debug_purpose="daily_planner",
                 **kwargs,
             )
-            data = json.loads(_strip_fences(response.content))
-            if isinstance(data, list):
-                return [
-                    item for item in data
-                    if isinstance(item, dict)
-                    and "time_window" in item and "content" in item
-                ]
+            items = _parse_plan_items(response.content)
+            if not items:
+                print("[planner] no valid plan items parsed", flush=True)
+            return items
         except Exception as e:
             print(f"[planner] LLM/parse failed: {e}", flush=True)
         return []
@@ -151,3 +150,57 @@ def _strip_fences(text: str) -> str:
     text = re.sub(r"^```(?:json)?\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
     return text.strip()
+
+
+def _extract_json_objects(text: str) -> list[str]:
+    """Scan out top-level {...} chunks (string-aware), tolerant of a truncated
+    or comma-slipped array. Each chunk is parsed independently so one bad/cut
+    item doesn't sink the whole plan."""
+    objs: list[str] = []
+    depth = 0
+    start: int | None = None
+    in_str = False
+    esc = False
+    for i, ch in enumerate(text):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                objs.append(text[start:i + 1])
+                start = None
+    return objs
+
+
+def _parse_plan_items(content: str) -> list[dict]:
+    """Plan items from an LLM response — strict JSON first, then salvage."""
+    text = _strip_fences(content)
+    candidates: list[dict] = []
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            candidates = [d for d in data if isinstance(d, dict)]
+    except Exception:
+        for chunk in _extract_json_objects(text):
+            try:
+                d = json.loads(chunk)
+                if isinstance(d, dict):
+                    candidates.append(d)
+            except Exception:
+                pass
+    return [
+        item for item in candidates
+        if "time_window" in item and "content" in item
+    ]
