@@ -74,7 +74,7 @@ goals:
 # 单调用，不开双通道（和 Aria 一致）
 compression:
   enabled: false
-  compress_model: "claude-sonnet-4-20250514"
+  compress_model: "claude-sonnet-4-6"
   compress_max_tokens: 200
   compress_temperature: 0.9
 
