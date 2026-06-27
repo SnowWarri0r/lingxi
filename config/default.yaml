@@ -71,7 +71,8 @@ proactive:
     3: 2     # 信任：2小时
     4: 1     # 亲密：1小时
   cooldown_hours: 6             # 两次主动消息之间的最小间隔
-  max_consecutive_proactive: 2  # 对方不回复时最多连发几条（IM 朋友最多两次主动）
+  max_consecutive_proactive: 3  # 对方不回复时最多连发几条（黏人猫娘，放宽到 3）
+  reengage_after_hours: 8       # 被晾这么久后即使到连发上限也允许再轻戳一次（防永久哑火）
   quiet_hours_start: 23         # 静默时段开始（23点）
   quiet_hours_end: 8            # 静默时段结束（8点）
 
