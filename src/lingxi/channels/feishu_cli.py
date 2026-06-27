@@ -58,6 +58,7 @@ def main() -> None:
         },
         cooldown_hours=get_nested(cfg, "proactive", "cooldown_hours", default=12.0),
         max_consecutive_proactive=get_nested(cfg, "proactive", "max_consecutive_proactive", default=2),
+        reengage_after_hours=get_nested(cfg, "proactive", "reengage_after_hours", default=14.0),
         quiet_hours_start=get_nested(cfg, "proactive", "quiet_hours_start", default=23),
         quiet_hours_end=get_nested(cfg, "proactive", "quiet_hours_end", default=8),
     )
