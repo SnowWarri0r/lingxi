@@ -86,7 +86,7 @@ goals:
 # 也用强模型，避免 Haiku 理解力不够导致的选择错误。
 compression:
   enabled: false
-  compress_model: "claude-sonnet-4-20250514"
+  compress_model: "claude-sonnet-4-6"
   compress_max_tokens: 200
   compress_temperature: 0.9
 

@@ -1,6 +1,6 @@
 llm:
   provider: "claude"
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
   max_tokens: 4096
   temperature: 0.7
   # 认证方式: oauth_pkce (浏览器登录)、oauth_device_flow (设备码)、api_key (传统方式)
