@@ -138,8 +138,8 @@ class TestReminderBuilding:
         # Behavioral guards abstracted (no literal bad-output strings planted —
         # see feedback memory on attention bias from in-prompt bad strings).
         assert "具体反应" in result      # positive directive on how to start
-        assert "通用劝慰" in result      # abstract: don't pivot to generic comfort
-        assert "旧话题" in result        # abstract: don't dredge prior topics
+        assert "话题" in result          # positive: stay on the just-answered topic
+        assert "状态" in result          # positive: react to his state word
 
     def test_reminder_includes_concrete_good_examples(self):
         result = build_turn_focus_reminder(last_assistant_question="你回家了吗")
