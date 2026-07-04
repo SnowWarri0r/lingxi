@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from lingxi.facts.models import Fact, FactType, Source
 from lingxi.facts.retriever import FactQuery, FactRetriever
@@ -73,8 +73,12 @@ class Reflector:
         self._per_q_limit = per_question_limit
 
     async def reflect(self) -> None:
+        # Reflect on EVENTS only. Feeding past PATTERN facts back in makes the
+        # reflector ruminate on its own reflections — it spirals into abstract
+        # navel-gazing fixated on one theme (observed: days of "数心跳/在场"
+        # phenomenology). Concrete daily events keep reflection grounded.
         recent = await self._retriever._store.query(
-            subject="aria", limit=self._recent_window
+            subject="aria", type=FactType.EVENT, limit=self._recent_window
         )
         if len(recent) < self._min_facts:
             return
@@ -85,18 +89,23 @@ class Reflector:
 
         for q in questions:
             relevant = await self._retriever.fetch(
-                FactQuery(subject="aria", semantic=q, limit=self._per_q_limit)
+                FactQuery(subject="aria", type=FactType.EVENT,
+                          semantic=q, limit=self._per_q_limit)
             )
             insight = await self._answer(q, relevant)
             if not insight:
                 continue
+            now = datetime.now()
             pattern = Fact(
                 subject="aria",
                 content=insight,
                 source=Source.LLM_INFERRED,
                 type=FactType.PATTERN,
-                ts=datetime.now(),
+                ts=now,
                 importance=8,
+                # Patterns age out so they can't accumulate into a self-
+                # reinforcing pile that dominates planning/proactive forever.
+                expires_at=now + timedelta(days=14),
                 tags=[f"reflection_question:{q[:80]}"],
             )
             await self._writer.write_skip_scorer(pattern, trigger_observation=False)
