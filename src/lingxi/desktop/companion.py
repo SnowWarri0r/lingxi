@@ -122,7 +122,7 @@ class PetCompanion:
         user = (
             f"【你在主人的电脑桌面上陪着他，不是在 IM 里。你此刻看到的情形："
             f"{situation}。】\n就这个情形，你会冒出来对他说的一句话是什么？"
-            f"短，就一句，贴着这个情形，别问一串问题。"
+            f"短，就一句，贴着这个情形说。"
         )
         try:
             llm = self.engine._get_responder_llm()
