@@ -77,8 +77,17 @@ class Reflector:
         # reflector ruminate on its own reflections — it spirals into abstract
         # navel-gazing fixated on one theme (observed: days of "数心跳/在场"
         # phenomenology). Concrete daily events keep reflection grounded.
+        # Watermark: only events newer than the latest pattern — each life
+        # moment gets reflected on at most once. Without this the recent-N
+        # window re-served the same old events on every run, regrowing the
+        # same theme even after pattern inputs were excluded.
+        latest_pattern = await self._retriever._store.query(
+            subject="aria", type=FactType.PATTERN, limit=1
+        )
+        watermark = latest_pattern[0].ts if latest_pattern else None
         recent = await self._retriever._store.query(
-            subject="aria", type=FactType.EVENT, limit=self._recent_window
+            subject="aria", type=FactType.EVENT, since=watermark,
+            limit=self._recent_window,
         )
         if len(recent) < self._min_facts:
             return
@@ -90,7 +99,8 @@ class Reflector:
         for q in questions:
             relevant = await self._retriever.fetch(
                 FactQuery(subject="aria", type=FactType.EVENT,
-                          semantic=q, limit=self._per_q_limit)
+                          semantic=q, since=watermark,
+                          limit=self._per_q_limit)
             )
             insight = await self._answer(q, relevant)
             if not insight:

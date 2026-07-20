@@ -18,7 +18,11 @@ class ReflectionTrigger:
         self,
         reflector: _ReflectorLike,
         threshold: int = 150,
-        max_interval_seconds: float = 7200.0,
+        # 12h floor ≈ 1-2 reflections/day. At 2h the life-sim's 30-min event
+        # ticks tripped the elapsed branch every cycle — 5 patterns every 2h
+        # flooded the store and the recurring theme snowballed into the
+        # planner's inputs.
+        max_interval_seconds: float = 43200.0,
     ):
         self._reflector = reflector
         self._threshold = threshold
