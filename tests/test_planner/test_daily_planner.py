@@ -79,3 +79,29 @@ async def test_plan_aria_handles_llm_failure_gracefully(tmp_path):
     await planner.plan_aria()
     plans = await store.query(subject="aria", type=FactType.PLAN, limit=10)
     assert len(plans) == 0
+
+
+@pytest.mark.asyncio
+async def test_plan_prompt_states_real_date_and_clock(tmp_path):
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.retriever import FactRetriever
+    from lingxi.facts.writers.life import LifeWriter
+    from lingxi.planner.daily_planner import DailyPlanner, _WEEKDAYS
+
+    llm = FakeLLM("[]")
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    planner = DailyPlanner(llm, FactRetriever(store), LifeWriter(store, scorer=None))
+
+    now = datetime.now()
+    await planner.plan_aria()
+
+    prompt = llm.calls[0]
+    assert _WEEKDAYS[now.weekday()] in prompt
+    assert now.strftime("%-m月%-d日") in prompt
+    assert now.strftime("%H:") in prompt
+    # Catch-up runs (after 9am) plan the remaining day, morning runs the full day
+    if now.hour < 9:
+        assert "覆盖一天不同时段" in prompt
+    else:
+        assert "从现在到睡前" in prompt

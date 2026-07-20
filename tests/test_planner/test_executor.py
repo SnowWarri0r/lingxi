@@ -109,3 +109,23 @@ async def test_executor_request_replan_calls_planner_on_next_tick(tmp_path):
     executor.request_replan()
     await executor.tick()
     assert len(replan_calls) == 1
+
+
+def test_time_window_minutes_and_midnight_crossing():
+    from lingxi.planner.executor import _parse_time_window, _in_window
+
+    # minutes precision: 13:30-16:00 excludes 13:00, includes 13:45
+    w = _parse_time_window("13:30-16:00")
+    assert w == (13 * 60 + 30, 16 * 60)
+    assert not _in_window(13 * 60, *w)
+    assert _in_window(13 * 60 + 45, *w)
+
+    # same-hour window fires
+    w = _parse_time_window("18:00-18:30")
+    assert _in_window(18 * 60 + 10, *w)
+
+    # midnight crossing: 23:00-01:00 covers 23:30 and 00:30, excludes 12:00
+    w = _parse_time_window("23:00-01:00")
+    assert _in_window(23 * 60 + 30, *w)
+    assert _in_window(30, *w)
+    assert not _in_window(12 * 60, *w)
