@@ -324,6 +324,20 @@ class ResponderConfig(BaseModel):
     model: str = ""
 
 
+class LocationConfig(BaseModel):
+    """Where the persona lives — feeds real sunrise/sunset computation.
+
+    latitude/longitude in decimal degrees (east/north positive). utc_offset
+    is the persona's local zone in hours; it should match the zone the server
+    clock runs in for the light phase to line up (both domestic → +8).
+    """
+
+    name: str = ""
+    latitude: float
+    longitude: float
+    utc_offset: float = 8.0
+
+
 class CompressionConfig(BaseModel):
     """Two-call (think → compress-to-speech) pipeline.
 
@@ -516,6 +530,11 @@ class PersonaConfig(BaseModel):
     biography: Biography = Field(default_factory=Biography)
     compression: CompressionConfig = Field(default_factory=CompressionConfig)
     responder: ResponderConfig = Field(default_factory=ResponderConfig)
+    # Where the persona lives — drives real per-season sunrise/sunset so the
+    # sense of daylight matches the region and date (winter dark-by-17:00 vs
+    # summer light-till-19:00), instead of hardcoded hour buckets. Unset →
+    # a domestic default (see prompt_builder._persona_location).
+    location: LocationConfig | None = None
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive
