@@ -131,3 +131,34 @@ async def test_reflector_only_chews_events_newer_than_last_pattern(tmp_path):
     assert llm.calls == []
     patterns = await store.query(subject="aria", type=FactType.PATTERN, limit=10)
     assert len(patterns) == 1
+
+
+@pytest.mark.asyncio
+async def test_reflector_time_floor_when_no_pattern(tmp_path):
+    from datetime import timedelta
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.retriever import FactRetriever
+    from lingxi.facts.writers.inference import InferenceWriter
+    from lingxi.facts.reflector import Reflector
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    now = datetime.now()
+    # No pattern exists (e.g. just purged). 12 ancient events sit far in the
+    # past; only 3 are within the 24h fallback floor → under min_facts → skip,
+    # so a purge can't reopen the door to ancient events.
+    for i in range(12):
+        await store.write(Fact(
+            subject="aria", content=f"ancient {i}",
+            source=Source.LIFE_SIMULATED, type=FactType.EVENT,
+            ts=now - timedelta(days=10), importance=5))
+    for i in range(3):
+        await store.write(Fact(
+            subject="aria", content=f"fresh {i}",
+            source=Source.LIFE_SIMULATED, type=FactType.EVENT,
+            ts=now, importance=5))
+
+    llm = FakeLLM("should not be called")
+    reflector = Reflector(llm, FactRetriever(store), InferenceWriter(store, scorer=None))
+    await reflector.reflect()
+    assert llm.calls == []
