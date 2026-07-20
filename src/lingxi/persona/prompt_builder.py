@@ -193,62 +193,58 @@ class PromptBuilder:
     ) -> str:
         hour = current_time.hour
 
-        # tod_hint reads the OTHER person's situation; self_scene states YOUR
-        # OWN ambient light/setting as a plain fact. The responder (doubao,
-        # thinking disabled) won't infer "晚上 → 天黑 → 没太阳 → 晒不了落日"
-        # from the hour alone — under a "爱晒太阳" persona pull it confabulated
-        # sunbathing at 20:35. State the daylight as fact so it matches.
+        # tod_hint reads the OTHER person's situation — this is social/work
+        # rhythm, which is genuinely clock-based (9-to-5), so it stays keyed to
+        # the hour.
         if 0 <= hour < 5:
             tod_label = "深夜"
             tod_hint = "对方如果还醒着，应该是熬夜/失眠/工作"
-            self_scene = "窗外一片漆黑，屋里静，夜里的时段"
         elif 5 <= hour < 7:
             tod_label = "凌晨"
-            tod_hint = "天刚蒙蒙亮"
-            self_scene = "天刚蒙蒙亮，晨光淡淡的"
+            tod_hint = "多数人还在睡"
         elif 7 <= hour < 9:
             tod_label = "早上"
             tod_hint = "多数人正在准备上班或刚到公司"
-            self_scene = "天亮了，早上的光"
         elif 9 <= hour < 11:
             tod_label = "上午工作时段"
             tod_hint = "对方大概率在上班。'累/困/想睡'是**上班疲劳**，还要再撑几小时下班。"
-            self_scene = "大白天，日头正好——晒太阳、趴窗台这类成立"
         elif 11 <= hour < 13:
             tod_label = "中午"
             tod_hint = (
                 "午饭时间——对方多数在吃饭，或趴桌午休（短暂、随时会醒）。"
             )
-            self_scene = "正午，屋里亮堂堂的"
         elif 13 <= hour < 17:
             tod_label = "下午工作时段"
             tod_hint = "对方大概率在上班。'累/困'是**上班疲劳**，离下班还有几小时。"
-            self_scene = "下午的日光，还亮着——晒太阳这类成立"
         elif 17 <= hour < 19:
             tod_label = "傍晚"
             tod_hint = "下班时段，对方可能刚下班或还在收尾"
-            self_scene = "天色在暗下去，夕阳是今天最后一点光"
         elif 19 <= hour < 22:
             tod_label = "晚上"
             tod_hint = "下班后的个人时间"
-            self_scene = "天已经黑了，窗外是夜色，屋里靠灯光亮着"
         elif 22 <= hour < 24:
             tod_label = "夜晚"
             tod_hint = (
                 "工作日多数人 23:00-24:30 之间才睡，**这个时段对方大概率还醒着**。"
                 "默认他还在，正常往下聊；他主动说要睡了再道晚安。"
             )
-            self_scene = "夜深了，窗外黑着，屋里灯光"
         else:  # 24+ (technically unreachable, time wraps at 0)
             tod_label = "深夜"
             tod_hint = "对方还在聊天属于熬夜"
-            self_scene = "窗外一片漆黑，夜里的时段"
+
+        # self_scene states YOUR OWN ambient light as a plain fact, derived
+        # from the region's REAL sunrise/sunset today (not the hour). The
+        # responder (doubao, thinking disabled) won't infer "晚上 → 天黑 →
+        # 没太阳 → 晒不了落日" on its own — under a "爱晒太阳" pull it once
+        # offered sunbathing at 20:35. Real sun times also make it seasonal:
+        # dark-by-17:00 in winter, light-till-19:00 in summer.
+        self_scene = self._daylight_scene(current_time)
 
         lines = [
             "## ⏰ 当前真实时间（既判断对方的处境，也是你自己此刻的环境）",
             f"**{format_datetime_cn(current_time)}，现在是{tod_label}**。",
             f"对方那边：{tod_hint}",
-            f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线/时段对得上。",
+            f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线对得上。",
         ]
 
         if last_interaction_time is not None:
@@ -275,6 +271,48 @@ class PromptBuilder:
             lines.append("（这是你们第一次对话）")
 
         return "\n".join(lines)
+
+    def _persona_location(self):
+        """The persona's location for sun computation, or a domestic default
+        (Shanghai) when the YAML leaves it unset."""
+        from lingxi.temporal.sun import Location
+        loc = getattr(self.persona, "location", None)
+        if loc is not None:
+            return Location(
+                name=loc.name, latitude=loc.latitude,
+                longitude=loc.longitude, utc_offset_hours=loc.utc_offset,
+            )
+        return Location("上海", 31.2304, 121.4737, 8.0)
+
+    def _daylight_scene(self, now: datetime) -> str:
+        """Ambient-light phrase from the region's real sunrise/sunset today.
+
+        Phases relative to sun times (minute precision): pre-dawn dark → dawn
+        glow → daytime (sunbathing legit) → golden hour before sunset (sunset
+        legit) → post-sunset dark. Polar day/night handled explicitly.
+        """
+        from lingxi.temporal.sun import sun_times
+        st = sun_times(self._persona_location(), now.date())
+        if st.polar_night:
+            return "极夜，太阳整天不露面，窗外一直是暗的"
+        if st.polar_day:
+            return "极昼，太阳整天不落，外面一直亮着"
+
+        rise, set_ = st.sunrise, st.sunset
+        golden = timedelta(minutes=60)   # soft light bracketing rise/set
+        dusk_tail = timedelta(minutes=25)  # afterglow still counts as 有光
+
+        if now < rise - timedelta(minutes=40):
+            return "天还没亮，窗外一片暗，屋里靠灯光"
+        if now < rise + golden:
+            return "天刚亮，晨光淡淡的，凉丝丝的"
+        if now < set_ - golden:
+            return f"大白天，日头正好（今天日落大约 {set_.strftime('%H:%M')}）——晒太阳、趴窗台这类成立"
+        if now < set_:
+            return f"临近日落（今天日落大约 {set_.strftime('%H:%M')}），夕阳是今天最后一点光——现在说晒落日/看晚霞成立"
+        if now < set_ + dusk_tail:
+            return "太阳刚落下，天边还留着一点余光，很快就黑"
+        return "太阳已经落了，天黑了，窗外是夜色，屋里靠灯光"
 
     def _build_format_preamble(self) -> str:
         """Channel framing + minimal format spec + how to talk on IM.
