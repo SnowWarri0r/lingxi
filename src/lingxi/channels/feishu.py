@@ -403,6 +403,20 @@ class FeishuBot(OutboundChannel):
                 self._world_scheduler.start(), self._loop
             )
 
+        # Weather refresher — keeps current weather cached for the prompt's
+        # time/scene block (the persona feels the real temperature & sky).
+        try:
+            from lingxi.temporal.sun import persona_location
+            from lingxi.temporal.weather_scheduler import WeatherScheduler
+            self._weather_scheduler = WeatherScheduler(
+                persona_location(getattr(self.engine, "persona", None))
+            )
+            asyncio.run_coroutine_threadsafe(
+                self._weather_scheduler.start(), self._loop
+            )
+        except Exception as e:
+            print(f"[weather] scheduler start failed (non-fatal): {e}", flush=True)
+
         # Plan executor tick (every 30min) + morning planner (daily 7am).
         # DailyPlanner and PlanExecutor are constructed in create_engine and
         # attached as engine.daily_planner / engine.plan_executor.
