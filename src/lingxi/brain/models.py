@@ -25,6 +25,12 @@ class OrchestrationDecision:
     skip: list[str]                     # category names to skip rendering
     thread_summary: str = ""            # rolling thread summary for next turn
     plan_conflict: bool = False         # user input implies current plan needs adjustment
+    # A concise web-search query when the turn needs an external fact the
+    # persona wouldn't reliably know from her own memory (canon detail,
+    # real-world fact, current event). Empty on ordinary chat. Retrieval runs
+    # pre-turn and its result is injected as grounding — the responder stays
+    # a single pass with no chat-time tools.
+    lookup_query: str = ""
 
     @classmethod
     def default(cls) -> "OrchestrationDecision":
@@ -38,6 +44,7 @@ class OrchestrationDecision:
             skip=[],
             thread_summary="",
             plan_conflict=False,
+            lookup_query="",
         )
 
     @classmethod
@@ -71,4 +78,5 @@ class OrchestrationDecision:
             skip=[str(s) for s in raw.get("skip", [])],
             thread_summary=str(raw.get("thread_summary", "")),
             plan_conflict=bool(raw.get("plan_conflict", False)),
+            lookup_query=str(raw.get("lookup_query") or "").strip(),
         )

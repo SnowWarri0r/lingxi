@@ -70,3 +70,26 @@ def test_decision_from_dict_defaults_plan_conflict_false():
     from lingxi.brain.models import OrchestrationDecision
     d = OrchestrationDecision.from_dict({})
     assert d.plan_conflict is False
+
+
+def test_lookup_query_parsed_and_defaults_empty():
+    # default + no field → empty
+    assert OrchestrationDecision.default().lookup_query == ""
+    d = OrchestrationDecision.from_dict({
+        "engage_level": 0.5, "register": "warm", "fact_queries": [],
+        "topic_anchor": "", "skip": [],
+    })
+    assert d.lookup_query == ""
+    # present → parsed & stripped
+    d2 = OrchestrationDecision.from_dict({
+        "engage_level": 0.6, "register": "curious", "fact_queries": [],
+        "topic_anchor": "", "skip": [],
+        "lookup_query": "  Love Live Superstar 第一季 东京预选 结果  ",
+    })
+    assert d2.lookup_query == "Love Live Superstar 第一季 东京预选 结果"
+    # null → empty, not the string "None"
+    d3 = OrchestrationDecision.from_dict({
+        "engage_level": 0.6, "register": "warm", "fact_queries": [],
+        "topic_anchor": "", "skip": [], "lookup_query": None,
+    })
+    assert d3.lookup_query == ""
