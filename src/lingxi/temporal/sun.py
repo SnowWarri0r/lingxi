@@ -22,6 +22,21 @@ class Location:
     utc_offset_hours: float = 8.0   # persona's local zone; China default
 
 
+_DEFAULT_LOCATION = Location("上海", 31.2304, 121.4737, 8.0)
+
+
+def persona_location(persona) -> Location:
+    """Resolve a persona's Location, or the domestic default when its YAML
+    leaves `location` unset."""
+    loc = getattr(persona, "location", None) if persona is not None else None
+    if loc is None:
+        return _DEFAULT_LOCATION
+    return Location(
+        name=loc.name, latitude=loc.latitude,
+        longitude=loc.longitude, utc_offset_hours=loc.utc_offset,
+    )
+
+
 @dataclass(frozen=True)
 class SunTimes:
     sunrise: datetime | None   # local wall clock; None on polar night/day

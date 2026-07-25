@@ -239,6 +239,7 @@ class PromptBuilder:
         # offered sunbathing at 20:35. Real sun times also make it seasonal:
         # dark-by-17:00 in winter, light-till-19:00 in summer.
         self_scene = self._daylight_scene(current_time)
+        weather_line = self._weather_line(current_time)
 
         lines = [
             "## ⏰ 当前真实时间（既判断对方的处境，也是你自己此刻的环境）",
@@ -246,6 +247,8 @@ class PromptBuilder:
             f"对方那边：{tod_hint}",
             f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线对得上。",
         ]
+        if weather_line:
+            lines.append(weather_line)
 
         if last_interaction_time is not None:
             delta = current_time - last_interaction_time
@@ -273,16 +276,19 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _persona_location(self):
-        """The persona's location for sun computation, or a domestic default
-        (Shanghai) when the YAML leaves it unset."""
-        from lingxi.temporal.sun import Location
-        loc = getattr(self.persona, "location", None)
-        if loc is not None:
-            return Location(
-                name=loc.name, latitude=loc.latitude,
-                longitude=loc.longitude, utc_offset_hours=loc.utc_offset,
-            )
-        return Location("上海", 31.2304, 121.4737, 8.0)
+        """The persona's location for sun/weather, or a domestic default."""
+        from lingxi.temporal.sun import persona_location
+        return persona_location(self.persona)
+
+    def _weather_line(self, now: datetime) -> str | None:
+        """Real current weather for the persona's location, or None when no
+        fresh reading is cached (background loop refreshes it; a miss just
+        drops the line)."""
+        from lingxi.temporal.weather import cached
+        w = cached(self._persona_location(), now=now)
+        if w is None:
+            return None
+        return f"外面天气：{w.phrase()}。冷暖穿着这些跟它对得上。"
 
     def _daylight_scene(self, now: datetime) -> str:
         """Ambient-light phrase from the region's real sunrise/sunset today.
