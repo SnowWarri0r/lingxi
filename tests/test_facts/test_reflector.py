@@ -93,3 +93,41 @@ async def test_reflector_skips_when_not_enough_facts(tmp_path):
 
     patterns = await store.query(subject="aria", type=FactType.PATTERN, limit=10)
     assert len(patterns) == 0
+
+
+@pytest.mark.asyncio
+async def test_reflector_only_chews_events_newer_than_last_pattern(tmp_path):
+    from datetime import timedelta
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.retriever import FactRetriever
+    from lingxi.facts.writers.inference import InferenceWriter
+    from lingxi.facts.reflector import Reflector
+
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    now = datetime.now()
+    # 12 old events, all BEFORE an existing pattern (already reflected on)
+    for i in range(12):
+        await store.write(Fact(
+            subject="aria", content=f"old event {i}",
+            source=Source.LIFE_SIMULATED, type=FactType.EVENT,
+            ts=now - timedelta(hours=5), importance=5))
+    await store.write(Fact(
+        subject="aria", content="已有的洞见",
+        source=Source.LLM_INFERRED, type=FactType.PATTERN,
+        ts=now - timedelta(hours=2), importance=8))
+    # only 3 fresh events after the watermark — under min_facts
+    for i in range(3):
+        await store.write(Fact(
+            subject="aria", content=f"new event {i}",
+            source=Source.LIFE_SIMULATED, type=FactType.EVENT,
+            ts=now, importance=5))
+
+    llm = FakeLLM("should not be called")
+    reflector = Reflector(llm, FactRetriever(store), InferenceWriter(store, scorer=None))
+    await reflector.reflect()
+
+    # old events sit below the watermark → not enough fresh material → skip
+    assert llm.calls == []
+    patterns = await store.query(subject="aria", type=FactType.PATTERN, limit=10)
+    assert len(patterns) == 1
