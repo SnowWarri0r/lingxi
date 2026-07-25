@@ -84,6 +84,15 @@ responder:
   provider: "doubao"
   model: ""   # ARK 接入点 ep-xxx：放 .env 的 DOUBAO_RESPONDER_MODEL，不提交进 repo
 
+# 她住哪——决定当天真实日出日落，光线场景随季节地区走（冬天 17 点就黑、夏天
+# 19 点才暗）。改成你所在的城市经纬度即可；不填默认上海。utc_offset 要和服务器
+# 时钟所在时区一致（都在国内就 8）。
+location:
+  name: "上海"
+  latitude: 31.2304
+  longitude: 121.4737
+  utc_offset: 8
+
 # 生活模拟（plan→event→reflect）现在按人设驱动（build_self_context），开它
 # 妮妮就有自己的猫生活（晒太阳/瞪橘猫/等你回家），主动消息有料且在角色里。
 life_sim_enabled: true
