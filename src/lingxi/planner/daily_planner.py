@@ -14,14 +14,14 @@ from lingxi.facts.writers.life import LifeWriter
 from lingxi.providers.base import LLMProvider
 
 
-# {self} = persona self-context. Plan content is driven by 【我是谁】(biography)
-# + the persona, NOT hardcoded work hours / astronomy.
+# {self} = persona self-context — the single source of "who am I". Identity
+# stays in the persona YAML: a facts-side biography lookup degrades into a
+# recency/importance top-N whenever the FTS keyword misses (retriever treats
+# semantic as a 0.2-weight boost, not a filter), which once fed days of
+# heartbeat-counting events back in as "identity" and locked plans onto them.
 _SYSTEM_TMPL = "{self} 你在早上想一下今天打算怎么过。"
 
 _PLAN_PROMPT = """新的一天。我想一下今天打算怎么过。
-
-【我是谁】
-{biography}
 
 【昨天我反思到的】
 {reflections}
@@ -63,7 +63,6 @@ class DailyPlanner:
                           if persona is not None else "你是 Aria。")
 
     async def plan_aria(self) -> list[Fact]:
-        biography = await self._load_biography_summary()
         now = datetime.now()
         yesterday_start = (now - timedelta(days=1)).replace(
             hour=0, minute=0, second=0, microsecond=0
@@ -79,7 +78,6 @@ class DailyPlanner:
         )
 
         prompt = _PLAN_PROMPT.format(
-            biography=biography,
             reflections=self._bullets(reflections) or "（昨天没特别的反思）",
             patterns=self._bullets(patterns) or "（最近没新模式）",
         )
@@ -131,14 +129,6 @@ class DailyPlanner:
             await self._writer.write_skip_scorer(fact, trigger_observation=False)
             written.append(fact)
         return written
-
-    async def _load_biography_summary(self) -> str:
-        bio = await self._retriever.fetch(
-            FactQuery(subject="aria", semantic="身份", limit=5)
-        )
-        if not bio:
-            return "（暂无身份摘要）"
-        return self._bullets(bio)
 
     @staticmethod
     def _bullets(facts: list[Fact]) -> str:
