@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
@@ -141,6 +142,12 @@ class ConversationEngine:
         self.core_memory_writer = core_memory_writer
         self.plan_executor = plan_executor
         self.sticker_store = sticker_store
+        # Pre-turn web lookup (orchestrator-gated grounding). On by default;
+        # set LINGXI_WEB_LOOKUP=0 to disable.
+        self._web_lookup_enabled = (
+            os.environ.get("LINGXI_WEB_LOOKUP", "1").strip().lower()
+            not in ("0", "false", "no", "off")
+        )
         if embedding_provider is not None:
             self.memory.set_embedding_provider(embedding_provider)
         self.prompt_builder = PromptBuilder(persona)
@@ -481,6 +488,16 @@ class ConversationEngine:
         if decision.plan_conflict and self.plan_executor is not None:
             self.plan_executor.request_replan()
 
+        # Pre-turn web lookup: when the orchestrator flags a fact the persona
+        # doesn't carry in memory, fetch grounding NOW and inject it below.
+        # The responder stays single-pass (no chat-time tools). Env-gated;
+        # fail-safe (empty grounding → turn proceeds ungrounded).
+        grounding = ""
+        if decision.lookup_query and self._web_lookup_enabled:
+            from lingxi.brain.retrieval import web_lookup
+            print(f"[brain] web lookup: {decision.lookup_query!r}", flush=True)
+            grounding = await web_lookup(self.llm, decision.lookup_query)
+
         # Persist thread_summary for next turn
         if decision.thread_summary:
             if not hasattr(self, "_thread_summaries"):
@@ -497,6 +514,13 @@ class ConversationEngine:
             self.fact_retriever, decision, recipient_key=recipient_key,
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
+        if grounding:
+            # Injected as verified knowledge the persona can speak from — she
+            # weaves it into her own voice, not "I just googled it".
+            system_prompt += (
+                "\n\n## 你查证到的（当成你知道的可靠信息，用你自己的话讲，"
+                "别照抄、别提'我搜到'）\n" + grounding
+            )
 
         # Voice anchors: retrieve real-corpus speech samples whose context
         # matches this turn, append as a "here's how you talk" block. This is
