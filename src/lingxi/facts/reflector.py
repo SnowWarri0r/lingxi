@@ -59,6 +59,7 @@ class Reflector:
         min_facts: int = 10,
         recent_window: int = 100,
         per_question_limit: int = 15,
+        no_pattern_lookback_hours: float = 24.0,
         persona=None,
     ):
         self._llm = llm
@@ -71,6 +72,7 @@ class Reflector:
         self._min_facts = min_facts
         self._recent_window = recent_window
         self._per_q_limit = per_question_limit
+        self._no_pattern_lookback = timedelta(hours=no_pattern_lookback_hours)
 
     async def reflect(self) -> None:
         # Reflect on EVENTS only. Feeding past PATTERN facts back in makes the
@@ -81,10 +83,16 @@ class Reflector:
         # moment gets reflected on at most once. Without this the recent-N
         # window re-served the same old events on every run, regrowing the
         # same theme even after pattern inputs were excluded.
+        #
+        # When no pattern exists (fresh persona, or after a manual pattern
+        # purge), there's no watermark to bound the window — reading the full
+        # recent-N would re-chew whatever history is present. Fall back to a
+        # recent time floor so a purge doesn't reopen the door to old events.
         latest_pattern = await self._retriever._store.query(
             subject="aria", type=FactType.PATTERN, limit=1
         )
-        watermark = latest_pattern[0].ts if latest_pattern else None
+        watermark = (latest_pattern[0].ts if latest_pattern
+                     else datetime.now() - self._no_pattern_lookback)
         recent = await self._retriever._store.query(
             subject="aria", type=FactType.EVENT, since=watermark,
             limit=self._recent_window,
