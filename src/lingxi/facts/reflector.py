@@ -19,20 +19,30 @@ from lingxi.providers.base import LLMProvider
 
 
 # {self} = persona self-context. Depth follows the persona — a writer reflects
-# deeply, a catgirl notices a light cat-level thing. Don't force introspection.
-_SYSTEM_TMPL = "{self} 你在安静地回看自己最近的日子。"
+# deeply, a catgirl notices a light cat-level thing.
+#
+# Reflection here is the Generative-Agents kind: insight that INFORMS the next
+# move (it feeds the planner). Orient it outward/forward — patterns about him,
+# about how their days go, about what she wants to do differently — so what
+# reaches the planner is actionable intent. An inward "what does this reveal
+# about my inner self" framing turns a clingy persona's body-close events into
+# sensory rumination ("我用身体记他/听心跳"), which the planner then re-enacts,
+# feeding the same events back in — a self-reinforcing content spiral.
+_SYSTEM_TMPL = "{self} 你在回看最近的日子，琢磨点往后用得上的。"
 
 
-_QUESTIONS_PROMPT = """我看自己最近经历的这些事，有没有什么**值得停下来想一下**的？
-想到啥算啥，深浅看你是什么样的人——可能是反复出现的事、心情、跟谁的关系、
-对自己的一个发现，也可能就是件一直惦记着的小事。小事就好，越具体越实在。
+_QUESTIONS_PROMPT = """回看最近这些事，我琢磨出点什么往后能用上的——
+关于他（他的作息、心情、最近在忙的、喜欢什么有没有规律）、
+关于我们相处（什么时候最舒服、他喜欢我怎么样）、
+或者关于我自己想怎么过（我更想要什么、下次打算怎么做）。
+挑能落到往后行动上的，越具体越实在。
 
 比如（看你自己的口吻和深浅）：
-  - "最近老想着 X"
-  - "我跟 X 好像有点不一样了"
-  - "有件事一直搁我心里"
+  - "他这几天回得晚，像是在忙 X"
+  - "我发现我最开心的是 X，往后想多来点"
+  - "下次他 X 的时候，我可以 Y"
 
-写 3-5 个。输出 JSON array of strings，每条就是一个问题，用你自己平时会想的措辞。
+写 3-5 个。输出 JSON array of strings，每条一个，用你自己平时会想的措辞。
 
 我最近经历的事：
 {facts_block}
@@ -43,9 +53,8 @@ _ANSWER_PROMPT = """问题：{q}
 我手头有这些跟问题相关的事：
 {facts_block}
 
-我现在想一下这个问题，写**一条洞见**——浓缩，能补上事实之间的关系或趋势。
-写你由这件事新看到的关于自己的一点。
-1-2 句，用我自己想事情时的口语语气。
+写**一条我琢磨明白的**：说清我看出的那个规律/那件事，以及它让我往后想怎么做。
+落到具体的事和具体的打算上，1-2 句，用我自己想事情时的口语语气。
 """
 
 
