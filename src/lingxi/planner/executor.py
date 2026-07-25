@@ -35,11 +35,20 @@ _TW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
 
 
 def _parse_time_window(tag_value: str) -> tuple[int, int] | None:
+    """Window as (start, end) minutes-of-day."""
     m = _TW_RE.match(tag_value)
     if not m:
         return None
-    start_h, _, end_h, _ = map(int, m.groups())
-    return start_h, end_h
+    start_h, start_m, end_h, end_m = map(int, m.groups())
+    return start_h * 60 + start_m, end_h * 60 + end_m
+
+
+def _in_window(now_minute: int, start: int, end: int) -> bool:
+    """Minute-of-day containment; end <= start means the window crosses
+    midnight (e.g. 23:00-01:00)."""
+    if start < end:
+        return start <= now_minute < end
+    return now_minute >= start or now_minute < end
 
 
 class PlanExecutor:
@@ -121,6 +130,7 @@ class PlanExecutor:
         plans = await self._retriever._store.query(
             subject="aria", type=FactType.PLAN, since=today_start, limit=20,
         )
+        now_minute = now.hour * 60 + now.minute
         for plan in plans:
             tw_value = self._tag_value(plan, "time_window")
             if not tw_value:
@@ -128,8 +138,7 @@ class PlanExecutor:
             window = _parse_time_window(tw_value)
             if window is None:
                 continue
-            start_h, end_h = window
-            if start_h <= now.hour < end_h:
+            if _in_window(now_minute, *window):
                 return plan
         return None
 
