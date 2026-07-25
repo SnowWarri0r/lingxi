@@ -193,47 +193,62 @@ class PromptBuilder:
     ) -> str:
         hour = current_time.hour
 
-        # Time-of-day label and CRITICAL context
+        # tod_hint reads the OTHER person's situation; self_scene states YOUR
+        # OWN ambient light/setting as a plain fact. The responder (doubao,
+        # thinking disabled) won't infer "晚上 → 天黑 → 没太阳 → 晒不了落日"
+        # from the hour alone — under a "爱晒太阳" persona pull it confabulated
+        # sunbathing at 20:35. State the daylight as fact so it matches.
         if 0 <= hour < 5:
             tod_label = "深夜"
             tod_hint = "对方如果还醒着，应该是熬夜/失眠/工作"
+            self_scene = "窗外一片漆黑，屋里静，夜里的时段"
         elif 5 <= hour < 7:
             tod_label = "凌晨"
             tod_hint = "天刚蒙蒙亮"
+            self_scene = "天刚蒙蒙亮，晨光淡淡的"
         elif 7 <= hour < 9:
             tod_label = "早上"
             tod_hint = "多数人正在准备上班或刚到公司"
+            self_scene = "天亮了，早上的光"
         elif 9 <= hour < 11:
             tod_label = "上午工作时段"
             tod_hint = "对方大概率在上班。'累/困/想睡'是**上班疲劳**，还要再撑几小时下班。"
+            self_scene = "大白天，日头正好——晒太阳、趴窗台这类成立"
         elif 11 <= hour < 13:
             tod_label = "中午"
             tod_hint = (
                 "午饭时间——对方多数在吃饭，或趴桌午休（短暂、随时会醒）。"
             )
+            self_scene = "正午，屋里亮堂堂的"
         elif 13 <= hour < 17:
             tod_label = "下午工作时段"
             tod_hint = "对方大概率在上班。'累/困'是**上班疲劳**，离下班还有几小时。"
+            self_scene = "下午的日光，还亮着——晒太阳这类成立"
         elif 17 <= hour < 19:
             tod_label = "傍晚"
             tod_hint = "下班时段，对方可能刚下班或还在收尾"
+            self_scene = "天色在暗下去，夕阳是今天最后一点光"
         elif 19 <= hour < 22:
             tod_label = "晚上"
             tod_hint = "下班后的个人时间"
+            self_scene = "天已经黑了，窗外是夜色，屋里靠灯光亮着"
         elif 22 <= hour < 24:
             tod_label = "夜晚"
             tod_hint = (
                 "工作日多数人 23:00-24:30 之间才睡，**这个时段对方大概率还醒着**。"
                 "默认他还在，正常往下聊；他主动说要睡了再道晚安。"
             )
+            self_scene = "夜深了，窗外黑着，屋里灯光"
         else:  # 24+ (technically unreachable, time wraps at 0)
             tod_label = "深夜"
             tod_hint = "对方还在聊天属于熬夜"
+            self_scene = "窗外一片漆黑，夜里的时段"
 
         lines = [
-            "## ⏰ 当前真实时间（按这个判断对方此刻的处境）",
+            "## ⏰ 当前真实时间（既判断对方的处境，也是你自己此刻的环境）",
             f"**{format_datetime_cn(current_time)}，现在是{tod_label}**。",
-            f"场景提示：{tod_hint}",
+            f"对方那边：{tod_hint}",
+            f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线/时段对得上。",
         ]
 
         if last_interaction_time is not None:
