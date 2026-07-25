@@ -19,9 +19,14 @@ from lingxi.providers.base import LLMProvider
 # recency/importance top-N whenever the FTS keyword misses (retriever treats
 # semantic as a 0.2-weight boost, not a filter), which once fed days of
 # heartbeat-counting events back in as "identity" and locked plans onto them.
-_SYSTEM_TMPL = "{self} 你在早上想一下今天打算怎么过。"
+_SYSTEM_TMPL = "{self} 你在想自己今天怎么过。"
 
-_PLAN_PROMPT = """新的一天。我想一下今天打算怎么过。
+_WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+# The planner may run as a startup catch-up at any hour, not only at the 7am
+# tick — the prompt states the real date/weekday/clock so the plan follows the
+# actual day (weekend vs weekday) and covers only the hours still ahead.
+_PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我想一下今天{scope_phrase}怎么过。
 
 【昨天我反思到的】
 {reflections}
@@ -30,13 +35,13 @@ _PLAN_PROMPT = """新的一天。我想一下今天打算怎么过。
 {patterns}
 
 【怎么安排】
-- 6-10 条今天的安排，覆盖一天不同时段（早、白天、晚上）+ 你的日常习惯
-- hour 粒度，time_window 形如 "09:00-12:00"
-- 写**具体**符合**你这个人/你这种日子**的事：落到你心里清楚在做的那件具体行为（如『趴窗台晒太阳』『等他下班』）
+- {coverage_line}
+- hour 粒度，time_window 形如 "09:00-12:00"，全部排在 {now_hhmm} 之后
+- 写**具体**符合**你这个人/你这种日子**的事：落到你心里清楚在做的那件具体行为（如『趴窗台晒太阳』『等他下班』）；今天是{weekday}，按{weekday}该有的节奏排
 - 至少 2 条对应到你长期在惦记/在做的事
 
 输出 JSON：
-[{{"time_window": "07:00-08:00", "content": "...", "goal": "..."}}, ...]
+[{{"time_window": "09:00-12:00", "content": "...", "goal": "..."}}, ...]
 content 用你自己想事情的语气，第一人称，每条直接以动作或观察开头（如『趴窗台晒太阳』）。
 """
 
@@ -77,7 +82,18 @@ class DailyPlanner:
                       since=week_ago, limit=10)
         )
 
+        if now.hour < 9:
+            scope_phrase = ""
+            coverage_line = "6-10 条今天的安排，覆盖一天不同时段（早、白天、晚上）+ 你的日常习惯"
+        else:
+            scope_phrase = "接下来"
+            coverage_line = "3-8 条从现在到睡前的安排，覆盖剩下的时段 + 你的日常习惯"
         prompt = _PLAN_PROMPT.format(
+            date_str=now.strftime("%-m月%-d日"),
+            weekday=_WEEKDAYS[now.weekday()],
+            now_hhmm=now.strftime("%H:%M"),
+            scope_phrase=scope_phrase,
+            coverage_line=coverage_line,
             reflections=self._bullets(reflections) or "（昨天没特别的反思）",
             patterns=self._bullets(patterns) or "（最近没新模式）",
         )
