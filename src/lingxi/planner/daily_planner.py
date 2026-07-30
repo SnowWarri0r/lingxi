@@ -34,11 +34,15 @@ _PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我�
 【最近一周我注意到的模式】
 {patterns}
 
+【我生活里的人】
+{people}
+
 【怎么安排】
 - {coverage_line}
 - hour 粒度，time_window 形如 "09:00-12:00"，全部排在 {now_hhmm} 之后
 - 写**具体**符合**你这个人/你这种日子**的事：落到你心里清楚在做的那件具体行为（如『趴窗台晒太阳』『等他下班』）；今天是{weekday}，按{weekday}该有的节奏排
 - 至少 2 条对应到你长期在惦记/在做的事
+- **一天里有别人也有外面的世界**：至少 2-3 条牵涉到上面这些人、或发生在门外（碰面、一起做点什么、路上/店里/学校里遇到的事、跟人说的一句话）。剩下的可以是你一个人的事。真实的一天是里外都有的。
 
 输出 JSON：
 [{{"time_window": "09:00-12:00", "content": "...", "goal": "..."}}, ...]
@@ -48,6 +52,19 @@ content 用你自己想事情的语气，第一人称，每条直接以动作或
 
 def _end_of_day(now: datetime) -> datetime:
     return now.replace(hour=23, minute=59, second=59, microsecond=0)
+
+
+def _format_people(persona) -> str:
+    """Render the persona's recurring_people so the day can include them."""
+    bio = getattr(persona, "biography", None) if persona is not None else None
+    people = getattr(bio, "recurring_people", None) or []
+    lines = []
+    for p in people:
+        name = getattr(p, "name", "") or ""
+        rel = getattr(p, "relation", "") or ""
+        if name:
+            lines.append(f"  - {name}：{rel}" if rel else f"  - {name}")
+    return "\n".join(lines) or "（暂无）"
 
 
 class DailyPlanner:
@@ -66,6 +83,11 @@ class DailyPlanner:
         from lingxi.persona.self_context import build_self_context
         self._self_ctx = (build_self_context(persona)
                           if persona is not None else "你是 Aria。")
+        # The people in her life, straight from the persona YAML. Without them
+        # the planner only ever sees her own reflections, so it schedules a
+        # fully solipsistic day — for a character defined by her group that is
+        # both off-character and leaves her nothing to talk about.
+        self._people_block = _format_people(persona)
 
     async def plan_aria(self) -> list[Fact]:
         now = datetime.now()
@@ -96,6 +118,7 @@ class DailyPlanner:
             coverage_line=coverage_line,
             reflections=self._bullets(reflections) or "（昨天没特别的反思）",
             patterns=self._bullets(patterns) or "（最近没新模式）",
+            people=self._people_block,
         )
         items = await self._call_planner(
             prompt, _SYSTEM_TMPL.format(self=self._self_ctx))
@@ -107,9 +130,10 @@ class DailyPlanner:
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
                 system=system,
-                # 6-10 verbose Chinese plan items easily exceed 800 tokens →
-                # truncated JSON ("Unterminated string"). Give it room.
-                max_tokens=2000,
+                # 6-10 verbose Chinese plan items with goals land near 2000
+                # tokens; a run that brushes the ceiling gets truncated and the
+                # salvage parser then recovers only a partial day. Headroom.
+                max_tokens=3000,
                 temperature=0.5,
                 _debug_purpose="daily_planner",
                 **kwargs,
