@@ -190,7 +190,8 @@ def _format_own_life_block(facts: list[Fact]) -> str:
         "## 你自己最近在忙/发生的事（**优先从这里挑一件起头**）\n"
         f"{lines}\n\n"
         "（这些是你自己的生活——你主动找对方，多半是想说**你这边**某件具体的事。"
-        "挑一件真有触动的，就讲那一件；**用你自己的大白话讲出来**。）\n"
+        "挑一件你真想说的就讲那一件——**平平常常的小事同样算**，"
+        "日子多数时候就是平的；**用你自己的大白话讲出来**。）\n"
     )
 
 
@@ -641,9 +642,23 @@ class ProactiveScheduler:
             "- **问句基于具体证据**：用户上次说要熬夜赶报告 → 深夜了问『还在搞那个吗』；"
             "用户上次说要出差 → 现在问『落地了吗』。有这种具体钩子时才问。\n"
             "- **时段贴合作息**：深夜顺着问进度，白天顺着问近况，跟着对方此刻可能的状态来。\n"
+            "- **音量按事情本身来**：多数主动消息是平常音量，像随手跟人说一句"
+            "（『刚发现冰箱酸奶过期一周了』这种分量）；真碰上让你激动的事，那一条再放开来兴奋。"
+            "一天里平常的时刻本来就比高光时刻多。\n"
         )
+        # Tone variety applies to BOTH paths. It used to hang only off `force`
+        # (the test path), so the real scheduled message carried no register
+        # guidance at all and defaulted to the persona's peak energy — every
+        # opener came out at maximum volume. The style examples are deliberately
+        # ordinary-volume, which is what supplies the missing middle register.
+        style = random.choice(_MESSAGE_STYLES)
+        style_block = (
+            f"## 这次试一种语气：【{style['name']}】\n"
+            f"{style['desc']}\n"
+            f"参考语气（体会**分量和音量**，自己写）：「{style['example']}」\n\n"
+        )
+        print(f"[proactive] style: {style['name']}", flush=True)
         if force:
-            style = random.choice(_MESSAGE_STYLES)
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
@@ -652,14 +667,11 @@ class ProactiveScheduler:
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
                 f"{opener_shape}\n"
-                f"## 这次试一种语气：【{style['name']}】\n"
-                f"{style['desc']}\n"
-                f"参考语气（体会分量，自己写）：「{style['example']}」\n\n"
+                f"{style_block}"
                 f"按 system prompt 里的 `===META===` 格式输出。如果**真的**没什么想说，就让对白空、"
                 f"`should_send: false`：\n```\n<想说的那一句，IM 短句>\n===META===\n"
                 f'{{"should_send": true, "inner": "为什么这一刻想发"}}\n```'
             )
-            print(f"[proactive] force style: {style['name']}")
         else:
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
@@ -669,6 +681,7 @@ class ProactiveScheduler:
                 f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
                 f"{opener_shape}\n"
+                f"{style_block}"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
