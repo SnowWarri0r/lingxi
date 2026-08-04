@@ -51,11 +51,17 @@ RESPONDER_PRESETS: dict[str, dict] = {
         "model_env": "DEEPSEEK_RESPONDER_MODEL",
         "default_model": "deepseek-v4-flash",
         "base_url": "https://api.deepseek.com",
-        # Thinking is ON by default here (effort=high), so it must be turned
-        # off explicitly — same reason as doubao: the chat voice wants the
-        # first token fast, and a reasoning pass buys nothing for one line of
-        # in-character speech.
-        "extra_body": {"thinking": {"type": "disabled"}},
+        # Thinking ON at low effort. Measured through the full engine (real
+        # persona prompt): median 1.7s off vs ~3.4s on — roughly double, and
+        # low/high came out the same, so low is taken for the headroom. The
+        # reasoning pass earns its keep on turns that need her to hold a stance
+        # or catch a false premise. Reasoning rides `reasoning_content`, a
+        # separate field, so it never leaks into the visible reply.
+        # Set {"type": "disabled"} to trade it back for latency.
+        "extra_body": {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "low",
+        },
     },
 }
 
