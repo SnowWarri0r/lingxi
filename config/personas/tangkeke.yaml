@@ -83,9 +83,12 @@ compression:
 
 # Responder：对外说话走豆包（中文母语语感）。orchestrator/子任务仍是 Claude。
 # 详见 example_persona.yaml 里的 responder 说明。
+# 对外说话那一句由谁生成。可选 "deepseek" / "doubao" / "main"(主模型 Claude)。
+# model 留空走 .env（deepseek → DEEPSEEK_RESPONDER_MODEL，默认 deepseek-v4-flash；
+# doubao → DOUBAO_RESPONDER_MODEL 的 ep-xxx），密钥和接入点不提交进 repo。
 responder:
-  provider: "doubao"
-  model: ""   # ARK 接入点 ep-xxx：放 .env 的 DOUBAO_RESPONDER_MODEL，不提交进 repo
+  provider: "deepseek"
+  model: ""
 
 # 她住哪——决定当天真实日出日落 + 天气。唐可可是上海女孩，落在上海，时区跟
 # 服务器（国内 +8）对齐，时间/光线/天气三者一致。想改成东京求"留学日本"的味道
