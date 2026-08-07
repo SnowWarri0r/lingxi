@@ -224,7 +224,12 @@ async def create_engine(
     await sticker_store.init()
 
     fact_retriever = FactRetriever(facts_store)
-    importance_scorer = ImportanceScorer(llm_provider)
+    # A chat turn yields 0-2 user facts, so the default batch of 5 never fills
+    # and every fact waits out the full flush window before it is scored and
+    # stored. At the 30s default that outlives flush_pending_memory_writes()'s
+    # 10s wait, so facts were dropped whenever a session ended. 5s lands them
+    # promptly and still batches bursts.
+    importance_scorer = ImportanceScorer(llm_provider, flush_seconds=5.0)
 
     # _LazyTrigger breaks the init cycle: writers need a trigger ref, but the
     # real ReflectionTrigger needs a Reflector, which needs InferenceWriter first.
