@@ -523,6 +523,14 @@ class ConversationEngine:
         if decision.plan_conflict and self.plan_executor is not None:
             self.plan_executor.request_replan()
 
+        # Durable facts the orchestrator spotted in this user turn. Extraction
+        # rides here rather than only on the responder: the responder is busy
+        # composing speech and skips it (measured — it caught 1 of 4 plainly
+        # stated facts), while the orchestrator is already analysing the turn.
+        if decision.memory_writes:
+            print(f"[brain] memory writes: {decision.memory_writes}", flush=True)
+            self._write_user_facts(decision.memory_writes)
+
         # Pre-turn web lookup: when the orchestrator flags a fact the persona
         # doesn't carry in memory, fetch grounding NOW and inject it below.
         # The responder stays single-pass (no chat-time tools). Env-gated;
@@ -1347,28 +1355,57 @@ class ConversationEngine:
         # These are durable facts the persona chose to remember about the
         # interlocutor; they surface back via the orchestrator/renderer's
         # 【你和他】 block. Fire-and-forget, tracked so end_session() can flush.
-        if self.user_statement_writer is not None and self._current_recipient_key:
-            from lingxi.facts.models import Source
-            subject = f"user:{self._current_recipient_key}"
-            for content in output.memory_writes:
-                try:
-                    loop = asyncio.get_running_loop()
-                    task = loop.create_task(
-                        self.user_statement_writer.write(
-                            subject=subject,
-                            content=content,
-                            type=FactType.PATTERN,
-                            source=Source.USER_STATED,
-                            ts=datetime.now(),
-                        )
-                    )
-                    self._pending_memory_tasks.add(task)
-                    task.add_done_callback(self._pending_memory_tasks.discard)
-                except RuntimeError:
-                    pass
+        # Extraction of durable user facts is the orchestrator's job (it reads
+        # the turn pre-response and is the stronger model). The responder isn't
+        # asked to fill memory_writes — when both did, the same fact landed
+        # twice in slightly different words. Anything it volunteers still gets
+        # written, so a persona prompt that opts back in keeps working.
+        self._write_user_facts(output.memory_writes)
 
         self._last_output = output
         return output
+
+    def _write_user_facts(self, contents: list[str]) -> None:
+        """Persist facts about the interlocutor to facts.db as
+        subject=user:<recipient_key>. They surface back through the
+        orchestrator/renderer's 【你和他】 block on later turns.
+
+        Fire-and-forget, tracked so end_session() can flush. Called from both
+        the orchestrator path (pre-turn analysis) and the responder's META.
+        """
+        import asyncio
+
+        if not contents:
+            return
+        if self.user_statement_writer is None or not self._current_recipient_key:
+            return
+        from lingxi.facts.models import Source
+        subject = f"user:{self._current_recipient_key}"
+
+        def _report(t: "asyncio.Task") -> None:
+            # Retrieve the result so a failed write is visible. Without this the
+            # exception dies with the task and memory silently stops persisting.
+            self._pending_memory_tasks.discard(t)
+            if not t.cancelled() and t.exception() is not None:
+                print(f"[memory] user-fact write failed: {t.exception()!r}",
+                      flush=True)
+
+        for content in contents:
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(
+                    self.user_statement_writer.write(
+                        subject=subject,
+                        content=content,
+                        type=FactType.PATTERN,
+                        source=Source.USER_STATED,
+                        ts=datetime.now(),
+                    )
+                )
+                self._pending_memory_tasks.add(task)
+                task.add_done_callback(_report)
+            except RuntimeError as e:
+                print(f"[memory] user-fact write not scheduled: {e}", flush=True)
 
     async def flush_pending_memory_writes(self) -> int:
         """Await all in-flight memory_write tasks. Call before consolidation

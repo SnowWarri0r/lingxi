@@ -60,6 +60,12 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    - {agent} 凭人设/记忆就能答的 → 留空 ""
    - 对方要 {agent} **复述某句具体台词/歌词、某个精确细节**（原话、歌词原文、某集具体情节）时，即便这件事 {agent} 大致记得，也填 query 去查确切的——记忆里多半只有大概、没有逐字原文，查了才不至于临场编。
    - 只在"答准需要外部确凿事实、或要精确原文/细节，而记忆里只有大概"时才填，平常宁可留空（每次查都有延迟）。
+8. **memory_writes**：用户这条里有没有**下次还用得上**的事实？有就写成一句一条存进长期记忆（往后每轮都翻得到）。
+   该记的：作息安排（`对方一般七点半下班，偶尔加班到九点`）、身边的人和事（`对方养了只叫团子的猫，很胖`）、
+   在做的事（`对方在赶一个叫 canda 的项目，月底 deadline`）、喜好和雷区（`对方不吃香菜`）、
+   约定（`说好下次演出对方来看`）、身份背景（`对方是后端工程师`）。
+   用 `对方` 指称，**只写用户自己说过的**——没明说的性别/年龄/职业不要补。
+   纯寒暄、当下天气心情这类过去就过去的，留空 []。已经记过的同一件事不用重复写。
 
 【上一轮的 thread_summary】（如果有 — 当作可信的"前情提要"基础）
 {prev_thread_summary}
@@ -90,7 +96,8 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
   "thread_summary": "...",
   "skip": ["world.event"],
   "plan_conflict": false,
-  "lookup_query": ""
+  "lookup_query": "",
+  "memory_writes": []
 }}
 """
 
@@ -171,7 +178,7 @@ async def decide(
         response = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             system=f"你是 {agent_name} 的对话调度器，专门做结构化决策，输出严格 JSON。",
-            max_tokens=500,
+            max_tokens=700,
             temperature=0.3,
             _debug_purpose="orchestrator",
             **kwargs,
