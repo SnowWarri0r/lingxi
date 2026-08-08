@@ -535,6 +535,13 @@ class PersonaConfig(BaseModel):
     # summer light-till-19:00), instead of hardcoded hour buckets. Unset →
     # a domestic default (see prompt_builder._persona_location).
     location: LocationConfig | None = None
+    # The working vocabulary of her world — jargon, slang and abbreviations a
+    # person in this life uses and hears daily. Native knowledge, so it belongs
+    # in the prompt rather than behind a lookup: without it the model reads an
+    # in-group term in its everyday sense and answers in the wrong register
+    # (an idol read a fan's "res"/レス as "resource" and offered a download).
+    # Format each entry as "词：意思".
+    lexicon: list[str] = Field(default_factory=list)
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive
