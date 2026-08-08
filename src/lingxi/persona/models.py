@@ -499,6 +499,12 @@ class RecurringPerson(BaseModel):
 
     name: str
     relation: str  # one-liner: "教我认星座的人，去年因癌症离世"
+    # Which side of the persona's world this person stands on — rendered as a
+    # tag before the relation. Without it the model has to infer standing from
+    # prose and gets it wrong at the boundary (an idol offered to buy a concert
+    # ticket for a groupmate who performs beside her). Short label, e.g.
+    # "同台成员" / "对手" / "家人" / "老师".
+    role: str = ""
 
 
 class Biography(BaseModel):

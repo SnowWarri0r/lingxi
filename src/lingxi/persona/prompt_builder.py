@@ -504,7 +504,9 @@ class PromptBuilder:
         if bio.recurring_people:
             lines.append("\n## 你生命里的人（聊到时自然提到，不用介绍）")
             for rp in bio.recurring_people:
-                lines.append(f"- {rp.name}：{rp.relation}")
+                role = getattr(rp, "role", "") or ""
+                tag = f"［{role}］" if role else ""
+                lines.append(f"- {rp.name}{tag}：{rp.relation}")
         if bio.motifs:
             lines.append(
                 "\n## 你脑海里反复出现的意象（聊到相关的，会自然联想到）\n"
