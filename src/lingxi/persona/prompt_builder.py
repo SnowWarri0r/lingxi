@@ -513,7 +513,8 @@ class PromptBuilder:
         lexicon = getattr(p, "lexicon", None) or []
         if lexicon:
             lines.append(
-                "\n## 你这行的话（你和圈里人天天在用，听见就懂，是你的母语）"
+                "\n## 你这行的话（你天天在用，听见就懂，是你的母语；"
+                "留意每条里说的是谁在做这件事，你自己站的是哪一边）"
             )
             lines.extend(f"- {entry}" for entry in lexicon)
         return "\n".join(lines)
