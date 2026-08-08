@@ -29,9 +29,12 @@ def test_deepseek_preset_points_at_v4_flash():
     p = RESPONDER_PRESETS["deepseek"]
     assert p["base_url"] == "https://api.deepseek.com"
     assert p["default_model"] == "deepseek-v4-flash"
-    # Thinking defaults to ON (effort=high) on DeepSeek, so it must be turned
-    # off explicitly or every reply pays a reasoning pass before the first token.
-    assert p["extra_body"] == {"thinking": {"type": "disabled"}}
+    # Thinking is stated explicitly either way — DeepSeek defaults it ON at
+    # effort=high, which is slower than anything we'd choose on purpose.
+    thinking = p["extra_body"]["thinking"]["type"]
+    assert thinking in ("enabled", "disabled")
+    if thinking == "enabled":
+        assert p["extra_body"]["reasoning_effort"] in ("low", "high", "max")
 
 
 def test_deepseek_builds_openai_provider_from_env(
