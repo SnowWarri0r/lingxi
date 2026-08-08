@@ -31,6 +31,35 @@ from lingxi.temporal.tracker import InteractionTracker
 from lingxi.temporal.relationship import RelationshipEvaluator
 
 
+# Chat responders — the model that generates the user-facing voice. All are
+# OpenAI-compatible endpoints, so one provider class serves them; only the
+# key/model env names, base_url and vendor params differ. `persona.responder
+# .provider` picks one; "main"/unknown falls through to the main LLM.
+RESPONDER_PRESETS: dict[str, dict] = {
+    "doubao": {
+        "key_env": "ARK_API_KEY",
+        "model_env": "DOUBAO_RESPONDER_MODEL",   # ARK endpoint id (ep-xxx)
+        "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+        # doubao-seed models reason for ~15s before emitting content, which
+        # kills perceived streaming (card sits blank, then the whole reply
+        # dumps in <1s). Disabling thinking gets first token in ~0.5s and the
+        # reply streams char-by-char. Harmless on non-reasoning endpoints.
+        "extra_body": {"thinking": {"type": "disabled"}},
+    },
+    "deepseek": {
+        "key_env": "DEEPSEEK_API_KEY",
+        "model_env": "DEEPSEEK_RESPONDER_MODEL",
+        "default_model": "deepseek-v4-flash",
+        "base_url": "https://api.deepseek.com",
+        # Thinking is ON by default here (effort=high), so it must be turned
+        # off explicitly — same reason as doubao: the chat voice wants the
+        # first token fast, and a reasoning pass buys nothing for one line of
+        # in-character speech.
+        "extra_body": {"thinking": {"type": "disabled"}},
+    },
+}
+
+
 @dataclass
 class StreamEvent:
     """A typed event from the streaming response."""
@@ -665,36 +694,37 @@ class ConversationEngine:
             and self.persona.responder.provider not in ("", "main")
 
     def _get_responder_llm(self) -> LLMProvider:
-        """Lazy-build the chat responder. provider="doubao" routes the
-        user-facing voice to a Chinese-native model via the ARK
-        OpenAI-compatible endpoint (reuses ARK_API_KEY). Anything else falls
-        back to the main LLM. Degrades to main if ARK key / model missing."""
+        """Lazy-build the chat responder — the model that speaks to the user.
+
+        Routes the user-facing voice to a Chinese-native model over an
+        OpenAI-compatible endpoint (see RESPONDER_PRESETS). The model id and
+        key are infra config read from env, with the persona yaml as an
+        optional override for non-secret setups. Any unknown provider, or a
+        missing key/model, degrades to the main LLM so chat keeps working.
+        """
         if self._responder_llm is not None:
             return self._responder_llm
         rc = getattr(self.persona, "responder", None)
-        if rc is not None and rc.provider == "doubao":
-            import os
+        preset = RESPONDER_PRESETS.get(rc.provider) if rc is not None else None
+        if preset is not None:
             from lingxi.providers.openai_provider import OpenAIProvider
-            ark_key = os.environ.get("ARK_API_KEY", "")
-            # The ARK endpoint id is infra config, not committed in the persona
-            # yaml — read it from env (DOUBAO_RESPONDER_MODEL) with the yaml as
-            # an optional override for non-secret setups.
-            model = rc.model or os.environ.get("DOUBAO_RESPONDER_MODEL", "")
-            if ark_key and model:
+            api_key = os.environ.get(preset["key_env"], "")
+            model = (rc.model or os.environ.get(preset["model_env"], "")
+                     or preset.get("default_model", ""))
+            if api_key and model:
                 self._responder_llm = OpenAIProvider(
-                    api_key=ark_key,
+                    api_key=api_key,
                     model=model,
-                    base_url="https://ark.cn-beijing.volces.com/api/v3",
-                    # doubao-seed models reason for ~15s before emitting content,
-                    # which kills perceived streaming (card sits blank, then the
-                    # whole reply dumps in <1s). Disable thinking → first token in
-                    # ~0.5s and the reply streams char-by-char. Harmless on
-                    # non-reasoning endpoints (ARK ignores it).
-                    extra_body={"thinking": {"type": "disabled"}},
+                    base_url=preset["base_url"],
+                    extra_body=preset.get("extra_body") or {},
                 )
+                print(f"[engine] responder={rc.provider} model={model}",
+                      flush=True)
                 return self._responder_llm
-            print("[engine] responder=doubao but ARK_API_KEY/model missing "
-                  "— falling back to main LLM")
+            missing = "key" if not api_key else "model"
+            print(f"[engine] responder={rc.provider} missing {missing} "
+                  f"({preset['key_env']}/{preset['model_env']}) "
+                  f"— falling back to main LLM", flush=True)
         self._responder_llm = self.llm
         return self._responder_llm
 
