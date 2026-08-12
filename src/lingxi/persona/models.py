@@ -548,6 +548,12 @@ class PersonaConfig(BaseModel):
     # (an idol read a fan's "res"/レス as "resource" and offered a download).
     # Format each entry as "词：意思".
     lexicon: list[str] = Field(default_factory=list)
+    # Per-register voice notes, overriding the renderer's generic hints.
+    # The defaults are written for a generic character; handed the bare
+    # "flustered" hint the model reaches for the stock stammer, which reads
+    # wrong on someone built around saying things out loud. Keys are register
+    # names (light/warm/curt/curious/withdrawn/flustered).
+    register_notes: dict[str, str] = Field(default_factory=dict)
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive

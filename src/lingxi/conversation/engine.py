@@ -555,6 +555,7 @@ class ConversationEngine:
         # channel prefix.
         dynamic_block = await render_dynamic_blocks(
             self.fact_retriever, decision, recipient_key=recipient_key,
+            persona=self.persona,
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
         if grounding:
