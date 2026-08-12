@@ -35,6 +35,22 @@ _REGISTER_HINT = {
 }
 
 
+def _register_hint(register: str, persona) -> str:
+    """Register hint, letting the persona override any register with its own.
+
+    The default hints are written for a generic character. Handed the bare
+    "flustered" hint, the model reaches for the stock flustered-anime-girl
+    stammer — which reads wrong on a persona built around blurting things out.
+    A persona can restate what a register looks like for her via
+    `register_notes: {flustered: "…"}` in its YAML.
+    """
+    notes = getattr(persona, "register_notes", None) or {}
+    override = notes.get(register)
+    if override:
+        return f"状态：{register}——{override}"
+    return _REGISTER_HINT.get(register, _REGISTER_HINT["warm"])
+
+
 def _parse_category(cat: str) -> tuple[str, FactType | None]:
     """'aria.event' → ('aria', FactType.EVENT). '<subject>.<type>'.
 
@@ -64,6 +80,7 @@ async def render_dynamic_blocks(
     decision: OrchestrationDecision,
     *,
     recipient_key: str,
+    persona=None,
 ) -> str:
     """Produce the dynamic prompt sections (up to 4) for this turn."""
     blocks: dict[str, list[str]] = {"self": [], "them": [], "world": []}
@@ -97,7 +114,7 @@ async def render_dynamic_blocks(
 
     # 【你此刻】
     self_lines: list[str] = []
-    self_lines.append(_REGISTER_HINT.get(decision.register, _REGISTER_HINT["warm"]))
+    self_lines.append(_register_hint(decision.register, persona))
     if decision.topic_anchor:
         self_lines.append(f"对方话题落点：{decision.topic_anchor}")
     if blocks["self"]:
