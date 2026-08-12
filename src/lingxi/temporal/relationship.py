@@ -76,10 +76,17 @@ class RelationshipEvaluator:
         persona: PersonaConfig,
         llm_provider: LLMProvider,
         gates: dict[int, LevelGate] | None = None,
+        fact_retriever=None,
     ):
         self.persona = persona
         self.llm = llm_provider
         self.gates = gates or DEFAULT_GATES
+        # Facts about the interlocutor live in facts.db. The gate used to read
+        # memory_manager.get_stats()["long_term_entries"] — a retired Chroma
+        # metric that get_stats() no longer returns, so the count was always 0
+        # and the min_memory_facts gate could never be met. Every relationship
+        # was pinned at level 1 forever, and the evaluation never even ran.
+        self._fact_retriever = fact_retriever
         levels = [il.level for il in persona.relationship.intimacy_levels]
         self._max_level = max(levels) if levels else 4
 
@@ -117,6 +124,26 @@ class RelationshipEvaluator:
                 break  # Levels are ordered; can't reach N+1 if can't reach N
         return max_level
 
+    async def _user_facts(self, record: InteractionRecord, limit: int = 200) -> list:
+        """Facts she holds about this person, newest first, from facts.db."""
+        if self._fact_retriever is None:
+            return []
+        subject = f"user:{record.channel}:{record.recipient_id}"
+        try:
+            return await self._fact_retriever._store.query(
+                subject=subject, limit=limit)
+        except Exception as e:
+            print(f"[relationship] fact lookup failed: {e}", flush=True)
+            return []
+
+    async def _count_user_facts(self, record: InteractionRecord) -> int:
+        return len(await self._user_facts(record))
+
+    async def _recent_user_facts(
+        self, record: InteractionRecord, limit: int = 10
+    ) -> list[str]:
+        return [f.content for f in await self._user_facts(record, limit=limit)]
+
     async def evaluate(
         self,
         record: InteractionRecord,
@@ -124,8 +151,7 @@ class RelationshipEvaluator:
     ) -> int:
         """Hybrid evaluation. Returns the new level (>= current_level)."""
         current_level = record.relationship_level
-        memory_stats = memory_manager.get_stats()
-        fact_count = memory_stats.get("long_term_entries", 0)
+        fact_count = await self._count_user_facts(record)
 
         max_allowed = self.compute_max_allowed_level(record, fact_count)
 
@@ -149,13 +175,18 @@ class RelationshipEvaluator:
     ) -> int:
         memory_context = await memory_manager.assemble_context("")
 
+        # What she knows about this person comes from facts.db. MemoryContext's
+        # long_term_facts/relevant_episodes are retired and documented as
+        # always empty, so reading them showed the judge 「暂无记忆」 on every
+        # evaluation — it declined to promote a relationship it was told was
+        # blank.
         memory_facts = "\n".join(
-            f"- {f.content}" for f in memory_context.long_term_facts[:10]
+            f"- {c}" for c in await self._recent_user_facts(record, limit=10)
         ) or "（暂无记忆）"
 
         recent_episodes = "\n".join(
-            f"- [{ep.timestamp}] {ep.summary}"
-            for ep in memory_context.relevant_episodes[:3]
+            f"- {t.role}: {t.content[:60]}"
+            for t in memory_context.short_term_turns[-6:]
         ) or "（暂无回忆）"
 
         days_known = 0

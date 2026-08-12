@@ -189,7 +189,9 @@ class ConversationEngine:
         self.context_assembler = context_assembler or ContextAssembler()
         self.interaction_tracker = interaction_tracker
         self.relationship_evaluator = (
-            relationship_evaluator or RelationshipEvaluator(persona, llm_provider)
+            relationship_evaluator
+            or RelationshipEvaluator(persona, llm_provider,
+                                     fact_retriever=fact_retriever)
         )
 
         self._relationship_level: int = 1
