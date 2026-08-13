@@ -447,11 +447,17 @@ class ConversationEngine:
         # overwrites it to now — the time-awareness reminder uses it for the
         # "how long since we last talked" delta.
         last_interaction_time: datetime | None = None
+        # How long they have actually known each other. Absent from the prompt,
+        # she had nothing to check a claim against: told "都五年了" she accepted
+        # it and invented a five-year shared history on the spot.
+        self._acquaintance: tuple[datetime, int] | None = None
         if self.interaction_tracker and channel and recipient_id:
             rec = self.interaction_tracker.get_record(channel, recipient_id)
             if rec:
                 self._relationship_level = rec.relationship_level
                 last_interaction_time = rec.last_interaction
+                if rec.first_interaction:
+                    self._acquaintance = (rec.first_interaction, rec.total_turns)
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
         # Text persisted to short-term for the user turn (with image marker).
@@ -558,6 +564,7 @@ class ConversationEngine:
         dynamic_block = await render_dynamic_blocks(
             self.fact_retriever, decision, recipient_key=recipient_key,
             persona=self.persona,
+            acquaintance=getattr(self, "_acquaintance", None),
         )
         system_prompt = persona_block + "\n\n" + dynamic_block
         if grounding:
@@ -646,6 +653,7 @@ class ConversationEngine:
             last_interaction_time=last_interaction_time,
             last_assistant_question=laq,
             last_assistant_statement=las,
+            acquaintance=getattr(self, "_acquaintance", None),
         )
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:

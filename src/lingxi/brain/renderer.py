@@ -22,6 +22,8 @@ from __future__ import annotations
 
 from lingxi.brain.models import OrchestrationDecision, OrchestratorFactQuery
 from lingxi.facts.models import Fact, FactType
+from datetime import datetime
+
 from lingxi.facts.retriever import FactQuery, FactRetriever
 
 
@@ -81,6 +83,7 @@ async def render_dynamic_blocks(
     *,
     recipient_key: str,
     persona=None,
+    acquaintance: tuple[datetime, int] | None = None,
 ) -> str:
     """Produce the dynamic prompt sections (up to 4) for this turn."""
     blocks: dict[str, list[str]] = {"self": [], "them": [], "world": []}
@@ -122,12 +125,29 @@ async def render_dynamic_blocks(
         self_lines.extend(blocks["self"])
     sections.append("【你此刻】\n" + "\n".join(self_lines))
 
-    # 【你和他】
-    if blocks["them"]:
-        sections.append(
-            "【你和他】（你过去注意到的——对方这轮明说的事实优先）\n"
-            + "\n".join(blocks["them"])
+    # 【你和他】 — who this person is, then what she's noticed about them.
+    # The identity line has to sit here in the system prompt: carried only in
+    # the per-turn reminder it lost to the persona's own backstory, and she
+    # started answering "how long have we known each other" with her group's
+    # five years — once even greeting the user as the girl whose singing she
+    # discovered on the hill.
+    them_lines: list[str] = []
+    if acquaintance is not None:
+        first, turns = acquaintance
+        days = max(0, (datetime.now().date() - first.date()).days)
+        span = "今天刚认识" if days == 0 else (
+            f"认识 {days} 天" if days < 60 else f"认识 {days // 30} 个多月")
+        them_lines.append(
+            f"对方是你在这个聊天窗口认识的人，**{span}**"
+            f"（{first.month}月{first.day}日第一次说上话，聊了 {turns} 轮）。"
+            "他不是你故事里的人，是现实里跟你聊天的那个人——"
+            "问「我们认识多久」答的就是这个数；你出道多少年、跟队友认识多久是另一条线。"
         )
+    if blocks["them"]:
+        them_lines.append("你过去注意到的（对方这轮明说的事实优先）：")
+        them_lines.extend(blocks["them"])
+    if them_lines:
+        sections.append("【你和他】\n" + "\n".join(them_lines))
 
     # 【身边的事】
     if blocks["world"]:
