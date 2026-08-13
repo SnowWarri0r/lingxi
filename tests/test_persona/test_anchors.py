@@ -54,3 +54,25 @@ def test_tangkeke_debut_anchor_is_2021():
     p = PersonaConfig(**yaml.safe_load(open("config/personas/tangkeke.yaml")))
     debut = next(a for a in p.anchors if "出道" in a.event)
     assert debut.date.startswith("2021-04")
+
+
+def test_age_is_computed_from_birthdate():
+    from lingxi.persona.models import Identity
+    born = date.today().replace(year=date.today().year - 21)
+    assert Identity(full_name="T", birthdate=born.isoformat()).current_age() == 21
+    # birthday still ahead this year → one year younger
+    later = (datetime.now() + timedelta(days=10)).date().replace(
+        year=datetime.now().year - 21)
+    assert Identity(full_name="T", birthdate=later.isoformat()).current_age() == 20
+    # no birthdate → the fixed age stands; bad birthdate falls back to it
+    assert Identity(full_name="T", age=28).current_age() == 28
+    assert Identity(full_name="T", birthdate="nope", age=28).current_age() == 28
+
+
+def test_tangkeke_age_tracks_her_debut_era():
+    p = PersonaConfig(**yaml.safe_load(open("config/personas/tangkeke.yaml")))
+    age = p.identity.current_age()
+    # 16 at the 2021 debut, so five-plus years on she is in her twenties —
+    # the number moves with the calendar instead of being pinned at 16.
+    assert age is not None and age >= 21
+    assert "高中" not in (p.identity.occupation or "")
