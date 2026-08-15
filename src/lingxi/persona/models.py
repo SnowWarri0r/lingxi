@@ -33,9 +33,25 @@ class Trait(BaseModel):
 
 class Identity(BaseModel):
     full_name: str
+    # A written-in age goes stale the way a written-in "已经五年" does. Set
+    # `birthdate` (ISO) and the age is computed at prompt time; `age` stays
+    # supported for personas that want a fixed number.
+    birthdate: str | None = None
     age: int | None = None
     occupation: str | None = None
     background: str = ""
+
+    def current_age(self, today=None) -> int | None:
+        """Age from `birthdate` if set, else the fixed `age`."""
+        if not self.birthdate:
+            return self.age
+        from datetime import date, datetime
+        try:
+            b = datetime.strptime(self.birthdate, "%Y-%m-%d").date()
+        except ValueError:
+            return self.age
+        today = today or date.today()
+        return today.year - b.year - ((today.month, today.day) < (b.month, b.day))
 
 
 class PersonalityProfile(BaseModel):
