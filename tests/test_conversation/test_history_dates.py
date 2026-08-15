@@ -12,13 +12,17 @@ from lingxi.memory.manager import MemoryContext
 from lingxi.memory.short_term import ConversationTurn
 
 
-NOW = datetime(2026, 8, 11, 10, 0)
+# _day_label takes `now` explicitly, so it can be pinned. assemble_messages
+# reads the real clock, so turns fed to it are built relative to real now —
+# a frozen base there silently rots the day-gap assertions overnight.
+PINNED = datetime(2026, 8, 11, 10, 0)
+NOW = datetime.now()
 
 
 def test_day_label_marks_today_yesterday_and_the_gap():
-    assert "今天" in _day_label(NOW.date(), NOW)
-    assert "昨天" in _day_label((NOW - timedelta(days=1)).date(), NOW)
-    older = _day_label((NOW - timedelta(days=4)).date(), NOW)
+    assert "今天" in _day_label(PINNED.date(), PINNED)
+    assert "昨天" in _day_label((PINNED - timedelta(days=1)).date(), PINNED)
+    older = _day_label((PINNED - timedelta(days=4)).date(), PINNED)
     assert "4天前" in older          # the gap is spelled out, not inferred
     assert "8月7日" in older and "周五" in older
 
