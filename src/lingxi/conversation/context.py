@@ -14,8 +14,24 @@ sections are truncated from the bottom.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date, datetime
 
 from lingxi.memory.manager import MemoryContext
+
+
+_WEEKDAYS_CN = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+
+
+def _day_label(day: date, now: datetime) -> str:
+    """Chat-app style date divider: '今天'/'昨天' for the near days, and an
+    explicit '(N天前)' beyond that so an old remark can't read as recent."""
+    delta = (now.date() - day).days
+    stamp = f"{day.month}月{day.day}日 {_WEEKDAYS_CN[day.weekday()]}"
+    if delta <= 0:
+        return f"{stamp} 今天"
+    if delta == 1:
+        return f"{stamp} 昨天"
+    return f"{stamp}（{delta}天前）"
 
 
 @dataclass
@@ -71,7 +87,7 @@ class ContextAssembler:
         if not turns:
             return []
 
-        from datetime import datetime, timedelta
+        from datetime import date, datetime, timedelta
         now = datetime.now()
         l2_cutoff = now - timedelta(minutes=self.budget.verbatim_window_minutes)
         session_cutoff = now - timedelta(minutes=self.budget.session_window_minutes)
@@ -117,7 +133,20 @@ class ContextAssembler:
                 "content": f"[省略了 {dropped} 轮较早的对话以节省上下文]",
             })
 
+        # Date dividers, the way a chat app shows them. Without any time signal
+        # the model reads the whole buffer as one continuous recent stretch: a
+        # remark made on the 7th got followed up as "昨天说的" on the 11th, four
+        # days and three follow-ups later. The divider is what makes the gap
+        # visible.
+        prev_day: date | None = None
         for turn in included_older + guaranteed:
+            day = turn.timestamp.date()
+            if day != prev_day:
+                result_messages.append({
+                    "role": "user",
+                    "content": f"[—— {_day_label(day, now)} ——]",
+                })
+                prev_day = day
             # Always render verbatim content. Older third-person summary
             # rendering ("[HH:MM 摘要] 我询问对方身体...") was poisoning
             # the chat history — model read its own past as third-person
