@@ -324,6 +324,14 @@ class ResponderConfig(BaseModel):
     model: str = ""
 
 
+class TimelineAnchor(BaseModel):
+    """A dated milestone; the prompt renders how long ago it was."""
+
+    event: str
+    date: str            # ISO date, e.g. "2021-04-01"
+    note: str = ""
+
+
 class LocationConfig(BaseModel):
     """Where the persona lives — feeds real sunrise/sunset computation.
 
@@ -554,6 +562,10 @@ class PersonaConfig(BaseModel):
     # wrong on someone built around saying things out loud. Keys are register
     # names (light/warm/curt/curious/withdrawn/flustered).
     register_notes: dict[str, str] = Field(default_factory=dict)
+    # Dated milestones whose elapsed time is computed at prompt time. Writing
+    # "已经五年" into the background bakes in a number that silently goes stale;
+    # anchoring to the date keeps it right every year.
+    anchors: list[TimelineAnchor] = Field(default_factory=list)
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive

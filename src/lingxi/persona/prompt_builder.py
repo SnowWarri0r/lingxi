@@ -523,6 +523,22 @@ class PromptBuilder:
                 "\n## 你脑海里反复出现的意象（聊到相关的，会自然联想到）\n"
                 + "、".join(bio.motifs)
             )
+        anchors = getattr(p, "anchors", None) or []
+        if anchors:
+            lines.append("\n## 你的时间线（下面的年数是按今天算出来的，直接用）")
+            today = datetime.now().date()
+            for a in anchors:
+                try:
+                    d = datetime.strptime(a.date, "%Y-%m-%d").date()
+                except ValueError:
+                    continue
+                years = today.year - d.year - ((today.month, today.day) < (d.month, d.day))
+                months = (today.year - d.year) * 12 + today.month - d.month
+                span = f"{years} 年" if years >= 1 else (
+                    f"{months} 个月" if months >= 1 else "不到一个月")
+                tail = f"——{a.note}" if a.note else ""
+                lines.append(f"- {a.event}：{d.year}年{d.month}月，到现在 **{span}**{tail}")
+
         lexicon = getattr(p, "lexicon", None) or []
         if lexicon:
             lines.append(
