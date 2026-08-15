@@ -502,8 +502,10 @@ class PromptBuilder:
             f"# 你是 {p.identity.full_name}",
             f"你的名字是{p.name}。",
         ]
-        if p.identity.age:
-            lines.append(f"年龄：{p.identity.age}岁。")
+        age = p.identity.current_age() if hasattr(p.identity, "current_age") \
+            else p.identity.age
+        if age:
+            lines.append(f"年龄：{age}岁。")
         if p.identity.occupation:
             lines.append(f"职业：{p.identity.occupation}。")
         if p.identity.background:
