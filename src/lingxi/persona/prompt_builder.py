@@ -83,6 +83,7 @@ class PromptBuilder:
         last_interaction_time: datetime | None = None,
         recent_proactive_messages: list[str] | None = None,
         proactive_mode: bool = False,
+        acquaintance: tuple[datetime, int] | None = None,
     ) -> str | None:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
@@ -99,6 +100,16 @@ class PromptBuilder:
             sections.append(
                 self._build_time_awareness_section(current_time, last_interaction_time)
             )
+
+        if acquaintance is not None and current_time is not None:
+            first, turns = acquaintance
+            days = max(0, (current_time.date() - first.date()).days)
+            span = "今天刚认识" if days == 0 else (
+                f"认识 {days} 天" if days < 60 else f"认识 {days // 30} 个多月")
+            # The full framing lives in the renderer's 【你和他】 block (system
+            # prompt). Here it is just a short recency echo.
+            sections.append(f"## 你和对方\n认识 {span[2:] if span.startswith('认识') else span}"
+                            f"，聊了 {turns} 轮。")
 
         # The question Aria just asked — most directly addresses Rule 15
         # ("must engage with literal answer to own yes/no question"). Sits
