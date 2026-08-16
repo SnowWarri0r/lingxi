@@ -44,3 +44,19 @@ def test_own_life_block_allows_ordinary_material():
     block = _format_own_life_block(facts)
     # ordinary days are explicitly valid opener material
     assert "平平常常" in block
+
+
+def test_follow_up_styles_do_not_assume_the_topic_is_the_users():
+    """Regression: 话题跟进 read as 'follow up on something THEY told you', so
+    when the live thread was her own diary she asked the user how *their* diary
+    was going."""
+    styles = {s["name"]: s["desc"] for s in _MESSAGE_STYLES}
+    assert "先认清那件事是谁的" in styles["话题跟进"]
+    # 关心 stays user-directed but says what to do when there's nothing of theirs
+    assert "对方自己说过的" in styles["关心"]
+    assert "换一件你自己的事说" in styles["关心"]
+
+
+def test_opener_shape_requires_checking_whose_topic_it_is():
+    src = inspect.getsource(proactive.ProactiveScheduler)
+    assert "提旧事先认主语" in src
