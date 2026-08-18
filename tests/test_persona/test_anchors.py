@@ -76,3 +76,27 @@ def test_tangkeke_age_tracks_her_debut_era():
     # the number moves with the calendar instead of being pinned at 16.
     assert age is not None and age >= 21
     assert "高中" not in (p.identity.occupation or "")
+
+
+def test_birthday_line_states_the_date_and_the_distance():
+    from datetime import date as _d
+    from lingxi.persona.prompt_builder import _birthday_line
+
+    assert _birthday_line("2005-07-17", _d(2026, 7, 17)) == \
+        "生日：7月17日（**就是今天**）。"
+    assert "还有 7 天" in _birthday_line("2005-07-17", _d(2026, 7, 10))
+    assert "已经过了 32 天" in _birthday_line("2005-07-17", _d(2026, 8, 18))
+    assert _birthday_line(None) is None and _birthday_line("nope") is None
+
+
+def test_identity_carries_the_birthday_not_just_the_age():
+    p = PersonaConfig(**yaml.safe_load(open("config/personas/tangkeke.yaml")))
+    section = PromptBuilder(p)._build_identity_section()
+    assert "生日：7月17日" in section          # the date itself, not only 年龄
+    assert "岁" in section
+
+
+def test_timeline_says_unlisted_dates_are_not_remembered():
+    p = PersonaConfig(**yaml.safe_load(open("config/personas/tangkeke.yaml")))
+    section = PromptBuilder(p)._build_identity_section()
+    assert "没列的日子就是你记不清的" in section
