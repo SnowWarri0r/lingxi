@@ -79,7 +79,67 @@ lingxi-feishu       # 飞书机器人
 lingxi-pet          # 桌宠（LINGXI_PET_LIVE2D=1 走 Live2D）
 ```
 
-## 架构
+## 一轮对话怎么走
+
+编排脑（Claude）先想清楚这轮该怎么接、要用哪些事实、要不要查；说话的那一程（国产模型）拿到齐备的上下文**一次说完，不挂任何工具**——语感不被工具调用打断。
+
+```mermaid
+flowchart TB
+    U(["你发的消息"]) --> ORCH
+
+    ORCH["<b>Orchestrator</b> · Claude<br/>语气分寸 / 话题落点<br/>要哪些事实 / 要不要查<br/>这轮值得记住什么"]
+
+    ORCH -. "记忆里没有就查" .-> LOOKUP["web_search 查证"]
+    ORCH == "记住你说的事" ==> DB
+    DB[("<b>facts.db</b><br/>SQLite + FTS5 + 向量<br/>她的生活 · 关于你 · 世界")]
+
+    ORCH --> CTX
+    LOOKUP -. "查到的背景" .-> CTX
+    DB -. "按需捞出" .-> CTX
+
+    CTX["<b>组装上下文</b><br/>【你此刻】【你和他】【身边的事】<br/>人设：身份 · 行话 · 时间线 · 语气档<br/>此时此地：时钟 · 日出日落 · 天气<br/>聊天记录：按天打分隔线"]
+
+    CTX --> RESP["<b>Responder</b> · DeepSeek V4 Flash<br/>拿齐上下文一次说完<br/>chat 期不挂任何工具"]
+
+    RESP --> OUT(["她说的话"])
+    RESP -. "===META===" .-> META["表情包 / 计划调整"]
+
+    style DB fill:#fff4e6,stroke:#e8a33d
+    style RESP fill:#e8f5e9,stroke:#4caf50
+    style ORCH fill:#e3f2fd,stroke:#42a5f5
+```
+
+## 她自己的生活（后台一直在跑）
+
+主动消息不是定时模板——素材来自她**当天真的在做的事**。
+
+```mermaid
+flowchart LR
+    subgraph LIFE ["生活模拟"]
+        PLAN["DailyPlanner<br/>每早 7:00<br/>排今天怎么过"]
+        EXEC["PlanExecutor<br/>每 30 分钟<br/>此刻在做什么"]
+        REFL["Reflector<br/>约 12 小时<br/>琢磨点往后用得上的"]
+        PLAN --> EXEC --> REFL
+        REFL -. "洞见喂回明天的计划" .-> PLAN
+    end
+
+    EXEC ==> DB[("facts.db")]
+    REFL ==> DB
+
+    DB --> PRO["主动消息 · 每 5 分钟看一眼<br/>沉默多久 / 关系到哪 / 时段合不合适"]
+    PRO --> SEND(["发给你"])
+
+    WEA["天气 · 每 20 分钟"] --> DB
+    NEWS["每日新闻 · web_search"] --> DB
+
+    REFL -. "跟已有洞见太像就丢弃<br/>近似的按重复次数降权" .-> REFL
+    PRO -. "跟最近发过的太像就不发" .-> PRO
+
+    style DB fill:#fff4e6,stroke:#e8a33d
+    style PRO fill:#e8f5e9,stroke:#4caf50
+```
+
+## 代码结构
 
 ```
 src/lingxi/
