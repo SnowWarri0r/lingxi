@@ -8,6 +8,30 @@ from lingxi.persona.models import PersonaConfig
 from lingxi.temporal.formatter import format_datetime_cn, format_timedelta_cn
 
 
+
+def _birthday_line(birthdate: str | None, today=None) -> str | None:
+    """生日：7月17日（还有 N 天 / 今年的已经过了 N 天 / 就是今天）。"""
+    if not birthdate:
+        return None
+    from datetime import date
+    try:
+        b = datetime.strptime(birthdate, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    today = today or date.today()
+    try:
+        this_year = b.replace(year=today.year)
+    except ValueError:                      # 2/29 in a common year
+        this_year = b.replace(year=today.year, day=28)
+    if this_year == today:
+        when = "**就是今天**"
+    elif this_year > today:
+        when = f"还有 {(this_year - today).days} 天"
+    else:
+        when = f"今年的已经过了 {(today - this_year).days} 天"
+    return f"生日：{b.month}月{b.day}日（{when}）。"
+
+
 class PromptBuilder:
     """Assembles the system prompt that defines the agent's persona in every LLM call."""
 
@@ -506,6 +530,13 @@ class PromptBuilder:
             else p.identity.age
         if age:
             lines.append(f"年龄：{age}岁。")
+        # The birthday itself, not just the age it produces. Asked about it she
+        # had the age but no date, and filled the gap with today's — "今天17号
+        # 刚过完生日" on the 13th. Distance is computed here too, so she never
+        # has to work it out from a date she doesn't otherwise carry.
+        bday = _birthday_line(getattr(p.identity, "birthdate", None))
+        if bday:
+            lines.append(bday)
         if p.identity.occupation:
             lines.append(f"职业：{p.identity.occupation}。")
         if p.identity.background:
@@ -527,7 +558,11 @@ class PromptBuilder:
             )
         anchors = getattr(p, "anchors", None) or []
         if anchors:
-            lines.append("\n## 你的时间线（下面的年数是按今天算出来的，直接用）")
+            lines.append(
+                "\n## 你的时间线（年数按今天算好了，直接用；"
+                "**这里没列的日子就是你记不清的**——被问到就说记不清，"
+                "比如『哪天定下来的我真忘了，反正那阵子天天在练』，不用凑一个日期出来）"
+            )
             today = datetime.now().date()
             for a in anchors:
                 try:
