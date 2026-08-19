@@ -16,6 +16,23 @@ class OrchestratorFactQuery:
     semantic: str | None = None  # FTS keyword
 
 
+_HEDGE_MARKERS = ("或", "可能", "也许", "大概", "不确定", "说不定", "?", "？")
+
+
+def _decisive(state: str) -> str:
+    """Keep user_state only when it commits to one situation.
+
+    Measured on the failing turn, 20 samples per condition: a decisive state
+    ("还在公司，想下班还没到点") put the responder wrong 1-2 times in 20, while
+    a hedged one ("还在公司或刚下班途中") put it wrong 5 in 20 — worse than
+    supplying no state at all, because the responder answers the later branch.
+    Since a hedge underperforms silence, it is dropped and the clock fallback
+    takes over. Filtering here rather than in the prompt: telling the model not
+    to hedge still produced hedges in 1 run of 3.
+    """
+    return "" if any(m in state for m in _HEDGE_MARKERS) else state
+
+
 @dataclass
 class OrchestrationDecision:
     engage_level: float                 # 0-1 (clamped)
@@ -36,6 +53,13 @@ class OrchestrationDecision:
     # analysis job, so it belongs here rather than as a side-task for the
     # responder, which is busy composing one line of speech and skips it.
     memory_writes: list[str] = field(default_factory=list)
+    # Where the interlocutor is and what he's doing right now, as evidenced by
+    # this conversation. The prompt has always carried 【你此刻】 for her but
+    # nothing for him, so his situation was left to a clock table keyed to a
+    # generic 9-to-5 — which had him home from work at 20:23 while he was
+    # sitting at his desk saying 想下班了. This is read off the live turns, so
+    # it outranks the clock. Empty when the conversation gives no evidence.
+    user_state: str = ""
 
     @classmethod
     def default(cls) -> "OrchestrationDecision":
@@ -90,4 +114,5 @@ class OrchestrationDecision:
                     str(m).strip() for m in (raw.get("memory_writes") or [])
                 ) if s
             ],
+            user_state=_decisive(str(raw.get("user_state") or "").strip()),
         )

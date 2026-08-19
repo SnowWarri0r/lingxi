@@ -109,6 +109,8 @@ class PromptBuilder:
         proactive_mode: bool = False,
         acquaintance: tuple[datetime, int] | None = None,
         state_blocks: list[str] | None = None,
+        user_schedule: list[str] | None = None,
+        user_state: str = "",
     ) -> str | None:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
@@ -130,7 +132,10 @@ class PromptBuilder:
 
         if current_time is not None:
             sections.append(
-                self._build_time_awareness_section(current_time, last_interaction_time)
+                self._build_time_awareness_section(
+                    current_time, last_interaction_time, user_schedule,
+                    user_state,
+                )
             )
 
         if acquaintance is not None and current_time is not None:
@@ -232,13 +237,19 @@ class PromptBuilder:
         return "\n".join(lines)
 
     def _build_time_awareness_section(
-        self, current_time: datetime, last_interaction_time: datetime | None
+        self,
+        current_time: datetime,
+        last_interaction_time: datetime | None,
+        user_schedule: list[str] | None = None,
+        user_state: str = "",
     ) -> str:
         hour = current_time.hour
 
-        # tod_hint reads the OTHER person's situation — this is social/work
-        # rhythm, which is genuinely clock-based (9-to-5), so it stays keyed to
-        # the hour.
+        # tod_hint is a guess about the OTHER person from a generic 9-to-5.
+        # It is rendered as a guess, and ranked below both his stated routine
+        # and what he just typed — a flat assertion here overrode a user who
+        # had said 想下班了 ninety seconds earlier, and she asked whether he
+        # was stuck in traffic or already home. Whose day it is decides.
         if 0 <= hour < 5:
             tod_label = "深夜"
             tod_hint = "对方如果还醒着，应该是熬夜/失眠/工作"
@@ -287,9 +298,23 @@ class PromptBuilder:
         lines = [
             "## ⏰ 当前真实时间（既判断对方的处境，也是你自己此刻的环境）",
             f"**{format_datetime_cn(current_time)}，现在是{tod_label}**。",
-            f"对方那边：{tod_hint}",
-            f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线对得上。",
         ]
+        # Precedence, strongest first: what he has said in this conversation,
+        # then the routine he's described, then a generic clock table. Stated
+        # in that order so the weakest signal reads as the fallback it is.
+        if user_state:
+            lines.append(f"**对方此刻：{user_state}**（他自己在这几轮里说的，按这个算）")
+        else:
+            if user_schedule:
+                lines.append("对方的作息（他自己说过的，按这个算）：")
+                lines.extend(f"  - {s}" for s in user_schedule)
+            lines.append(
+                f"对方那边：按钟点推**大概**是「{tod_hint}」——"
+                "他刚发的消息说的是他此刻在哪、在干嘛，以那个为准。"
+            )
+        lines.append(
+            f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线对得上。"
+        )
         if weather_line:
             lines.append(weather_line)
 
