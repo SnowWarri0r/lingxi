@@ -255,9 +255,15 @@ class ClaudeProvider(LLMProvider):
         if prefill:
             content = prefill + content
 
+        # Cache counters ride along: without them there is no way to tell a
+        # working cache_control breakpoint from a dead one, and a prompt-order
+        # change that quietly kills the cache looks identical in the logs.
+        raw_usage = data.get("usage", {})
         usage = {
-            "input_tokens": data.get("usage", {}).get("input_tokens", 0),
-            "output_tokens": data.get("usage", {}).get("output_tokens", 0),
+            "input_tokens": raw_usage.get("input_tokens", 0),
+            "output_tokens": raw_usage.get("output_tokens", 0),
+            "cache_read_tokens": raw_usage.get("cache_read_input_tokens", 0),
+            "cache_write_tokens": raw_usage.get("cache_creation_input_tokens", 0),
         }
 
         # Full-fidelity debug log — only when LINGXI_DEBUG_LLM is on
