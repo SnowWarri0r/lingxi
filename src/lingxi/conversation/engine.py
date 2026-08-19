@@ -45,6 +45,9 @@ RESPONDER_PRESETS: dict[str, dict] = {
         # dumps in <1s). Disabling thinking gets first token in ~0.5s and the
         # reply streams char-by-char. Harmless on non-reasoning endpoints.
         "extra_body": {"thinking": {"type": "disabled"}},
+        # stream_options accepted by ARK; cache hits arrive as
+        # prompt_tokens_details.cached_tokens. Verified against the live endpoint.
+        "report_usage": True,
     },
     "deepseek": {
         "key_env": "DEEPSEEK_API_KEY",
@@ -62,6 +65,10 @@ RESPONDER_PRESETS: dict[str, dict] = {
             "thinking": {"type": "enabled"},
             "reasoning_effort": "low",
         },
+        # Logs `[cache] <model> prompt=N cached=M (X%)` once per streamed turn.
+        # Without it a prompt-order change that kills the prefix cache is
+        # invisible — it costs latency and money and nothing in the log moves.
+        "report_usage": True,
     },
 }
 
@@ -566,12 +573,25 @@ class ConversationEngine:
             persona=self.persona,
             acquaintance=getattr(self, "_acquaintance", None),
         )
-        system_prompt = persona_block + "\n\n" + dynamic_block
+        # The system message holds ONLY the stable persona. Everything that
+        # changes per turn rides in the reminder attached to the user's own
+        # message below. Measured on the live persona against DeepSeek's
+        # prefix cache: with volatile blocks in the system message the cached
+        # prefix was pinned at exactly 6144 tokens (the persona boundary) at
+        # every history length, because the whole chat log sits downstream of
+        # a prefix that changes every turn. Moving them cached 8064 tokens at
+        # ~2.1k of history and 9088 at ~3.1k — 2988 missed tokens per turn
+        # became 57. This is also what build_system_prompt's docstring has
+        # described all along.
+        system_prompt = persona_block
+        state_blocks: list[str] = []
+        if dynamic_block:
+            state_blocks.append(dynamic_block)
         if grounding:
             # Injected as verified knowledge the persona can speak from — she
             # weaves it into her own voice, not "I just googled it".
-            system_prompt += (
-                "\n\n## 你查证到的（当成你知道的可靠信息，用你自己的话讲，"
+            state_blocks.append(
+                "## 你查证到的（当成你知道的可靠信息，用你自己的话讲，"
                 "别照抄、别提'我搜到'）\n" + grounding
             )
 
@@ -589,7 +609,7 @@ class ConversationEngine:
                     k=4, threshold=0.5)
                 block = self._render_fewshots_as_text(anchors)
                 if block:
-                    system_prompt = f"{system_prompt}\n\n{block}"
+                    state_blocks.append(block)
                     print(f"[fewshot] {len(anchors)} voice anchors injected "
                           f"(q={query_text[:20]!r})", flush=True)
             except Exception as e:
@@ -600,7 +620,8 @@ class ConversationEngine:
         # refactor dropped this from the reactive path, which is why Aria lost
         # track of the time — restore it here.
         user_msg = self._build_user_message(user_input, images)
-        focus = self._build_focus_reminder(last_interaction_time)
+        focus = self._build_focus_reminder(
+            last_interaction_time, state_blocks=state_blocks)
         if focus:
             if isinstance(user_msg["content"], str):
                 user_msg["content"] = f"{focus}\n\n{user_msg['content']}"
@@ -627,7 +648,11 @@ class ConversationEngine:
             f"{body}"
         )
 
-    def _build_focus_reminder(self, last_interaction_time: datetime | None) -> str | None:
+    def _build_focus_reminder(
+        self,
+        last_interaction_time: datetime | None,
+        state_blocks: list[str] | None = None,
+    ) -> str | None:
         """Build the per-turn `<system-reminder>`: current real time + the
         thing Aria just said (so short user replies are read in context).
 
@@ -654,6 +679,7 @@ class ConversationEngine:
             last_assistant_question=laq,
             last_assistant_statement=las,
             acquaintance=getattr(self, "_acquaintance", None),
+            state_blocks=state_blocks,
         )
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
@@ -742,6 +768,7 @@ class ConversationEngine:
                     model=model,
                     base_url=preset["base_url"],
                     extra_body=preset.get("extra_body") or {},
+                    report_usage=preset.get("report_usage", False),
                 )
                 print(f"[engine] responder={rc.provider} model={model}",
                       flush=True)

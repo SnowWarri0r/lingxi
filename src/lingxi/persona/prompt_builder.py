@@ -108,6 +108,7 @@ class PromptBuilder:
         recent_proactive_messages: list[str] | None = None,
         proactive_mode: bool = False,
         acquaintance: tuple[datetime, int] | None = None,
+        state_blocks: list[str] | None = None,
     ) -> str | None:
         """Assemble the `<system-reminder>` content surfaced right before
         the user's current message.
@@ -116,9 +117,16 @@ class PromptBuilder:
         question Aria just asked (which the user is now answering). Emotion /
         engagement were stripped (pure GA).
 
+        state_blocks are the caller's own per-turn blocks (retrieved facts,
+        web grounding, voice anchors). They belong here rather than in the
+        system prompt for two reasons: the recency channel gives them proper
+        attention weight, and anything volatile placed in the system message
+        sits upstream of the entire chat history, so the history can never be
+        prefix-cached behind it.
+
         Returns None when nothing is dynamic — caller skips embedding.
         """
-        sections: list[str] = []
+        sections: list[str] = list(state_blocks or [])
 
         if current_time is not None:
             sections.append(
