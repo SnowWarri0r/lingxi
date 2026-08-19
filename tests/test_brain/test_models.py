@@ -93,3 +93,29 @@ def test_lookup_query_parsed_and_defaults_empty():
         "topic_anchor": "", "skip": [], "lookup_query": None,
     })
     assert d3.lookup_query == ""
+
+
+def _decision(**extra):
+    base = {"engage_level": 0.6, "register": "warm", "fact_queries": [],
+            "topic_anchor": "", "skip": []}
+    base.update(extra)
+    return OrchestrationDecision.from_dict(base)
+
+
+def test_user_state_kept_when_it_commits_to_one_situation():
+    assert _decision(user_state="还在公司，想下班还没到点").user_state == \
+        "还在公司，想下班还没到点"
+    assert _decision(user_state="  在回家的地铁上  ").user_state == "在回家的地铁上"
+    assert _decision().user_state == ""
+    assert _decision(user_state=None).user_state == ""
+
+
+def test_user_state_dropped_when_it_hedges():
+    """A hedged state reads worse than none — the responder answers the later
+    branch. Measured on the failing turn: decisive 1/20 wrong, hedged 5/20,
+    no state at all 3/20. So a hedge falls back to the clock instead."""
+    for hedged in ("还在公司或刚下班途中",
+                   "可能已经到家了",
+                   "大概在路上",
+                   "到家了？"):
+        assert _decision(user_state=hedged).user_state == "", hedged

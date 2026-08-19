@@ -621,7 +621,9 @@ class ConversationEngine:
         # track of the time — restore it here.
         user_msg = self._build_user_message(user_input, images)
         focus = self._build_focus_reminder(
-            last_interaction_time, state_blocks=state_blocks)
+            last_interaction_time, state_blocks=state_blocks,
+            user_schedule=await self._user_schedule_facts(recipient_key),
+            user_state=decision.user_state)
         if focus:
             if isinstance(user_msg["content"], str):
                 user_msg["content"] = f"{focus}\n\n{user_msg['content']}"
@@ -648,10 +650,44 @@ class ConversationEngine:
             f"{body}"
         )
 
+    # What "his day" is shaped like. The clock block guesses this from a
+    # generic 9-to-5; these are the words he used about his own hours, so
+    # they outrank the guess. Matched on substrings rather than a semantic
+    # query because `semantic` is a 0.2-weight FTS boost, not a filter — a
+    # miss silently degrades to a recency top-N of unrelated facts.
+    _SCHEDULE_MARKERS = (
+        "下班", "上班", "起床", "睡", "加班", "通勤", "作息",
+        "上课", "放学", "午休", "值班", "排班", "工作日", "周末",
+    )
+
+    async def _user_schedule_facts(self, recipient_key: str | None) -> list[str]:
+        """His stated routine, pulled every turn regardless of the orchestrator.
+
+        These were only ever rendered when the orchestrator happened to ask for
+        a user:* bucket. On a light-register turn it asks for nothing, so the
+        always-on clock guess ran unopposed: it told her he was in "下班后的
+        个人时间" at 20:23 while a stored fact said he works till nine and he
+        had just typed 想下班了.
+        """
+        if not recipient_key or self.fact_retriever is None:
+            return []
+        try:
+            facts = await self.fact_retriever.fetch(FactQuery(
+                subject=f"user:{recipient_key}", type=FactType.PATTERN, limit=40,
+            ))
+        except Exception as e:
+            print(f"[engine] schedule lookup failed (non-fatal): {e}", flush=True)
+            return []
+        hits = [f.content for f in facts
+                if any(m in f.content for m in self._SCHEDULE_MARKERS)]
+        return hits[:3]
+
     def _build_focus_reminder(
         self,
         last_interaction_time: datetime | None,
         state_blocks: list[str] | None = None,
+        user_schedule: list[str] | None = None,
+        user_state: str = "",
     ) -> str | None:
         """Build the per-turn `<system-reminder>`: current real time + the
         thing Aria just said (so short user replies are read in context).
@@ -680,6 +716,8 @@ class ConversationEngine:
             last_assistant_statement=las,
             acquaintance=getattr(self, "_acquaintance", None),
             state_blocks=state_blocks,
+            user_schedule=user_schedule,
+            user_state=user_state,
         )
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
