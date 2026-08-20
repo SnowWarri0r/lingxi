@@ -89,6 +89,8 @@ def main() -> int:
                         help="从线上状态冻出一个 case 骨架")
     parser.add_argument("--turns", type=int, default=8,
                         help="capture 时扒最近几轮对话")
+    parser.add_argument("--facts", type=int, default=8,
+                        help="capture 时每个 subject 最多抓几条 fact")
     args = parser.parse_args()
 
     if args.capture:
@@ -103,8 +105,19 @@ def main() -> int:
         slug = Path(persona_path).stem
         skeleton = asyncio.run(capture_turn(
             args.capture, persona_path=persona_path,
-            data_dir=Path("data/personas") / slug, turns=args.turns))
-        out = CASES_DIR / f"{skeleton['id']}.yaml"
+            data_dir=Path("data/personas") / slug, turns=args.turns,
+            fact_limit=args.facts))
+
+        # Same-day captures share the "{date}-rename-me" id; pick the next
+        # free suffix instead of silently overwriting an earlier capture.
+        base_id = skeleton["id"]
+        out = CASES_DIR / f"{base_id}.yaml"
+        suffix = 2
+        while out.exists():
+            skeleton["id"] = f"{base_id}-{suffix}"
+            out = CASES_DIR / f"{skeleton['id']}.yaml"
+            suffix += 1
+
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(
             yaml.safe_dump(skeleton, allow_unicode=True, sort_keys=False),
