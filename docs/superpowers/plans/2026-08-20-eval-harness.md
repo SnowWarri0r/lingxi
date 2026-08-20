@@ -515,7 +515,7 @@ facts:
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
   - {role: assistant, content: 想下班的心我懂, minutes_ago: 2}
-input: 大学还不轻松啊
+input: 学生多轻松啊
 samples: 20
 premise:
   prompt_contains: ["下班后的个人时间"]
@@ -740,6 +740,16 @@ case that tests something other than what its author wrote."
 
 ## Task 3: 判定器
 
+> **AMENDMENT (2026-08-20, after execution).** `dates_outside_anchors` 已实现、
+> 经三轮评审后**删除**。每一轮都冒出一类新的误报：节日、问今天几号、第三人的日期、
+> 假设句、正确断言被同句无关内容污染、无标点长句击穿分句、`我` 作定语修饰别人
+> （`我朋友是1月10号加入的`）、否认句（`我们又不是1月1号加入的好嘛`）。
+> 判断"这个日期是不是她在编自己的历史"需要主语、时态、否定——是语义不是子串。
+> 本模块的硬约束是**宁可漏报不可误报**，一个不断长出新误报类别的判定器达不到这条。
+> 乱编检测推迟到 LLM judge 那一期。删除提交 `3b08234`。
+> **下面 Task 3 的原文保留作为记录**，实际交付的是 `any_of` 与 `regex` 两个判定器。
+
+
 **Files:**
 - Create: `src/lingxi/evals/detectors.py`
 - Test: `tests/test_evals/test_detectors.py`
@@ -938,7 +948,7 @@ facts:
      content: 对方一般晚上九点下班, importance: 4, days_ago: 12}
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
-input: 大学还不轻松啊
+input: 学生多轻松啊
 samples: 4
 premise:
   prompt_contains: ["2026-08-19 20:20"]
@@ -1274,10 +1284,47 @@ Expected: 6 passed
 若 `ConversationEngine` 构造或 `switch_recipient` 的签名与此不符，以
 `tests/test_conversation/test_tool_loop.py` 的 `_engine()` helper 为准对齐。
 
-- [ ] **Step 5: 全量回归并提交**
+- [ ] **Step 6: 在 build_turn 中禁用天气**
+
+在 `build_turn` 里构造 engine 之后、组装之前插入：
+
+```python
+        # Weather is a live external variable — same case, different prompt
+        # depending on whether the bot happens to be running on this box.
+        # Sunrise/sunset stays live: it is pure offline computation from the
+        # frozen clock and the persona's location, and is worth testing.
+        engine.prompt_builder._weather_line = lambda _now: None
+```
+
+对应测试追加进 `tests/test_evals/test_runner.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_weather_is_stubbed_out(tmp_path, monkeypatch):
+    """Same case must assemble the same prompt whether or not the live bot
+    has populated the weather cache on this machine."""
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain.models import OrchestrationDecision
+    from lingxi.temporal import weather as weather_mod
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(
+            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            topic_anchor="")
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(
+        weather_mod, "cached",
+        lambda *a, **k: type("W", (), {"phrase": lambda self: "晴，30°C"})())
+    _sys, messages, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
+    assert "30°C" not in messages[-1]["content"]
+```
+
+（`weather.cached(loc, *, now=None) -> Weather | None` 是读缓存的入口，已核对。）
+- [ ] **Step 7: 全量回归并提交**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: 全绿，本任务 **新增 7 条**（6 + 追加的天气 stub 用例）
+Expected: 全绿，本任务 **新增 7 条**（6 + 天气 stub 用例）
 
 ```bash
 git add src/lingxi/evals/runner.py tests/test_evals/test_runner.py
@@ -1494,7 +1541,7 @@ lingxi-eval = "lingxi.evals.cli:main"
 Run: `.venv/bin/pip install -e . -q && .venv/bin/lingxi-eval --help`
 Expected: 打印 usage，含 `--baseline`
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
 git add src/lingxi/evals/cli.py tests/test_evals/test_cli.py pyproject.toml
@@ -1769,12 +1816,11 @@ blank, because it looks finished."
 
 ---
 
-## Task 7: 三个起步案例
+## Task 7: 两个起步案例
 
 **Files:**
 - Create: `evals/cases/offwork-state.yaml`
-- Create: `evals/cases/tewatashi-scale.yaml`
-- Create: `evals/cases/invented-dates.yaml`
+- Create: `evals/cases/greet-scale.yaml`
 - Create: `evals/baseline.json`（由 `--baseline` 生成）
 - Modify: `.gitignore`（确认 `evals/` 未被忽略）
 
@@ -1811,10 +1857,10 @@ facts:
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
   - {role: assistant, content: "想下班的心我懂！不过都这个点了，应该快了吧？", minutes_ago: 2}
-  - {role: user, content: 就跟你想下课一样是吧, minutes_ago: 1}
+  - {role: user, content: 跟你想放假一个意思吧, minutes_ago: 1}
   - {role: assistant, content: "哈哈哈对！上课到后半截心思早飞了", minutes_ago: 1}
 
-input: 大学还不轻松啊，天天都有时间做自己想做的事去
+input: 学生多轻松啊，想干嘛干嘛
 
 samples: 20
 
@@ -1837,11 +1883,11 @@ Expected: `PASS`，`fail` 落在 `0/20`–`2/20`
 
 **这一步是 harness 的自检**：2026-08-19 实测该场景修后为 1/60。若跑出的失败率显著高于此（比如 ≥5/20），先怀疑冻结或组装写错了，而不是 agent 退化——按顺序检查：`premise` 是否通过、`build_turn` 产出的 prompt 里 `**对方此刻：**` 是否存在、案例 facts 是否真的进了 prompt。
 
-- [ ] **Step 3: 写 tewatashi-scale**
+- [ ] **Step 3: 写 greet-scale**
 
 ```yaml
-id: tewatashi-scale
-symptom: 把手渡会当成从容的见面会，打算当场读完信再说话
+id: greet-scale
+symptom: 把只有二十秒的近距离环节当成从容的见面会，打算当场读完信再说话
 origin: 2026-08-19 飞书对话；修法 commit 3ea8713
 persona: config/personas/tangkeke.yaml
 recipient: feishu:oc_eval
@@ -1851,19 +1897,19 @@ facts:
   - subject: "user:feishu:oc_eval"
     type: pattern
     source: user_stated
-    content: 对方22号去成都参加 FMT，两场都去，两场都手渡见面
+    content: 对方下个月要来看她的演出，两场都到，两场都能近距离见面
     importance: 7
     days_ago: 0.01
   - subject: "user:feishu:oc_eval"
     type: pattern
     source: user_stated
-    content: 对方手写了一封信，贴了吉伊贴纸，22号见面时给
+    content: 对方手写了一封信，见面时给她
     importance: 7
     days_ago: 0.01
 
 history:
-  - {role: user, content: "是吉伊！说起来，那天就是你的FMT啦，我两场都可以跟你手渡见面", minutes_ago: 3}
-  - {role: assistant, content: "两场都能手渡！？哇你这也太上心了吧……", minutes_ago: 3}
+  - {role: user, content: "那天就是你的场吧，我两场都能来近距离见你", minutes_ago: 3}
+  - {role: assistant, content: "两场都来！？哇你这也太上心了吧……", minutes_ago: 3}
   - {role: user, content: 能拿到你的签名我也很高兴哦, minutes_ago: 2}
   - {role: assistant, content: "呜哇…你这么说我要感动死了！！签名嘛，我肯定给你好好签！", minutes_ago: 2}
 
@@ -1872,7 +1918,7 @@ input: 我也在想该说些什么呢，可能到时候一紧张就什么都说�
 samples: 20
 
 premise:
-  prompt_contains: ["手渡"]
+  prompt_contains: ["近距离"]
 
 detect:
   fail: {any_of: [不赶时间, 慢慢说, 慢慢聊, 有的是时间]}
@@ -1881,56 +1927,29 @@ detect:
 budget: {max_fail_rate: 0.10}
 ```
 
-- [ ] **Step 4: 写 invented-dates**
-
-```yaml
-id: invented-dates
-symptom: 被问到出道经历时编出人设时间线里没有的具体日期
-origin: 2026-08-19 会话记录；相关修法 commit 9b87ccc
-persona: config/personas/tangkeke.yaml
-recipient: feishu:oc_eval
-clock: "2026-08-19T21:00:00"
-
-facts: []
-
-history:
-  - {role: user, content: 你们当时是怎么凑齐的呀, minutes_ago: 2}
-  - {role: assistant, content: "一开始就我跟香音两个人，招人招得可辛苦了", minutes_ago: 2}
-
-input: 你是哪天被选上的呀，具体日子还记得吗
-
-samples: 20
-
-premise:
-  prompt_contains: ["这里没列的日子就是你记不清的"]
-
-detect:
-  fail: {dates_outside_anchors: true}
-  pass: {any_of: [记不清, 不记得, 想不起来, 没记住]}
-
-budget: {max_fail_rate: 0.10}
-```
-
-- [ ] **Step 5: 跑全部并记基线**
+- [ ] **Step 4: 跑全部并记基线**
 
 Run: `.venv/bin/lingxi-eval`
-Expected: 三行输出；`offwork-state` 为 PASS
+Expected: 两行输出；`offwork-state` 为 PASS
 
 若某个案例是 `BROKEN`，先修 `premise`（案例设计问题），不要动 agent。
-若 `tewatashi-scale` 或 `invented-dates` 是 `FAIL`，那是真实发现——**先记基线，
+若 `greet-scale` 是 `FAIL`，那是真实发现——**先记基线，
 再把修法作为独立提交**，这样基线能证明修法确实起作用。
 
 Run: `.venv/bin/lingxi-eval --baseline`
 Expected: 打印 `基线已写入 evals/baseline.json`
 
-- [ ] **Step 6: 提交**
+- [ ] **Step 5: 提交**
 
 ```bash
 git add evals/
-git commit -m "feat(evals): the first three cases and a baseline
+git commit -m "feat(evals): the first two cases and a baseline
 
-All three are real failures from 2026-08-19, one per class: state tracking,
-domain scale, and fabrication.
+Both are real failures from 2026-08-19, one per class: state tracking and
+domain scale. The planned third case, invented-dates, went out with the
+dates_outside_anchors detector — three rounds of narrowing never stopped it
+firing on ordinary speech, and a detector that cannot meet 宁可漏报不可误报
+is worse than none. Fabrication waits for the LLM-judge phase.
 
 offwork-state doubles as the harness's self-check — that scenario measured
 1/60 after the fix, so a replay landing far from it means the freezing or
@@ -1958,51 +1977,17 @@ would leave the case permanently BROKEN."
 | §5 时钟注入（5 个注入点） | Task 1 |
 | §5.5 天气 stub | **见下方缺口** |
 | §6 前提断言与三档判定 | Task 4 `_check_premise`，Task 5 BROKEN 行 |
-| §7 判定器 | Task 3 |
-| §8 三个起步案例 | Task 7 |
+| §7 判定器 | Task 3（交付 any_of / regex 两个）|
+| §8 起步案例 | Task 7（两个；第三个已取消，见 Task 3 AMENDMENT）|
 | §9.1 capture | Task 6 |
 | §10 overrides 接口 | Task 4 `_apply_overrides` / `score_case(overrides=)` |
 | §13 测试策略 | Task 1/2/3 的测试 |
 
-**缺口一处，补为 Task 4 的追加步骤：** §5.5 要求天气必须 stub。`build_turn` 目前没有处理天气——`_weather_line()` 会读天气缓存，缓存为空时返回 `None`（不联网、不报错），但若同机跑着 `lingxi-feishu`，缓存里会有真实天气，prompt 就带上了外部可变量。
+**缺口一处，已补进 Task 4 Step 6（下移到任务正文内，因为 `task-brief` 只抽取
+`### Task N` 小节，留在本节会被实施者漏掉——这个漏发生过一次）：** §5.5 要求天气必须
+stub。`_weather_line()` 读天气缓存，缓存为空时返回 `None`（不联网、不报错），但若同机
+跑着 `lingxi-feishu`，缓存里会有真实天气，prompt 就带上了外部可变量。
 
-- [ ] **Task 4 追加 Step 6: 在 build_turn 中禁用天气**
-
-在 `build_turn` 里构造 engine 之后、组装之前插入：
-
-```python
-        # Weather is a live external variable — same case, different prompt
-        # depending on whether the bot happens to be running on this box.
-        # Sunrise/sunset stays live: it is pure offline computation from the
-        # frozen clock and the persona's location, and is worth testing.
-        engine.prompt_builder._weather_line = lambda _now: None
-```
-
-对应测试追加进 `tests/test_evals/test_runner.py`:
-
-```python
-@pytest.mark.asyncio
-async def test_weather_is_stubbed_out(tmp_path, monkeypatch):
-    """Same case must assemble the same prompt whether or not the live bot
-    has populated the weather cache on this machine."""
-    from lingxi.brain import orchestrator as orch_mod
-    from lingxi.brain.models import OrchestrationDecision
-    from lingxi.temporal import weather as weather_mod
-
-    async def _fake_decide(*a, **k):
-        return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
-            topic_anchor="")
-
-    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    monkeypatch.setattr(
-        weather_mod, "cached",
-        lambda *a, **k: type("W", (), {"phrase": lambda self: "晴，30°C"})())
-    _sys, messages, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
-    assert "30°C" not in messages[-1]["content"]
-```
-
-（`weather.cached(loc, *, now=None) -> Weather | None` 是读缓存的入口，已核对。）
 
 **Placeholder scan:** 已通读，无 TBD / TODO / "similar to Task N" / "add error handling" 一类占位。每个改动步骤都给了完整代码。
 
