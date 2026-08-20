@@ -177,18 +177,17 @@ async def test_pass_rate_does_not_affect_verdict(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_build_turn_surfaces_stubbed_weather(tmp_path, monkeypatch):
-    """Self-review addition: build_turn runs the real pipeline end to end,
-    and that pipeline includes a real-weather line (persona/prompt_builder's
-    _weather_line, reading lingxi.temporal.weather.cached()). None of the
-    other cases here exercise that branch — the cache starts empty and
-    build_turn never calls the network-hitting `refresh()`, so it silently
-    degrades to "no weather line" every time.
+async def test_build_turn_stubs_out_weather(tmp_path, monkeypatch):
+    """Spec §5.5: weather must be stubbed out so the same case assembles the
+    same prompt whether or not the live lingxi-feishu bot happens to be
+    running on this box and has populated lingxi.temporal.weather's
+    process-global cache.
 
-    Stub the cache directly (no network, no scheduler) with a known reading
-    for the case's persona location and confirm the assembled prompt
-    actually carries it — proving the replay surfaces live-environment
-    context deterministically rather than only ever exercising the miss path.
+    Seed the cache with a recognisable reading for the case's persona
+    location — the same setup that would make the live pipeline surface a
+    weather line — and confirm build_turn's assembled prompt does NOT carry
+    it. This must fail if the `_weather_line` override in build_turn is
+    removed.
     """
     from lingxi.brain import orchestrator as orch_mod
     from lingxi.brain.models import OrchestrationDecision
@@ -213,5 +212,34 @@ async def test_build_turn_surfaces_stubbed_weather(tmp_path, monkeypatch):
 
     system, messages, _ = await build_turn(case, llm=_StubLLM())
     full = system + "\n" + messages[-1]["content"]
-    assert "大雨" in full
-    assert "31°C" in full
+    assert "大雨" not in full
+    assert "31°C" not in full
+
+
+@pytest.mark.asyncio
+async def test_build_turn_keeps_sunrise_sunset_live(tmp_path, monkeypatch):
+    """Spec §5.5: unlike weather, sunrise/sunset must stay live — it is pure
+    offline computation from the frozen clock and the persona's location, so
+    it costs nothing to keep deterministic and is worth exercising end to
+    end. A future change that stubs "all of temporal" wholesale must not be
+    able to silently take this out along with weather.
+    """
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain.models import OrchestrationDecision
+    from lingxi.persona.loader import load_persona
+    from lingxi.persona.prompt_builder import PromptBuilder
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(
+            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            topic_anchor="")
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+
+    case = _case(tmp_path)
+    persona = load_persona(case.persona)
+    expected_scene = PromptBuilder(persona)._daylight_scene(case.clock)
+
+    system, messages, _ = await build_turn(case, llm=_StubLLM())
+    full = system + "\n" + messages[-1]["content"]
+    assert expected_scene in full
