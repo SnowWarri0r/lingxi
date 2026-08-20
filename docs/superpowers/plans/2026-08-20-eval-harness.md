@@ -515,7 +515,7 @@ facts:
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
   - {role: assistant, content: 想下班的心我懂, minutes_ago: 2}
-input: 大学还不轻松啊
+input: 学生多轻松啊
 samples: 20
 premise:
   prompt_contains: ["下班后的个人时间"]
@@ -948,7 +948,7 @@ facts:
      content: 对方一般晚上九点下班, importance: 4, days_ago: 12}
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
-input: 大学还不轻松啊
+input: 学生多轻松啊
 samples: 4
 premise:
   prompt_contains: ["2026-08-19 20:20"]
@@ -1820,7 +1820,7 @@ blank, because it looks finished."
 
 **Files:**
 - Create: `evals/cases/offwork-state.yaml`
-- Create: `evals/cases/tewatashi-scale.yaml`
+- Create: `evals/cases/greet-scale.yaml`
 - Create: `evals/baseline.json`（由 `--baseline` 生成）
 - Modify: `.gitignore`（确认 `evals/` 未被忽略）
 
@@ -1857,10 +1857,10 @@ facts:
 history:
   - {role: user, content: 想下班了, minutes_ago: 2}
   - {role: assistant, content: "想下班的心我懂！不过都这个点了，应该快了吧？", minutes_ago: 2}
-  - {role: user, content: 就跟你想下课一样是吧, minutes_ago: 1}
+  - {role: user, content: 跟你想放假一个意思吧, minutes_ago: 1}
   - {role: assistant, content: "哈哈哈对！上课到后半截心思早飞了", minutes_ago: 1}
 
-input: 大学还不轻松啊，天天都有时间做自己想做的事去
+input: 学生多轻松啊，想干嘛干嘛
 
 samples: 20
 
@@ -1883,11 +1883,11 @@ Expected: `PASS`，`fail` 落在 `0/20`–`2/20`
 
 **这一步是 harness 的自检**：2026-08-19 实测该场景修后为 1/60。若跑出的失败率显著高于此（比如 ≥5/20），先怀疑冻结或组装写错了，而不是 agent 退化——按顺序检查：`premise` 是否通过、`build_turn` 产出的 prompt 里 `**对方此刻：**` 是否存在、案例 facts 是否真的进了 prompt。
 
-- [ ] **Step 3: 写 tewatashi-scale**
+- [ ] **Step 3: 写 greet-scale**
 
 ```yaml
-id: tewatashi-scale
-symptom: 把手渡会当成从容的见面会，打算当场读完信再说话
+id: greet-scale
+symptom: 把只有二十秒的近距离环节当成从容的见面会，打算当场读完信再说话
 origin: 2026-08-19 飞书对话；修法 commit 3ea8713
 persona: config/personas/tangkeke.yaml
 recipient: feishu:oc_eval
@@ -1897,19 +1897,19 @@ facts:
   - subject: "user:feishu:oc_eval"
     type: pattern
     source: user_stated
-    content: 对方22号去成都参加 FMT，两场都去，两场都手渡见面
+    content: 对方下个月要来看她的演出，两场都到，两场都能近距离见面
     importance: 7
     days_ago: 0.01
   - subject: "user:feishu:oc_eval"
     type: pattern
     source: user_stated
-    content: 对方手写了一封信，贴了吉伊贴纸，22号见面时给
+    content: 对方手写了一封信，见面时给她
     importance: 7
     days_ago: 0.01
 
 history:
-  - {role: user, content: "是吉伊！说起来，那天就是你的FMT啦，我两场都可以跟你手渡见面", minutes_ago: 3}
-  - {role: assistant, content: "两场都能手渡！？哇你这也太上心了吧……", minutes_ago: 3}
+  - {role: user, content: "那天就是你的场吧，我两场都能来近距离见你", minutes_ago: 3}
+  - {role: assistant, content: "两场都来！？哇你这也太上心了吧……", minutes_ago: 3}
   - {role: user, content: 能拿到你的签名我也很高兴哦, minutes_ago: 2}
   - {role: assistant, content: "呜哇…你这么说我要感动死了！！签名嘛，我肯定给你好好签！", minutes_ago: 2}
 
@@ -1918,7 +1918,7 @@ input: 我也在想该说些什么呢，可能到时候一紧张就什么都说�
 samples: 20
 
 premise:
-  prompt_contains: ["手渡"]
+  prompt_contains: ["近距离"]
 
 detect:
   fail: {any_of: [不赶时间, 慢慢说, 慢慢聊, 有的是时间]}
@@ -1933,7 +1933,7 @@ Run: `.venv/bin/lingxi-eval`
 Expected: 两行输出；`offwork-state` 为 PASS
 
 若某个案例是 `BROKEN`，先修 `premise`（案例设计问题），不要动 agent。
-若 `tewatashi-scale` 是 `FAIL`，那是真实发现——**先记基线，
+若 `greet-scale` 是 `FAIL`，那是真实发现——**先记基线，
 再把修法作为独立提交**，这样基线能证明修法确实起作用。
 
 Run: `.venv/bin/lingxi-eval --baseline`

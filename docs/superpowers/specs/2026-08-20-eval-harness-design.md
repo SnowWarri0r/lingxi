@@ -121,9 +121,9 @@ facts:
 history:
   - {role: user,      content: "想下班了",              minutes_ago: 2}
   - {role: assistant, content: "想下班的心我懂！…",       minutes_ago: 2}
-  - {role: user,      content: "就跟你想下课一样是吧",    minutes_ago: 1}
+  - {role: user,      content: "跟你想放假一个意思吧",    minutes_ago: 1}
 
-input: "大学还不轻松啊，天天都有时间做自己想做的事去"
+input: "学生多轻松啊，想干嘛干嘛"
 
 samples: 20
 
@@ -160,7 +160,7 @@ budget: {max_fail_rate: 0.05}
 ```
 case              verdict   fail    pass    baseline    Δ
 offwork-state     PASS      1/20    3/20    9/60      -13pp
-tewatashi-scale   FAIL      7/20    2/20    —          new
+greet-scale   FAIL      7/20    2/20    —          new
 some-case        BROKEN    前提不再成立：prompt 里找不到「下班后的个人时间」
 ```
 
@@ -286,7 +286,7 @@ premise:
 | id | 失败类别 | 判定 | 已有基线 |
 |---|---|---|---|
 | `offwork-state` | 状态判断 | `any_of` 通勤/到家词 | **有**：9/60 → 1/60 |
-| `tewatashi-scale` | 行话与尺度 | `any_of` 二十秒/时间很短 | 无 |
+| `greet-scale` | 行话与尺度 | `any_of` 二十秒/时间很短 | 无 |
 
 `offwork-state` 自带 old/new 两组各 60 次采样的实测数据，
 **可以直接用来校验 harness 本身没写错**——如果重放跑不出接近 9/60 与 1/60 的结果，
