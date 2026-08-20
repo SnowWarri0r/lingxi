@@ -427,6 +427,8 @@ class ConversationEngine:
         images: list[dict] | None,
         channel: str | None,
         recipient_id: str | None,
+        *,
+        now: datetime | None = None,
     ) -> tuple[str, list[dict]]:
         """New chat-prep path: orchestrator + renderer.
 
@@ -436,6 +438,11 @@ class ConversationEngine:
         from lingxi.brain.orchestrator import StateDigest, decide
         from lingxi.brain.renderer import render_dynamic_blocks
         from lingxi.persona.prompt_builder import build_persona_block
+
+        # One clock for the whole turn. Defaults to the wall clock, so
+        # production behaviour is unchanged; an eval case pins it so the
+        # assembled prompt is reproducible.
+        now = now or datetime.now()
 
         recipient_key = f"{channel}:{recipient_id}" if recipient_id else "_anon"
 
@@ -479,7 +486,8 @@ class ConversationEngine:
             memory_context = await self.memory.assemble_context(
                 query=user_input, recipient_key=recipient_key,
             )
-            messages = self.context_assembler.assemble_messages(memory_context)
+            messages = self.context_assembler.assemble_messages(
+                memory_context, now=now)
             self.memory.add_turn("user", memory_text)
             messages.append(self._build_user_message(user_input, images))
             return build_persona_block(self.persona), messages
@@ -514,7 +522,8 @@ class ConversationEngine:
         memory_context = await self.memory.assemble_context(
             query=user_input, recipient_key=recipient_key,
         )
-        messages = self.context_assembler.assemble_messages(memory_context)
+        messages = self.context_assembler.assemble_messages(
+            memory_context, now=now)
         # Persist the user turn AFTER assembling history (so it isn't
         # duplicated this turn, but is available next turn).
         self.memory.add_turn("user", memory_text)
@@ -572,6 +581,7 @@ class ConversationEngine:
             self.fact_retriever, decision, recipient_key=recipient_key,
             persona=self.persona,
             acquaintance=getattr(self, "_acquaintance", None),
+            now=now,
         )
         # The system message holds ONLY the stable persona. Everything that
         # changes per turn rides in the reminder attached to the user's own
@@ -623,7 +633,7 @@ class ConversationEngine:
         focus = self._build_focus_reminder(
             last_interaction_time, state_blocks=state_blocks,
             user_schedule=await self._user_schedule_facts(recipient_key),
-            user_state=decision.user_state)
+            user_state=decision.user_state, now=now)
         if focus:
             if isinstance(user_msg["content"], str):
                 user_msg["content"] = f"{focus}\n\n{user_msg['content']}"
@@ -688,6 +698,7 @@ class ConversationEngine:
         state_blocks: list[str] | None = None,
         user_schedule: list[str] | None = None,
         user_state: str = "",
+        now: datetime | None = None,
     ) -> str | None:
         """Build the per-turn `<system-reminder>`: current real time + the
         thing Aria just said (so short user replies are read in context).
@@ -710,7 +721,7 @@ class ConversationEngine:
         except Exception:
             pass
         return self.prompt_builder.build_turn_focus_reminder(
-            current_time=datetime.now(),
+            current_time=now or datetime.now(),
             last_interaction_time=last_interaction_time,
             last_assistant_question=laq,
             last_assistant_statement=las,
