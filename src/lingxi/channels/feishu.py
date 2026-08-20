@@ -294,6 +294,22 @@ class FeishuBot(OutboundChannel):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._startup_time_ms = int((time.time() - ignore_stale_seconds) * 1000)
 
+        # People send one thought as several messages. Batch a burst into one
+        # turn instead of answering each line separately. Tuned by env so the
+        # feel can be adjusted without a deploy; 0 restores one-turn-per-message.
+        from lingxi.channels.debounce import MessageDebouncer
+        self._debouncer = MessageDebouncer(
+            self._flush_batch,
+            window=float(os.environ.get("LINGXI_DEBOUNCE_SECONDS", "1.5")),
+            max_wait=float(os.environ.get("LINGXI_DEBOUNCE_MAX_WAIT", "8")),
+        )
+        # Serialises card creation with the turn itself. The engine already
+        # serialises turns per recipient, but it takes its lock *after* the
+        # channel has created and sent the streaming card — so without this a
+        # second batch pops an empty card into the chat that then sits there
+        # doing nothing until the first turn finishes.
+        self._chat_locks: dict[str, asyncio.Lock] = {}
+
         # Proactive scheduler (enabled by default)
         self._proactive_config = proactive_config or ProactiveConfig()
         self._channel_registry = ChannelRegistry()
@@ -546,9 +562,11 @@ class FeishuBot(OutboundChannel):
 
         print(f"[recv] {msg_id} text={text[:50]!r} images={len(image_keys)}")
 
-        # Dispatch to background loop and return immediately
+        # Hand off to the event loop and return immediately — this runs on the
+        # SDK's thread and Feishu retries if it doesn't ACK within 3 seconds.
+        # All batching state is touched only on the loop, so it needs no lock.
         asyncio.run_coroutine_threadsafe(
-            self._handle_reply_safe(chat_id, text, image_keys, msg_id),
+            self._enqueue(chat_id, text, image_keys, msg_id),
             self._loop,
         )
 
@@ -741,6 +759,32 @@ class FeishuBot(OutboundChannel):
         except Exception as e:
             import traceback
             print(f"[feishu] annotation dispatch failed: {e}\n{traceback.format_exc()}", flush=True)
+
+    async def _enqueue(
+        self, chat_id: str, text: str, image_keys: list[str], msg_id: str,
+    ) -> None:
+        """Queue one inbound message into its conversation's batch."""
+        await self._debouncer.add(chat_id, (text, image_keys, msg_id))
+        # Commands are typed deliberately and answered without a model call;
+        # making someone wait out the quiet window for /status reads as a hang.
+        if text.startswith("/"):
+            await self._debouncer.flush_now(chat_id)
+
+    async def _flush_batch(self, chat_id: str, items: list) -> None:
+        """Turn one batch of messages into a single turn."""
+        texts = [t for t, _keys, _mid in items if t]
+        image_keys = [k for _t, keys, _mid in items for k in keys]
+        msg_id = items[-1][2]
+        # Newline-joined rather than space-joined: the separate lines are how
+        # they were sent, and the model reads that shape correctly.
+        text = "\n".join(texts)
+        if len(items) > 1:
+            print(f"[batch] {chat_id[:12]}… merged {len(items)} messages "
+                  f"into one turn", flush=True)
+
+        lock = self._chat_locks.setdefault(chat_id, asyncio.Lock())
+        async with lock:
+            await self._handle_reply_safe(chat_id, text, image_keys, msg_id)
 
     async def _handle_reply_safe(
         self,
