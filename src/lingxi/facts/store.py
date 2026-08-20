@@ -16,6 +16,7 @@ import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 from lingxi.facts.models import Fact, FactType, Source
 
@@ -77,9 +78,13 @@ def _row_to_fact(row: sqlite3.Row) -> Fact:
 
 
 class FactStore:
-    def __init__(self, db_path: Path | str):
+    def __init__(self, db_path: Path | str, *,
+                 clock: Callable[[], datetime] | None = None):
         self._path = Path(db_path)
         self._lock = asyncio.Lock()
+        # Injectable so an eval case can freeze expiry evaluation. Production
+        # passes nothing and gets the wall clock.
+        self._clock = clock or datetime.now
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self._path)
@@ -193,7 +198,7 @@ class FactStore:
             params.append(since.isoformat())
         if not include_expired:
             clauses.append("(expires_at IS NULL OR expires_at > ?)")
-            params.append(datetime.now().isoformat())
+            params.append(self._clock().isoformat())
         if exclude_superseded:
             clauses.append(
                 "id NOT IN (SELECT supersedes FROM facts WHERE supersedes IS NOT NULL)"
