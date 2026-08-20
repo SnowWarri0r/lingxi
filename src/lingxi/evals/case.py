@@ -13,8 +13,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from lingxi.evals.detectors import KNOWN_DETECTORS
 from lingxi.facts.models import Fact, FactType, Source
 
 
@@ -49,11 +50,57 @@ class Budget(_Strict):
     max_fail_rate: float = 0.05
 
 
+def _check_detector_spec(spec: dict, field_name: str) -> dict:
+    """Reject a detector spec that names no known detector, or that names one
+    correctly but can never fire.
+
+    Both mistakes are indistinguishable from a working case until sampling
+    finishes: an unedited `--capture` skeleton (`any_of: []`) reports PASS
+    on every reply, and a typoed key either raises after 20 paid samples
+    (unknown-key branch of `evaluate`) or, if it happens to collide with
+    another known key, silently never fires. Catching this at case-load
+    time, before anything is spent, is the whole point of validating here.
+    """
+    if not spec:
+        raise ValueError(
+            f"detect.{field_name} 是空的——如果这是刚 --capture 出来的骨架，"
+            f"还需要手写 detect（例如 {{'any_of': ['命中的原句']}}）"
+        )
+    unknown = sorted(set(spec) - KNOWN_DETECTORS)
+    if unknown:
+        raise ValueError(
+            f"detect.{field_name} 用了未知判定器 {unknown}；"
+            f"已知判定器是 {sorted(KNOWN_DETECTORS)}"
+        )
+    if "any_of" in spec and not spec["any_of"]:
+        raise ValueError(
+            f"detect.{field_name}.any_of 是空列表，永远不会命中——"
+            f"如果这是刚 --capture 出来的骨架，还需要手写命中的原句/关键词"
+        )
+    if "regex" in spec and not spec["regex"]:
+        raise ValueError(
+            f"detect.{field_name}.regex 是空字符串，永远不会命中，需要手写正则"
+        )
+    return spec
+
+
 class Detect(_Strict):
     fail: dict
     passing: dict | None = Field(default=None, alias="pass")
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    @field_validator("fail")
+    @classmethod
+    def _check_fail(cls, v: dict) -> dict:
+        return _check_detector_spec(v, "fail")
+
+    @field_validator("passing")
+    @classmethod
+    def _check_passing(cls, v: dict | None) -> dict | None:
+        if v is None:
+            return v
+        return _check_detector_spec(v, "pass")
 
 
 class Case(_Strict):

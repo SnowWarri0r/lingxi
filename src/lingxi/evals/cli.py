@@ -38,6 +38,28 @@ def save_baseline(path: Path | str, scores: list[CaseScore], git_sha: str) -> No
                     encoding="utf-8")
 
 
+def dump_replies(scores: list[CaseScore], out_dir: Path | str) -> None:
+    """Write every sampled reply to disk, one file per case.
+
+    Replies cost real money to produce and `score_case` throws them away
+    once the verdict is computed. Diagnosing a case that scores
+    unexpectedly means reading the actual replies, and without this a
+    throwaway script (and a second paid sampling round) is the only way
+    to get at them.
+
+    Layout: `DIR/<case-id>.txt`, one reply per block, separated by a blank
+    line and a `---` rule. A case with no replies (e.g. BROKEN, sampled
+    zero) writes no file rather than an empty one.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for s in scores:
+        if not s.replies:
+            continue
+        text = "\n\n---\n\n".join(s.replies)
+        (out_dir / f"{s.id}.txt").write_text(text, encoding="utf-8")
+
+
 def _fraction(rate: float, samples: int) -> str:
     return f"{round(rate * samples)}/{samples}"
 
@@ -96,6 +118,8 @@ def main() -> int:
                         help="capture 时扒最近几轮对话")
     parser.add_argument("--facts", type=int, default=8,
                         help="capture 时每个 subject 最多抓几条 fact")
+    parser.add_argument("--dump", metavar="DIR",
+                        help="把每个 case 采样到的回复写入 DIR/<case-id>.txt")
     args = parser.parse_args()
 
     if args.capture:
@@ -138,6 +162,10 @@ def main() -> int:
         return 1
 
     print(format_table(scores, load_baseline()))
+
+    if args.dump:
+        dump_replies(scores, args.dump)
+        print(f"\n回复已写入 {args.dump}/<case-id>.txt")
 
     if args.baseline:
         save_baseline(BASELINE_PATH, scores, _git_sha())

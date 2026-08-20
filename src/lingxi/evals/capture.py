@@ -31,7 +31,7 @@ async def capture(
     raw_rows = _read_history(data_dir, recipient_key, turns)
     clock = at or (raw_rows[-1][2] if raw_rows else datetime.now())
 
-    store = FactStore(data_dir / "facts.db")
+    store = FactStore(data_dir / "facts.db", clock=lambda: clock)
     await store.init()
     facts: list[dict] = []
     for subject in ("aria", f"user:{recipient_key}"):
