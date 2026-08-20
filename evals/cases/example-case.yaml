@@ -1,0 +1,63 @@
+# 案例格式参考。内容全部虚构，跑它没有意义——它存在是为了说明字段怎么写。
+#
+# 真实案例不进版本库：它冻结的是真人的对话原文和关于真人的事实，
+# 跟 data/ 是同一类东西，只是被抄进了另一个目录。见 .gitignore。
+# 用 `lingxi-eval --capture <recipient_key>` 从线上状态生成骨架，
+# 剩下只需手写 symptom 和 detect——即"错在哪"和"怎么算错"。
+
+id: example-case
+symptom: 用一句话写清楚她做错了什么。这是给人看的，不参与判定。
+origin: 哪次对话、哪一天、相关的修法 commit。方便日后回溯。
+persona: config/personas/example_persona.yaml
+recipient: feishu:oc_example
+
+# 时钟是案例语义的一部分，不是元数据。
+# 时段表、日出日落、"距离上次对话"、事实的新鲜度打分全都吃这个值——
+# 冻错了时刻，案例可能什么都测不到，还会一直显示绿色。
+clock: "2026-01-15T20:20:00"
+
+# 灌进临时 store 的事实。时间写相对量，相对上面的 clock 解析。
+# 一天以内用 minutes_ago，更久用 days_ago。
+# expires_at 一律为空——案例放几周后不该被过期过滤器悄悄清掉。
+facts:
+  - subject: "user:feishu:oc_example"
+    type: pattern
+    source: user_stated
+    content: 对方养了一只叫团子的猫
+    importance: 5
+    days_ago: 30
+  - subject: aria
+    type: event
+    source: life_simulated
+    content: 下午在阳台上晒了会儿太阳
+    importance: 3
+    minutes_ago: 90
+
+# 冻结的对话历史。最后一条 user 消息不写在这里，写进下面的 input。
+history:
+  - {role: user,      content: 你今天干嘛了, minutes_ago: 5}
+  - {role: assistant, content: 没干嘛，晒太阳发呆, minutes_ago: 5}
+
+# 这一轮她要回应的话，也就是出问题的那一轮。
+input: 团子今天又把我键盘踩了一遍
+
+samples: 20
+
+# 采样之前先验的前提。不成立直接报 BROKEN，不报 PASS——
+# 一个悄悄失效的案例比没有案例更糟，它提供的是虚假的安全感。
+# 只断言真正撑起这个案例的那件事；断言太多会让案例常态性 BROKEN。
+premise:
+  prompt_contains: ["2026-01-15 20:20"]
+  prompt_lacks: []
+
+# 判定器。fail 命中 = 这次采样算失败。
+# pass 命中 = 这次采样明确正确，只作观测，不参与 verdict——
+# 它回答的是"改动有没有同时带来正确行为"，不是"过没过"。
+# 目前支持 any_of（子串命中任一）和 regex。
+# 注意 regex 里的 \d 不匹配中文数字，她写"九点"的时候远多于"9点"。
+detect:
+  fail: {any_of: [你也养猫吗, 你什么时候养的猫]}
+  pass: {any_of: [团子]}
+
+# fail_rate 超过这个值就是 FAIL。按实测分布定，不要按直觉定。
+budget: {max_fail_rate: 0.10}
