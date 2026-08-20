@@ -81,6 +81,11 @@ async def _run(case_ids: list[str]) -> list[CaseScore]:
 
 
 def main() -> int:
+    # Load .env before any config/sampler code reads os.environ, so the API
+    # key reaches the sampler even if no other import path happens to load it.
+    from dotenv import load_dotenv
+    load_dotenv()
+
     parser = argparse.ArgumentParser(prog="lingxi-eval")
     parser.add_argument("cases", nargs="*", help="case id（留空跑全部）")
     parser.add_argument("--baseline", action="store_true",
