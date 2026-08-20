@@ -1,8 +1,11 @@
-# 失败案例库 + 回放评测（self-evolve 的底座）
+# 失败案例库 + 回放评测（外部评分与改进回路）
 
 **Date**: 2026-08-20
 **Status**: Approved, pending implementation plan
-**Scope**: 建立可重放、可打分的失败案例库，作为后续一切自动改进的适应度信号
+**Scope**: 建立可重放、可打分的失败案例库，作为一切改进的适应度信号
+
+> 起因是"能否引入 self-evolve"。结论是这个名字不适用：演化的主体是维护者，
+> 不是 agent（§9）。她表现，我们捕获、评分、改进。本文档按后者设计。
 
 ---
 
@@ -54,6 +57,7 @@
 - 判定完全确定性，可无人值守运行
 - 覆盖真实链路：真 orchestrator、真检索、真 prompt 组装
 - 案例格式与打分接口从一开始就按"能批量跑候选"设计
+- **建一个案例的人工成本只剩"错在哪"和"怎么算错"两项**（§9.1）
 
 ### 非目标（本期明确不做）
 
@@ -85,6 +89,7 @@ evals/
 └── baseline.json         # 上次记录的分数
 src/lingxi/evals/
 ├── case.py               # 加载 + schema 校验 + 相对时间解析
+├── capture.py            # 从线上状态冻出 case 骨架（§9.1，第一等需求）
 ├── runner.py             # 建临时 store、组装、采样、判定、对比基线
 └── detectors.py          # 确定性判定器注册表
 tests/test_evals/         # 判定器和加载器自身的单测
@@ -164,9 +169,10 @@ invented-dates    BROKEN    前提不再成立：prompt 里找不到「你的时
 ### 4.4 CLI
 
 ```
-lingxi-eval                  # 全部
-lingxi-eval offwork-state    # 单个
-lingxi-eval --baseline       # 把当前分数存成基线
+lingxi-eval                          # 全部
+lingxi-eval offwork-state            # 单个
+lingxi-eval --baseline               # 把当前分数存成基线
+lingxi-eval capture <recipient_key>  # 从线上状态冻出 case 骨架（§9.1）
 ```
 
 `baseline.json` 记录 `{id: {fail_rate, pass_rate, samples, recorded_at, git_sha}}`。
@@ -286,7 +292,44 @@ premise:
 
 ---
 
-## 9. 为自动候选预留的接口
+## 9. 这个循环里谁是主体
+
+**演化的主体不是 agent，是维护者。** 准确的形状是：
+
+```
+她表现  →  你指出坏输出  →  我捕获  →  我评分  →  我改进  →  回归
+```
+
+她既不知道自己被评分，也不参与改进。"self-evolve" 是个误导性的名字：
+本期建的是**外部评分与改进回路**，不是自我改进回路。这个区分决定了下一节的定位。
+
+### 9.1 推论：捕获必须接近零摩擦
+
+如果每建一个案例都要人手工扒对话、拼 messages、算时间、写检测，
+这个案例库会在第五个案例前后停止增长。
+
+这不是审美判断，是本仓库自己的教训：飞书 👍/👎/改写通道建好了，
+**493 条 turn，标注量 0**（§1.1）。它不是设计错了，是每次要人多点一下。
+案例库如果有同样的摩擦，会死于同样的原因——只不过这次承受摩擦的是维护者。
+
+因此 `capture` 是**第一等需求，不是便利功能**：
+
+```
+lingxi-eval capture <recipient_key> [--turns 8] [--at <ISO8601>]
+```
+
+从线上真实状态冻出一个 case 骨架：
+
+- 按 `--at`（默认最后一轮的时间）取时钟
+- 快照该 recipient 相关的 facts 子集，换算成相对 `clock` 的 `days_ago`
+- 扒最近 `--turns` 轮对话，换算成 `minutes_ago`
+- 以该时钟组装一次 prompt，把命中的关键句填进 `premise` 草稿
+- 输出 `evals/cases/<date>-<slug>.yaml`
+
+留给人手写的只有 `symptom` 和 `detect`——**即"错在哪"和"怎么算错"**。
+其余是机械劳动，不该由人做。
+
+## 10. 为批量候选预留的接口
 
 核心是一个纯函数：
 
@@ -295,7 +338,9 @@ async def score_case(case: Case, *, overrides: dict | None = None) -> CaseScore
 ```
 
 `overrides` 可替换 persona 字段、prompt 片段、orchestrator 指令。
-批量跑候选即"同一个 case 传不同 `overrides`"。
+批量跑候选即"同一个 case 传不同 `overrides`"——**这是给维护者试候选用的**（§9），
+不是给 agent 自我改进用的。2026-08-19 敲定 `user_state` 写法手工 A/B 了五轮，
+那五轮本该是一条命令。
 
 本期**不实现**候选生成，但接口现在就是这个形状，升级时不必推倒重来。
 
@@ -304,7 +349,7 @@ async def score_case(case: Case, *, overrides: dict | None = None) -> CaseScore
 
 ---
 
-## 10. 成本与运行
+## 11. 成本与运行
 
 3 个案例 × 20 采样 = 60 次调用。responder 走 DeepSeek V4 Flash，
 prompt ~6.5k tokens 且大部分命中前缀缓存（8-19 实测 6144-9088 tokens 缓存命中）。
@@ -314,7 +359,7 @@ prompt ~6.5k tokens 且大部分命中前缀缓存（8-19 实测 6144-9088 token
 
 ---
 
-## 11. 风险
+## 12. 风险
 
 | 风险 | 应对 |
 |---|---|
@@ -326,7 +371,7 @@ prompt ~6.5k tokens 且大部分命中前缀缓存（8-19 实测 6144-9088 token
 
 ---
 
-## 12. 测试策略
+## 13. 测试策略
 
 - `tests/test_evals/test_detectors.py`：每个判定器的命中与不命中
 - `tests/test_evals/test_case_loader.py`：schema 校验、相对时间解析、缺字段报错
