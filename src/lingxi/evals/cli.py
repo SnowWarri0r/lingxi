@@ -85,7 +85,32 @@ def main() -> int:
     parser.add_argument("cases", nargs="*", help="case id（留空跑全部）")
     parser.add_argument("--baseline", action="store_true",
                         help="把这次的分数记成新基线")
+    parser.add_argument("--capture", metavar="RECIPIENT_KEY",
+                        help="从线上状态冻出一个 case 骨架")
+    parser.add_argument("--turns", type=int, default=8,
+                        help="capture 时扒最近几轮对话")
     args = parser.parse_args()
+
+    if args.capture:
+        import os
+
+        import yaml
+
+        from lingxi.evals.capture import capture as capture_turn
+
+        persona_path = os.environ.get(
+            "PERSONA_PATH", "config/personas/example_persona.yaml")
+        slug = Path(persona_path).stem
+        skeleton = asyncio.run(capture_turn(
+            args.capture, persona_path=persona_path,
+            data_dir=Path("data/personas") / slug, turns=args.turns))
+        out = CASES_DIR / f"{skeleton['id']}.yaml"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(
+            yaml.safe_dump(skeleton, allow_unicode=True, sort_keys=False),
+            encoding="utf-8")
+        print(f"骨架已写入 {out}\n还需手写：symptom、detect、premise")
+        return 0
 
     scores = asyncio.run(_run(args.cases))
 
