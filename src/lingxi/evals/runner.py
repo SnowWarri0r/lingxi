@@ -72,6 +72,11 @@ async def build_turn(
             memory_manager=MemoryManager(data_dir=str(tmp_path / "mem")),
             fact_retriever=retriever,
         )
+        # Seed the interaction tracker. Without one, _prepare_turn_v2 finds no
+        # record and the reminder announces 「这是你们第一次对话」 above however
+        # many turns of history the case froze — a register shift on every case.
+        engine.interaction_tracker = _seeded_tracker(case, tmp_path)
+
         await engine.memory.short_term.switch_recipient(case.recipient)
         for role, content, ts in case.resolved_history():
             turn = engine.memory.add_turn(role, content)
@@ -95,6 +100,27 @@ async def build_turn(
         # store file (and the fact_retriever reading from it) must still
         # exist while _prepare_turn_v2 runs its facts/renderer path.
         return system, messages, persona
+
+
+def _seeded_tracker(case: Case, tmp_path: Path):
+    """An InteractionTracker holding exactly what the case says about them."""
+    from datetime import timedelta
+
+    from lingxi.temporal.tracker import InteractionRecord, InteractionTracker
+
+    channel, _, recipient_id = case.recipient.partition(":")
+    tracker = InteractionTracker(tmp_path / "tracker")
+    tracker._loaded = True
+    last = case.last_interaction() or case.clock
+    tracker._records[f"{channel}:{recipient_id}"] = InteractionRecord(
+        recipient_id=recipient_id,
+        channel=channel,
+        last_interaction=last,
+        first_interaction=case.clock - timedelta(days=case.acquaintance.days),
+        total_turns=case.acquaintance.turns,
+        relationship_level=case.acquaintance.relationship_level,
+    )
+    return tracker
 
 
 async def _main_llm():
@@ -133,7 +159,35 @@ def _check_premise(case: Case, system: str, messages: list[dict]) -> str:
     return ""
 
 
-async def _default_sampler(system: str, messages: list[dict], n: int) -> list[str]:
+def _make_default_sampler(persona: PersonaConfig):
+    """Sample the real responder the way production does.
+
+    The parameters have to match or the score measures the harness rather
+    than the agent. Production streams at the persona's own temperature/top_p
+    with no length cap; this ran at temperature=0.9, no top_p, and
+    max_tokens=300 — and 300 truncates from the end, which is exactly where a
+    trailing question lands.
+    """
+    async def _sampler(system: str, messages: list[dict], n: int) -> list[str]:
+        return await _default_sampler(system, messages, n, persona)
+    return _sampler
+
+
+def _visible_prose(raw: str) -> str:
+    """What the user would actually have seen.
+
+    The responder emits a ===META=== block of directives after the prose.
+    Detectors matching against the raw text are reading something no human
+    ever sees, which can both miss a real hit and invent one.
+    """
+    from lingxi.conversation.output_schema import META_DELIMITER
+    cut = raw.find(META_DELIMITER)
+    return (raw if cut == -1 else raw[:cut]).strip()
+
+
+async def _default_sampler(
+    system: str, messages: list[dict], n: int, persona: PersonaConfig,
+) -> list[str]:
     """Sample the real responder n times concurrently."""
     import openai
 
@@ -152,10 +206,15 @@ async def _default_sampler(system: str, messages: list[dict], n: int) -> list[st
 
     async def _one() -> str:
         resp = await client.chat.completions.create(
-            model=model, messages=payload, max_tokens=300, temperature=0.9,
+            model=model, messages=payload,
+            temperature=persona.sampling.temperature,
+            top_p=persona.sampling.top_p,
+            # Generous rather than absent: production streams uncapped, and
+            # anything this long is already far past a real reply.
+            max_tokens=1500,
             extra_body=preset["extra_body"],
         )
-        return (resp.choices[0].message.content or "").strip()
+        return _visible_prose(resp.choices[0].message.content or "")
 
     return list(await asyncio.gather(*[_one() for _ in range(n)]))
 
@@ -175,7 +234,8 @@ async def score_case(
         return CaseScore(id=case.id, verdict="BROKEN",
                          premise_ok=False, premise_error=error)
 
-    replies = await (sampler or _default_sampler)(system, messages, case.samples)
+    replies = await (sampler or _make_default_sampler(persona))(
+        system, messages, case.samples)
     fails = sum(1 for r in replies if evaluate(case.detect.fail, r, persona))
     passes = (
         sum(1 for r in replies if evaluate(case.detect.passing, r, persona))

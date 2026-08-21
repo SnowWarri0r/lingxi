@@ -103,6 +103,19 @@ class Detect(_Strict):
         return _check_detector_spec(v, "pass")
 
 
+class Acquaintance(_Strict):
+    """How long the two have known each other, as of the frozen clock.
+
+    Without this the replay wires no interaction tracker, and the per-turn
+    reminder tells the model 「这是你们第一次对话」 while sitting above
+    dozens of turns of history — a register shift applied to every case.
+    """
+
+    days: int = 0
+    turns: int = 0
+    relationship_level: int = 1
+
+
 class Case(_Strict):
     id: str
     symptom: str
@@ -117,6 +130,12 @@ class Case(_Strict):
     samples: int = 20
     premise: Premise = Field(default_factory=Premise)
     budget: Budget = Field(default_factory=Budget)
+    acquaintance: Acquaintance = Field(default_factory=Acquaintance)
+
+    def last_interaction(self) -> datetime | None:
+        """When they last spoke before this turn — the newest frozen turn."""
+        rows = self.resolved_history()
+        return max((ts for _r, _c, ts in rows), default=None)
 
     def resolved_facts(self) -> list[Fact]:
         """Case facts as real Facts, timed against the frozen clock.
