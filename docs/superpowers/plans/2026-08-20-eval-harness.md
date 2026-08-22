@@ -1284,10 +1284,47 @@ Expected: 6 passed
 若 `ConversationEngine` 构造或 `switch_recipient` 的签名与此不符，以
 `tests/test_conversation/test_tool_loop.py` 的 `_engine()` helper 为准对齐。
 
-- [ ] **Step 5: 全量回归并提交**
+- [ ] **Step 6: 在 build_turn 中禁用天气**
+
+在 `build_turn` 里构造 engine 之后、组装之前插入：
+
+```python
+        # Weather is a live external variable — same case, different prompt
+        # depending on whether the bot happens to be running on this box.
+        # Sunrise/sunset stays live: it is pure offline computation from the
+        # frozen clock and the persona's location, and is worth testing.
+        engine.prompt_builder._weather_line = lambda _now: None
+```
+
+对应测试追加进 `tests/test_evals/test_runner.py`:
+
+```python
+@pytest.mark.asyncio
+async def test_weather_is_stubbed_out(tmp_path, monkeypatch):
+    """Same case must assemble the same prompt whether or not the live bot
+    has populated the weather cache on this machine."""
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain.models import OrchestrationDecision
+    from lingxi.temporal import weather as weather_mod
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(
+            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            topic_anchor="")
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(
+        weather_mod, "cached",
+        lambda *a, **k: type("W", (), {"phrase": lambda self: "晴，30°C"})())
+    _sys, messages, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
+    assert "30°C" not in messages[-1]["content"]
+```
+
+（`weather.cached(loc, *, now=None) -> Weather | None` 是读缓存的入口，已核对。）
+- [ ] **Step 7: 全量回归并提交**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: 全绿，本任务 **新增 7 条**（6 + 追加的天气 stub 用例）
+Expected: 全绿，本任务 **新增 7 条**（6 + 天气 stub 用例）
 
 ```bash
 git add src/lingxi/evals/runner.py tests/test_evals/test_runner.py
@@ -1946,45 +1983,11 @@ would leave the case permanently BROKEN."
 | §10 overrides 接口 | Task 4 `_apply_overrides` / `score_case(overrides=)` |
 | §13 测试策略 | Task 1/2/3 的测试 |
 
-**缺口一处，补为 Task 4 的追加步骤：** §5.5 要求天气必须 stub。`build_turn` 目前没有处理天气——`_weather_line()` 会读天气缓存，缓存为空时返回 `None`（不联网、不报错），但若同机跑着 `lingxi-feishu`，缓存里会有真实天气，prompt 就带上了外部可变量。
+**缺口一处，已补进 Task 4 Step 6（下移到任务正文内，因为 `task-brief` 只抽取
+`### Task N` 小节，留在本节会被实施者漏掉——这个漏发生过一次）：** §5.5 要求天气必须
+stub。`_weather_line()` 读天气缓存，缓存为空时返回 `None`（不联网、不报错），但若同机
+跑着 `lingxi-feishu`，缓存里会有真实天气，prompt 就带上了外部可变量。
 
-- [ ] **Task 4 追加 Step 6: 在 build_turn 中禁用天气**
-
-在 `build_turn` 里构造 engine 之后、组装之前插入：
-
-```python
-        # Weather is a live external variable — same case, different prompt
-        # depending on whether the bot happens to be running on this box.
-        # Sunrise/sunset stays live: it is pure offline computation from the
-        # frozen clock and the persona's location, and is worth testing.
-        engine.prompt_builder._weather_line = lambda _now: None
-```
-
-对应测试追加进 `tests/test_evals/test_runner.py`:
-
-```python
-@pytest.mark.asyncio
-async def test_weather_is_stubbed_out(tmp_path, monkeypatch):
-    """Same case must assemble the same prompt whether or not the live bot
-    has populated the weather cache on this machine."""
-    from lingxi.brain import orchestrator as orch_mod
-    from lingxi.brain.models import OrchestrationDecision
-    from lingxi.temporal import weather as weather_mod
-
-    async def _fake_decide(*a, **k):
-        return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
-            topic_anchor="")
-
-    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    monkeypatch.setattr(
-        weather_mod, "cached",
-        lambda *a, **k: type("W", (), {"phrase": lambda self: "晴，30°C"})())
-    _sys, messages, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
-    assert "30°C" not in messages[-1]["content"]
-```
-
-（`weather.cached(loc, *, now=None) -> Weather | None` 是读缓存的入口，已核对。）
 
 **Placeholder scan:** 已通读，无 TBD / TODO / "similar to Task N" / "add error handling" 一类占位。每个改动步骤都给了完整代码。
 
