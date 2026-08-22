@@ -14,7 +14,7 @@ sections are truncated from the bottom.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from lingxi.memory.manager import MemoryContext
 
@@ -76,7 +76,8 @@ class ContextAssembler:
             history_budget=history_token_budget,
         )
 
-    def assemble_messages(self, memory_context: MemoryContext) -> list[dict]:
+    def assemble_messages(self, memory_context: MemoryContext, *,
+                          now: datetime | None = None) -> list[dict]:
         """Build messages list with layered memory.
 
         L1 (≤verbatim_window_minutes): full content
@@ -87,8 +88,7 @@ class ContextAssembler:
         if not turns:
             return []
 
-        from datetime import date, datetime, timedelta
-        now = datetime.now()
+        now = now or datetime.now()
         l2_cutoff = now - timedelta(minutes=self.budget.verbatim_window_minutes)
         session_cutoff = now - timedelta(minutes=self.budget.session_window_minutes)
 

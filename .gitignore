@@ -23,6 +23,13 @@ data/
 *.db
 *.sqlite3
 
+# Eval cases freeze real conversations and real facts about a real person —
+# same class of content as data/, just copied into a different directory.
+# The example case is synthetic and is the one exception.
+evals/cases/*.yaml
+!evals/cases/example-*.yaml
+evals/baseline.json
+
 # Editor / OS
 .DS_Store
 .idea/

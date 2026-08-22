@@ -121,9 +121,9 @@ facts:
 history:
   - {role: user,      content: "想下班了",              minutes_ago: 2}
   - {role: assistant, content: "想下班的心我懂！…",       minutes_ago: 2}
-  - {role: user,      content: "就跟你想下课一样是吧",    minutes_ago: 1}
+  - {role: user,      content: "跟你想放假一个意思吧",    minutes_ago: 1}
 
-input: "大学还不轻松啊，天天都有时间做自己想做的事去"
+input: "学生多轻松啊，想干嘛干嘛"
 
 samples: 20
 
@@ -160,8 +160,8 @@ budget: {max_fail_rate: 0.05}
 ```
 case              verdict   fail    pass    baseline    Δ
 offwork-state     PASS      1/20    3/20    9/60      -13pp
-tewatashi-scale   FAIL      7/20    2/20    —          new
-invented-dates    BROKEN    前提不再成立：prompt 里找不到「你的时间线」
+greet-scale   FAIL      7/20    2/20    —          new
+some-case        BROKEN    前提不再成立：prompt 里找不到「下班后的个人时间」
 ```
 
 `Δ` 只在该案例有基线时给出；`BROKEN` 行不打分，直接说明是哪条前提断言没通过。
@@ -262,33 +262,38 @@ premise:
 |---|---|---|
 | `any_of` | `{any_of: [str, ...]}` | 子串命中任一 |
 | `regex` | `{regex: "..."}` | 结构化签名 |
-| `dates_outside_anchors` | `{dates_outside_anchors: true}` | 回复中出现的年月日不在人设 `anchors` 内 |
+| ~~`dates_outside_anchors`~~ | — | **实现后删除**，见下方说明 |
 
 `fail` 命中 = 该次采样失败。`pass` 命中 = 该次采样明确正确，**仅作观测，不参与
 `verdict` 判定**——它用来回答"改动是消除了错误，还是同时也带来了正确行为"。
 8-19 的数据里这个区分是有意义的：改前 0/60 明确正确，改后 3/60。
 
+**`dates_outside_anchors` 实现了又删了（2026-08-20，提交 `3b08234`）。** 三轮评审
+每一轮都冒出一类新的误报：节日、问今天几号、第三人的日期、假设句、正确断言被同句
+无关内容污染、无标点长句击穿分句、`我` 作定语修饰别人、否认句。判断"这个日期是不是
+她在编自己的历史"需要主语、时态、否定——是语义不是子串，确定性判定器做不到。
+本模块的硬约束是宁可漏报不可误报，一个不断长出新误报类别的判定器达不到这条。
+§8 的 `invented-dates` 案例随之取消，乱编这一类留到 LLM judge 那一期。
+
 判定器自身进 `tests/test_evals/` 做单测。
 
 ---
 
-## 8. 起步的三个案例
+## 8. 起步的案例
 
 全部来自 2026-08-19 的真实失败，各覆盖一类：
 
 | id | 失败类别 | 判定 | 已有基线 |
 |---|---|---|---|
 | `offwork-state` | 状态判断 | `any_of` 通勤/到家词 | **有**：9/60 → 1/60 |
-| `tewatashi-scale` | 行话与尺度 | `any_of` 二十秒/时间很短 | 无 |
-| `invented-dates` | 乱编 | `dates_outside_anchors` | 无 |
+| `greet-scale` | 行话与尺度 | `any_of` 二十秒/时间很短 | 无 |
 
 `offwork-state` 自带 old/new 两组各 60 次采样的实测数据，
 **可以直接用来校验 harness 本身没写错**——如果重放跑不出接近 9/60 与 1/60 的结果，
 说明冻结或组装环节有问题，而不是 agent 有问题。这是第一个要跑通的案例。
 
-`invented-dates` 是三个里最不确定的一个：乱编的签名可能比"日期不在 anchors 里"更杂
-（编造的地点、人名、数量同样是乱编）。本期只覆盖日期这一个子类，
-把判定器做窄、做准，宁可漏也不误报。
+本文档当初就把 `invented-dates` 标为三个里最不确定的一个，理由是乱编的签名比
+"日期不在 anchors 里"杂得多。执行时这一点被证实了（见 §7），案例已随判定器取消。
 
 ---
 
