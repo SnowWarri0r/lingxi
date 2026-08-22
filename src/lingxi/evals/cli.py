@@ -84,6 +84,21 @@ def format_table(scores: list[CaseScore], baseline: dict) -> str:
     return "\n".join(lines)
 
 
+def _is_git_ignored(path: Path) -> bool:
+    """Whether git would ignore `path`.
+
+    Returns False when git is unavailable or this is not a repo — the caller
+    treats that as "refuse", because an unverifiable answer about whether
+    personal data would be committed is not a safe answer.
+    """
+    try:
+        r = subprocess.run(["git", "check-ignore", "-q", str(path)],
+                           capture_output=True)
+    except Exception:
+        return False
+    return r.returncode == 0
+
+
 def _git_sha() -> str:
     try:
         return subprocess.run(["git", "rev-parse", "--short", "HEAD"],
@@ -148,6 +163,19 @@ def main() -> int:
             suffix += 1
 
         out.parent.mkdir(parents=True, exist_ok=True)
+        # A capture is a verbatim copy of a real conversation and real facts
+        # about a real person — the same class of content as data/, which
+        # .gitignore has always refused. Refuse to write it anywhere git
+        # would track, so the tool cannot produce a committable artifact even
+        # if the ignore rules are later edited. This is not hypothetical: a
+        # case carrying 49 personal facts and 24 verbatim turns was committed
+        # once and caught only by review, with the repo public.
+        if not _is_git_ignored(out):
+            print(f"拒绝写入 {out}：git 不会忽略这个路径。\n"
+                  f"capture 出来的是真人对话原文和关于真人的事实，"
+                  f"跟 data/ 同级，不能进版本库。\n"
+                  f"检查 .gitignore 里 evals/cases/ 那几条规则。")
+            return 2
         out.write_text(
             yaml.safe_dump(skeleton, allow_unicode=True, sort_keys=False),
             encoding="utf-8")
