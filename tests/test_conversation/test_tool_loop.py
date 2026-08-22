@@ -308,8 +308,10 @@ async def test_prepare_turn_v2_injects_current_time(tmp_path, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_prepare_turn_v2_injects_fewshot_voice_anchors(tmp_path, monkeypatch):
-    # The anti-翻译腔 lever: retrieved real-corpus lines must reach the system
-    # prompt as a voice-cadence block. (Pure-GA refactor had cut this.)
+    # The anti-翻译腔 lever: retrieved real-corpus lines must reach the model
+    # as a voice-cadence block. (Pure-GA refactor had cut this.) They ride in
+    # the per-turn reminder, not the system prompt — see the cache invariant
+    # in test_system_prompt_carries_no_per_turn_material.
     eng, store = await _engine(tmp_path)
     from lingxi.brain import orchestrator as orch_mod
     from lingxi.brain import renderer as rend_mod
@@ -333,6 +335,54 @@ async def test_prepare_turn_v2_injects_fewshot_voice_anchors(tmp_path, monkeypat
                 context_summary="孤独", tags=[], source="corpus")]
 
     eng.fewshot_retriever = _FakeRetriever()
-    sys_prompt, _ = await eng._prepare_turn_v2("我好孤独", None, "feishu", "x")
-    assert "你平时说话的语感" in sys_prompt
-    assert "唉，孤独只能自己调解了" in sys_prompt
+    sys_prompt, messages = await eng._prepare_turn_v2(
+        "我好孤独", None, "feishu", "x")
+    last = messages[-1]
+    content = (last["content"] if isinstance(last["content"], str)
+               else " ".join(b.get("text", "") for b in last["content"]))
+    assert "你平时说话的语感" in content
+    assert "唉，孤独只能自己调解了" in content
+    assert "唉，孤独只能自己调解了" not in sys_prompt
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_carries_no_per_turn_material(tmp_path, monkeypatch):
+    """The system message must stay byte-identical across turns.
+
+    Anything volatile placed there sits upstream of the whole chat history in
+    the serialised request, so the history can never be prefix-cached behind
+    it. Measured against DeepSeek: volatile-in-system pinned the cached prefix
+    at 6144 tokens at every history length; moving it out cached 9088 at ~3.1k
+    of history. This test is what keeps a future block from drifting back.
+    """
+    eng, store = await _engine(tmp_path)
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain import renderer as rend_mod
+    from lingxi.brain.models import OrchestrationDecision
+
+    async def _fake_decide(*a, **k):
+        return OrchestrationDecision(register="warm", engage_level=0.5,
+                                     fact_queries=[], skip=[], topic_anchor="")
+
+    calls = {"n": 0}
+
+    async def _fake_render(*a, **k):
+        calls["n"] += 1
+        return f"## 【身边的事】\n- 这一轮检索到的第 {calls['n']} 条"
+
+    monkeypatch.setattr(orch_mod, "decide", _fake_decide)
+    monkeypatch.setattr(rend_mod, "render_dynamic_blocks", _fake_render)
+
+    sys_a, msgs_a = await eng._prepare_turn_v2("在吗", None, "feishu", "x")
+    sys_b, msgs_b = await eng._prepare_turn_v2("在干嘛", None, "feishu", "x")
+
+    assert sys_a == sys_b, "system prompt changed between turns — cache lost"
+    assert "这一轮检索到的第" not in sys_a
+
+    def _text(m):
+        return (m["content"] if isinstance(m["content"], str)
+                else " ".join(b.get("text", "") for b in m["content"]))
+
+    # ...and the material still reaches the model, on the recency channel.
+    assert "这一轮检索到的第 1 条" in _text(msgs_a[-1])
+    assert "这一轮检索到的第 2 条" in _text(msgs_b[-1])
