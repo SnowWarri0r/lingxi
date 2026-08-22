@@ -19,12 +19,11 @@ OrchestrationDecision.default() — never raises into chat path.
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 
 from lingxi.brain.models import OrchestrationDecision
 from lingxi.providers.base import LLMProvider
+from lingxi.utils import lenient_json
 
 
 @dataclass
@@ -150,13 +149,6 @@ def build_orchestrator_prompt(
     )
 
 
-def _strip_json_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
-
-
 async def decide(
     llm: LLMProvider,
     user_input: str,
@@ -183,8 +175,7 @@ async def decide(
             _debug_purpose="orchestrator",
             **kwargs,
         )
-        text = _strip_json_fences(response.content)
-        data = json.loads(text)
+        data = lenient_json.loads(response.content)
     except Exception as e:
         print(f"[orchestrator] failed, using default: {e}", flush=True)
         return OrchestrationDecision.default()
