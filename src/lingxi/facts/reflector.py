@@ -8,15 +8,14 @@ answer is written as a `pattern` fact with high importance.
 
 from __future__ import annotations
 
-import json
 import math
-import re
 from datetime import datetime, timedelta
 
 from lingxi.facts.models import Fact, FactType, Source
 from lingxi.facts.retriever import FactQuery, FactRetriever
 from lingxi.facts.writers.inference import InferenceWriter
 from lingxi.providers.base import LLMProvider
+from lingxi.utils import lenient_json
 
 
 # {self} = persona self-context. Depth follows the persona — a writer reflects
@@ -205,12 +204,17 @@ class Reflector:
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
                 system=_SYSTEM_TMPL.format(self=self._self_ctx),
-                max_tokens=400,
+                # 400 was censoring the answer, not bounding it: every
+                # August parse failure here came back at exactly 400
+                # output tokens, and 53 of 151 successes landed above 300.
+                # A truncated list yields [] and the whole reflection cycle
+                # silently no-ops. Median is 280, so 800 is headroom.
+                max_tokens=800,
                 temperature=0.7,
                 _debug_purpose="reflection_questions",
                 **kwargs,
             )
-            data = json.loads(_strip_fences(response.content))
+            data = lenient_json.loads(response.content)
             if isinstance(data, list):
                 return [str(q).strip() for q in data if str(q).strip()][:5]
         except Exception as e:
@@ -245,10 +249,3 @@ def _cosine(a: list[float], b: list[float]) -> float:
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
-
-
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()

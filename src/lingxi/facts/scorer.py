@@ -15,12 +15,11 @@ doesn't mix voices.
 from __future__ import annotations
 
 import asyncio
-import json
-import re
 from dataclasses import dataclass
 
 from lingxi.facts.models import Fact, Source
 from lingxi.providers.base import LLMProvider
+from lingxi.utils import lenient_json
 
 
 DEFAULT_IMPORTANCE: dict[Source, int] = {
@@ -149,7 +148,7 @@ class ImportanceScorer:
                 _debug_purpose="importance_scorer",
                 **kwargs,
             )
-            data = json.loads(_strip_json_fences(response.content))
+            data = lenient_json.loads(response.content)
             scores_by_id = {
                 item["id"]: int(item["score"])
                 for item in data
@@ -168,8 +167,3 @@ class ImportanceScorer:
                     p.future.set_result(DEFAULT_IMPORTANCE.get(p.fact.source, 5))
 
 
-def _strip_json_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    return text.strip()
