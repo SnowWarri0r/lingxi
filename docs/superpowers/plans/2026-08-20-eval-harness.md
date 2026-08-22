@@ -19,7 +19,9 @@ Spec: `docs/superpowers/specs/2026-08-20-eval-harness-design.md`
 - **`pass` 指标不参与 verdict**，仅作观测。
 - **判定器宁可漏报不可误报**：误报会让人不信任分数。
 - 提交信息用英文，代码注释用英文，文档与 CLI 输出用中文——遵循仓库现状。
-- 每个任务结束时 `.venv/bin/python -m pytest -q` 必须全绿（当前基线：557 passed, 3 skipped）。
+- 每个任务结束时 `.venv/bin/python -m pytest -q` 必须全绿。起始基线 **557 passed, 3 skipped**。
+  各任务写的是**本任务新增的用例数**，不是累计总数——累计数会被任何其他新增测试打乱，
+  按增量核对更稳。
 
 ---
 
@@ -439,7 +441,7 @@ Expected: 7 passed
 - [ ] **Step 9: 全量回归**
 
 Run: `.venv/bin/python -m pytest -q && .venv/bin/python -m ruff check src/lingxi/`
-Expected: `564 passed, 3 skipped`；ruff 错误数不超过改动前的 28（此前存量）
+Expected: 全绿，较基线 **新增 7 条**（本任务的 4 + 3）；ruff 错误数不超过改动前的 28（此前存量）
 
 - [ ] **Step 10: 提交**
 
@@ -959,6 +961,17 @@ def _sampler(replies):
     return _s
 
 
+class _StubLLM:
+    """The orchestrator is monkeypatched in these tests, so nothing calls it.
+
+    Injected anyway: the real _main_llm() resolves OAuth credentials, which
+    an offline test must not depend on.
+    """
+
+    async def complete(self, **kwargs):
+        raise AssertionError("orchestrator should be monkeypatched in tests")
+
+
 @pytest.mark.asyncio
 async def test_build_turn_puts_case_facts_in_reach(tmp_path, monkeypatch):
     """The case's own facts must be the ones assembled — not the live db."""
@@ -971,7 +984,7 @@ async def test_build_turn_puts_case_facts_in_reach(tmp_path, monkeypatch):
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    system, messages, persona = await build_turn(_case(tmp_path))
+    system, messages, persona = await build_turn(_case(tmp_path), llm=_StubLLM())
     assert "唐可可" in system or persona.name
     assert "九点下班" in messages[-1]["content"]
 
@@ -987,8 +1000,8 @@ async def test_two_builds_are_identical(tmp_path, monkeypatch):
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    a_sys, a_msgs, _ = await build_turn(_case(tmp_path))
-    b_sys, b_msgs, _ = await build_turn(_case(tmp_path))
+    a_sys, a_msgs, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
+    b_sys, b_msgs, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
     assert a_sys == b_sys
     assert a_msgs[-1]["content"] == b_msgs[-1]["content"]
 
@@ -1005,7 +1018,7 @@ async def test_pass_verdict_when_under_budget(tmp_path, monkeypatch):
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
     score = await score_case(
-        _case(tmp_path), sampler=_sampler(["还在公司蹲着"]))
+        _case(tmp_path), sampler=_sampler(["还在公司蹲着"]), llm=_StubLLM())
     assert score.verdict == "PASS"
     assert score.fail_rate == 0.0
     assert score.pass_rate == 1.0
@@ -1022,7 +1035,8 @@ async def test_fail_verdict_when_over_budget(tmp_path, monkeypatch):
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    score = await score_case(_case(tmp_path), sampler=_sampler(["还在堵车"]))
+    score = await score_case(_case(tmp_path), sampler=_sampler(["还在堵车"]),
+                             llm=_StubLLM())
     assert score.verdict == "FAIL"
     assert score.fail_rate == 1.0
 
@@ -1040,7 +1054,8 @@ async def test_broken_when_premise_fails(tmp_path, monkeypatch):
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
     bad = YAML.replace('["2026-08-19 20:20"]', '["这句话不可能出现在 prompt 里"]')
-    score = await score_case(_case(tmp_path, bad), sampler=_sampler(["随便"]))
+    score = await score_case(_case(tmp_path, bad), sampler=_sampler(["随便"]),
+                             llm=_StubLLM())
     assert score.verdict == "BROKEN"
     assert score.premise_ok is False
     assert "这句话不可能出现在 prompt 里" in score.premise_error
@@ -1058,7 +1073,8 @@ async def test_pass_rate_does_not_affect_verdict(tmp_path, monkeypatch):
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
-    score = await score_case(_case(tmp_path), sampler=_sampler(["今天好热"]))
+    score = await score_case(_case(tmp_path), sampler=_sampler(["今天好热"]),
+                             llm=_StubLLM())
     assert score.verdict == "PASS"
     assert score.pass_rate == 0.0
 ```
@@ -1110,13 +1126,6 @@ class CaseScore:
     replies: list[str] = field(default_factory=list)
 
 
-class _NullLLM:
-    """Stands in for the main LLM on paths a replay never reaches."""
-
-    async def complete(self, **kwargs):
-        raise RuntimeError("replay should not call the main LLM here")
-
-
 def _apply_overrides(persona: PersonaConfig, overrides: dict | None) -> PersonaConfig:
     """Return a persona copy with top-level fields replaced.
 
@@ -1129,9 +1138,12 @@ def _apply_overrides(persona: PersonaConfig, overrides: dict | None) -> PersonaC
 
 
 async def build_turn(
-    case: Case, *, overrides: dict | None = None,
+    case: Case, *, overrides: dict | None = None, llm=None,
 ) -> tuple[str, list[dict], PersonaConfig]:
-    """Assemble the case's turn through the real pipeline."""
+    """Assemble the case's turn through the real pipeline.
+
+    `llm` is the provider the orchestrator runs on; tests inject a stub.
+    """
     persona = _apply_overrides(load_persona(case.persona), overrides)
     channel, _, recipient_id = case.recipient.partition(":")
 
@@ -1146,7 +1158,7 @@ async def build_turn(
 
         engine = ConversationEngine(
             persona=persona,
-            llm_provider=_main_llm(),
+            llm_provider=llm or await _main_llm(),
             memory_manager=MemoryManager(data_dir=str(tmp_path / "mem")),
             fact_retriever=retriever,
         )
@@ -1161,10 +1173,24 @@ async def build_turn(
         return system, messages, persona
 
 
-def _main_llm():
-    """The Claude provider the orchestrator runs on."""
-    from lingxi.providers.claude import ClaudeProvider
-    return ClaudeProvider()
+async def _main_llm():
+    """The orchestrator's provider, built through the app's own auth path.
+
+    Constructing ClaudeProvider() directly succeeds but carries no key, so
+    the first real run would fail on the orchestrator call rather than at
+    setup. Reuse the resolution app.create_engine uses.
+    """
+    from lingxi.auth.models import AuthMethod
+    from lingxi.providers.registry import ProviderRegistry
+    from lingxi.app import _build_auth_manager
+    from lingxi.utils.config import load_config
+
+    config = load_config("config/default.yaml")
+    ProviderRegistry.register_defaults()
+    return await ProviderRegistry.create_llm_with_auth(
+        "claude", auth_manager=_build_auth_manager(config),
+        auth_method=AuthMethod("oauth_pkce"), model="claude-sonnet-4-6",
+    )
 
 
 def _check_premise(case: Case, system: str, messages: list[dict]) -> str:
@@ -1211,10 +1237,11 @@ async def _default_sampler(system: str, messages: list[dict], n: int) -> list[st
 
 
 async def score_case(
-    case: Case, *, overrides: dict | None = None, sampler=None,
+    case: Case, *, overrides: dict | None = None, sampler=None, llm=None,
 ) -> CaseScore:
     """Replay one case and score it. `sampler` is injectable for offline tests."""
-    system, messages, persona = await build_turn(case, overrides=overrides)
+    system, messages, persona = await build_turn(
+        case, overrides=overrides, llm=llm)
 
     error = _check_premise(case, system, messages)
     if error:
@@ -1250,7 +1277,7 @@ Expected: 6 passed
 - [ ] **Step 5: 全量回归并提交**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: `579 passed, 3 skipped`
+Expected: 全绿，本任务 **新增 7 条**（6 + 追加的天气 stub 用例）
 
 ```bash
 git add src/lingxi/evals/runner.py tests/test_evals/test_runner.py
@@ -1722,7 +1749,7 @@ Expected: 打印骨架路径；打开该 YAML，`facts` 与 `history` 非空，`
 - [ ] **Step 7: 全量回归并提交**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: `589 passed, 3 skipped`
+Expected: 全绿，本任务 **新增 4 条**
 
 ```bash
 git add src/lingxi/evals/capture.py src/lingxi/evals/cli.py \
@@ -1971,7 +1998,7 @@ async def test_weather_is_stubbed_out(tmp_path, monkeypatch):
     monkeypatch.setattr(
         weather_mod, "cached",
         lambda *a, **k: type("W", (), {"phrase": lambda self: "晴，30°C"})())
-    _sys, messages, _ = await build_turn(_case(tmp_path))
+    _sys, messages, _ = await build_turn(_case(tmp_path), llm=_StubLLM())
     assert "30°C" not in messages[-1]["content"]
 ```
 
