@@ -9,6 +9,7 @@ answer is written as a `pattern` fact with high importance.
 from __future__ import annotations
 
 import json
+import math
 import re
 from datetime import datetime, timedelta
 
@@ -73,6 +74,15 @@ class Reflector:
         per_question_limit: int = 15,
         no_pattern_lookback_hours: float = 24.0,
         persona=None,
+        embedder=None,
+        # Calibrated on 435 real pairs from her own reflections. A persona
+        # reflects inside a narrow domain, so the baseline is already high:
+        # median pairwise similarity 0.45, p90 0.56, max 0.73 (verbatim 0.999).
+        # An echo therefore has to clear the domain baseline by a wide margin —
+        # 0.60 sits near p93, flags a repeated theme 0-3 times, and leaves
+        # genuinely new insights untouched. 0.45 would have penalised 28 of 30.
+        restate_threshold: float = 0.82,
+        echo_threshold: float = 0.60,
     ):
         self._llm = llm
         self._retriever = retriever
@@ -85,6 +95,16 @@ class Reflector:
         self._recent_window = recent_window
         self._per_q_limit = per_question_limit
         self._no_pattern_lookback = timedelta(hours=no_pattern_lookback_hours)
+        # Reflections restate themselves in fresh words — "腿动起来脑子能挂住",
+        # "脚踩实地脑子没法飘", "脚先落地眼先落一个实的东西" are one insight
+        # written three ways. Lexical comparison scores those at 0.2, no
+        # different from unrelated pairs, so novelty is judged on embeddings.
+        # Above restate_threshold the insight is dropped; above echo_threshold
+        # it lands with importance reduced once per prior echo, so a well-worn
+        # theme quietly loses its pull on retrieval instead of crowding it.
+        self._embedder = embedder
+        self._restate_threshold = restate_threshold
+        self._echo_threshold = echo_threshold
 
     async def reflect(self) -> None:
         # Reflect on EVENTS only. Feeding past PATTERN facts back in makes the
@@ -125,6 +145,10 @@ class Reflector:
             insight = await self._answer(q, relevant)
             if not insight:
                 continue
+            novelty = await self._novelty(insight)
+            if novelty is None:
+                continue
+            echoes, closest = novelty
             now = datetime.now()
             pattern = Fact(
                 subject="aria",
@@ -132,13 +156,46 @@ class Reflector:
                 source=Source.LLM_INFERRED,
                 type=FactType.PATTERN,
                 ts=now,
-                importance=8,
+                importance=max(3, 8 - echoes),
                 # Patterns age out so they can't accumulate into a self-
                 # reinforcing pile that dominates planning/proactive forever.
                 expires_at=now + timedelta(days=14),
                 tags=[f"reflection_question:{q[:80]}"],
             )
+            if echoes:
+                print(f"[reflector] {echoes} echo(es) (max sim {closest:.2f}) "
+                      f"→ importance {pattern.importance}: {insight[:40]}",
+                      flush=True)
             await self._writer.write_skip_scorer(pattern, trigger_observation=False)
+
+    async def _novelty(self, insight: str) -> tuple[int, float] | None:
+        """(echo_count, closest_similarity), or None when this is a restatement.
+
+        Compares against live patterns by embedding. Without an embedder every
+        insight counts as new — the penalty is best-effort, never a blocker.
+        """
+        if self._embedder is None:
+            return 0, 0.0
+        try:
+            existing = await self._retriever._store.query(
+                subject="aria", type=FactType.PATTERN, limit=60)
+            if not existing:
+                return 0, 0.0
+            vec = await self._embedder.embed(insight)
+            sims = []
+            for f in existing:
+                other = await self._embedder.embed(f.content)
+                sims.append(_cosine(vec, other))
+        except Exception as e:
+            print(f"[reflector] novelty check failed (non-fatal): {e}", flush=True)
+            return 0, 0.0
+
+        closest = max(sims) if sims else 0.0
+        if closest >= self._restate_threshold:
+            print(f"[reflector] dropped restatement (sim {closest:.2f}): "
+                  f"{insight[:40]}", flush=True)
+            return None
+        return sum(1 for s in sims if s >= self._echo_threshold), closest
 
     async def _generate_questions(self, recent: list[Fact]) -> list[str]:
         facts_block = "\n".join(f"  - {f.content}" for f in recent[-50:])
@@ -179,6 +236,15 @@ class Reflector:
         except Exception as e:
             print(f"[reflector] answer failed for q={q!r}: {e}", flush=True)
             return ""
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
 
 
 def _strip_fences(text: str) -> str:

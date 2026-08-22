@@ -270,7 +270,8 @@ async def create_engine(
         from lingxi.planner.daily_planner import DailyPlanner
         from lingxi.planner.executor import PlanExecutor
         reflector = Reflector(
-            llm_provider, fact_retriever, inference_writer, persona=persona)
+            llm_provider, fact_retriever, inference_writer, persona=persona,
+            embedder=embedding_provider)
         trigger_holder.set(ReflectionTrigger(reflector))
         daily_planner = DailyPlanner(
             llm_provider, fact_retriever, life_writer, persona=persona
