@@ -2,11 +2,34 @@
 
 from __future__ import annotations
 
+import time
 from typing import AsyncIterator
 
 import openai
 
 from lingxi.providers.base import CompletionResult, LLMProvider, StreamChunk
+
+
+def _log(system, messages, text, model, usage, started, purpose):
+    """Record the call, when LINGXI_DEBUG_LLM is on.
+
+    The responder was the one provider that never logged. That gap only
+    showed itself weeks later: a failure measured live on 2026-08-19 could
+    not be reproduced afterwards, and with no record of what had actually
+    been sent or returned there was nothing to diff against — the three
+    candidate explanations stayed candidates. It is the biggest prompt on
+    every turn and the one whose output the user actually reads.
+    """
+    try:
+        from lingxi.debug.request_log import log_request
+        log_request(
+            system=system or "", messages=messages, response_text=text,
+            model=model, usage=usage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            purpose=purpose,
+        )
+    except Exception:
+        pass  # debug logging must never break a turn
 
 
 def _cached_tokens(u) -> int:
@@ -97,13 +120,18 @@ class OpenAIProvider(LLMProvider):
             create_kwargs["top_p"] = top_p
         if self._extra_body:
             create_kwargs["extra_body"] = self._extra_body
+        started = time.monotonic()
         response = await self._get_client().chat.completions.create(**create_kwargs)
 
         choice = response.choices[0]
+        content = choice.message.content or ""
+        usage = _usage(response.usage)
+        _log(system, messages, content, response.model or self.model,
+             usage, started, kwargs.get("_debug_purpose", "responder"))
         return CompletionResult(
-            content=choice.message.content or "",
+            content=content,
             model=response.model or self.model,
-            usage=_usage(response.usage),
+            usage=usage,
             finish_reason=choice.finish_reason or "",
         )
 
@@ -139,14 +167,21 @@ class OpenAIProvider(LLMProvider):
         # api.deepseek.com and ark.cn-beijing.volces.com before enabling.
         if self._report_usage:
             create_kwargs["stream_options"] = {"include_usage": True}
+        started = time.monotonic()
         stream = await self._get_client().chat.completions.create(**create_kwargs)
 
         usage = None
+        collected = ""
         async for chunk in stream:
             if getattr(chunk, "usage", None):
                 usage = chunk.usage
             if chunk.choices and chunk.choices[0].delta.content:
-                yield StreamChunk(content=chunk.choices[0].delta.content)
+                piece = chunk.choices[0].delta.content
+                collected += piece
+                yield StreamChunk(content=piece)
+
+        _log(system, messages, collected, self.model, _usage(usage), started,
+             kwargs.get("_debug_purpose", "responder_stream"))
 
         if usage is not None:
             total = usage.prompt_tokens or 0
