@@ -22,6 +22,11 @@ from __future__ import annotations
 
 import re
 
+# The single source of truth for which detector keys exist. `evaluate` and
+# `Case`'s load-time validator both read this set, so a new detector only
+# needs to be added here once — a second hardcoded list would drift.
+KNOWN_DETECTORS = frozenset({"any_of", "regex"})
+
 
 def _any_of(needles: list[str], reply: str) -> bool:
     return any(n in reply for n in needles)
