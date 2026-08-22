@@ -77,6 +77,17 @@ async def build_turn(
             turn = engine.memory.add_turn(role, content)
             turn.timestamp = ts
 
+        # Weather is a live external variable: PromptBuilder._weather_line
+        # reads a process-global cache in lingxi.temporal.weather that is
+        # populated whenever the live lingxi-feishu bot happens to be
+        # running on this box. Same case, same clock, same facts — but a
+        # different assembled prompt depending on bot uptime, which is
+        # exactly the non-determinism this harness exists to eliminate.
+        # Sunrise/sunset stays live on purpose: it is pure offline
+        # computation from the frozen clock and the persona's location,
+        # deterministic, and worth exercising end to end.
+        engine.prompt_builder._weather_line = lambda _now: None
+
         system, messages = await engine._prepare_turn_v2(
             case.input, None, channel, recipient_id, now=case.clock,
         )
