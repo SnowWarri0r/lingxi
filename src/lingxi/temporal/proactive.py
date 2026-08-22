@@ -178,6 +178,50 @@ PROACTIVE_FORCE_PROMPT = """你是 {persona_name}。{current_time_cn}
 {{"should_send": true, "message": "消息内容"}}"""
 
 
+def _as_entry(m) -> dict:
+    """History rows are {text, ts}. Older files hold bare strings; those load
+    with no timestamp, which just renders without a 'how long ago' label."""
+    if isinstance(m, dict):
+        return {"text": str(m.get("text", "")), "ts": m.get("ts")}
+    return {"text": str(m), "ts": None}
+
+
+def _ago_label(ts: str | None, now: datetime | None = None) -> str:
+    if not ts:
+        return "更早"
+    try:
+        when = datetime.fromisoformat(ts)
+    except (TypeError, ValueError):
+        return "更早"
+    now = now or datetime.now()
+    days = (now.date() - when.date()).days
+    if days <= 0:
+        return f"今天 {when.strftime('%H:%M')}"
+    if days == 1:
+        return "昨天"
+    return f"{days}天前"
+
+
+def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -> str | None:
+    """Return the near-duplicate this repeats, if any.
+
+    Telling the model to 换一件事说 did not stop it re-sending a line almost
+    verbatim a day later, so the check is done in code before sending.
+    """
+    from difflib import SequenceMatcher
+
+    cand = re.sub(r"\s+", "", candidate or "")
+    if len(cand) < 6:
+        return None
+    for prev in previous:
+        old = re.sub(r"\s+", "", prev or "")
+        if not old:
+            continue
+        if SequenceMatcher(None, cand, old).ratio() >= threshold:
+            return prev
+    return None
+
+
 def _format_own_life_block(facts: list[Fact]) -> str:
     """Render Aria's own recent events as an opener-seed block.
 
@@ -328,7 +372,7 @@ class ProactiveScheduler:
             raw = json.loads(self._history_path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 self._recent_proactive = {
-                    k: [str(m) for m in v][-self._max_recent_proactive:]
+                    k: [_as_entry(m) for m in v][-self._max_recent_proactive:]
                     for k, v in raw.items()
                     if isinstance(v, list)
                 }
@@ -476,6 +520,19 @@ class ProactiveScheduler:
                 "reason": rejection, "message": message,
             }
 
+        # Near-duplicate of something already sent — she re-sent a line almost
+        # word for word a day later, and a topic stayed alive for days on the
+        # strength of her own repeats. Skipping lets the next check pick a
+        # different thread rather than reinforcing this one.
+        dup = _too_similar(message, [e.get("text", "")
+                                     for e in self._recent_proactive.get(key, [])])
+        if dup is not None:
+            print(f"[proactive] rejected (repeat of {dup[:40]!r}): {message[:60]}")
+            return {
+                "key": key, "status": "validation_rejected",
+                "reason": "near_duplicate", "message": message,
+            }
+
         print(f"[proactive] sending to {key} → {message[:60]}")
 
         # Save AnnotationTurn so user can 👍/👎/✏️ the proactive message.
@@ -521,7 +578,7 @@ class ProactiveScheduler:
         # Remember for anti-repetition (in-memory + persisted to disk so
         # process restart doesn't wipe; see _load_history docstring)
         recent = self._recent_proactive.setdefault(key, [])
-        recent.append(message)
+        recent.append({"text": message, "ts": datetime.now().isoformat()})
         if len(recent) > self._max_recent_proactive:
             del recent[: len(recent) - self._max_recent_proactive]
         self._save_history()
@@ -568,7 +625,8 @@ class ProactiveScheduler:
         # Recent proactive messages for this recipient (avoid repetition)
         recent_msgs = self._recent_proactive.get(rec_key, [])
         recent_proactive = "\n".join(
-            f"- {m}" for m in recent_msgs[-self._max_recent_proactive:]
+            f"- [{_ago_label(e.get('ts'))}] {e.get('text', '')}"
+            for e in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
 
         # relationship_level / goals were used by the legacy ad-hoc proactive
