@@ -4,7 +4,6 @@ first-person, in the morning.
 
 from __future__ import annotations
 
-import json
 import re
 from datetime import datetime, timedelta
 
@@ -12,6 +11,7 @@ from lingxi.facts.models import Fact, FactType, Source
 from lingxi.facts.retriever import FactQuery, FactRetriever
 from lingxi.facts.writers.life import LifeWriter
 from lingxi.providers.base import LLMProvider
+from lingxi.utils import lenient_json
 
 
 # {self} = persona self-context — the single source of "who am I". Identity
@@ -219,13 +219,17 @@ def _parse_plan_items(content: str) -> list[dict]:
     text = _strip_fences(content)
     candidates: list[dict] = []
     try:
-        data = json.loads(text)
+        # Lenient first: the plan's `content` field is prose, and the model
+        # marks emphasis in it with ASCII quotes, which is a syntax error.
+        data = lenient_json.loads(text)
         if isinstance(data, list):
             candidates = [d for d in data if isinstance(d, dict)]
     except Exception:
+        # Still broken means truncated — salvage whole items, quote-repairing
+        # each so one emphasised phrase doesn't drop that slot from the day.
         for chunk in _extract_json_objects(text):
             try:
-                d = json.loads(chunk)
+                d = lenient_json.loads(chunk)
                 if isinstance(d, dict):
                     candidates.append(d)
             except Exception:
