@@ -147,7 +147,10 @@ async def test_capture_against_missing_facts_db_returns_empty_facts(tmp_path):
         data_dir=tmp_path, turns=8, at=AT)
     assert skeleton["facts"] == []
     skeleton["symptom"] = "填写：错在哪"
-    skeleton["detect"] = {"fail": {"any_of": []}}
+    # A hand-written placeholder standing in for the human's real detect —
+    # the empty any_of the raw skeleton ships with is rejected at load time
+    # (see test_case_loader.py) and is irrelevant to what this test checks.
+    skeleton["detect"] = {"fail": {"any_of": ["占位"]}}
     case = Case.model_validate(yaml.safe_load(yaml.safe_dump(skeleton)))
     assert case.facts == []
 
@@ -168,7 +171,9 @@ async def test_capture_keeps_minute_precision_for_recent_facts(tmp_path):
         "feishu:oc_x", persona_path="config/personas/tangkeke.yaml",
         data_dir=tmp_path, turns=8, at=AT)
     skeleton["symptom"] = "填写：错在哪"
-    skeleton["detect"] = {"fail": {"any_of": []}}
+    # Placeholder detect — see the identical note above; this test is about
+    # fact-age round-tripping, not detect validation.
+    skeleton["detect"] = {"fail": {"any_of": ["占位"]}}
     case = Case.model_validate(yaml.safe_load(yaml.safe_dump(skeleton)))
 
     recent_fact = next(f for f in case.facts if "刚练完舞蹈" in f.content)

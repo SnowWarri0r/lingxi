@@ -1,7 +1,7 @@
 import json
 
 from lingxi.evals import cli
-from lingxi.evals.cli import format_table, load_baseline, save_baseline
+from lingxi.evals.cli import dump_replies, format_table, load_baseline, save_baseline
 from lingxi.evals.runner import CaseScore
 
 
@@ -68,6 +68,36 @@ def test_zero_cases_exits_nonzero_and_prints_message(monkeypatch, capsys):
     assert result == 1, "Should return non-zero exit code when zero cases"
     captured = capsys.readouterr()
     assert "没有找到任何案例" in captured.out, "Should print Chinese error message"
+
+
+def test_dump_replies_writes_one_file_per_case(tmp_path):
+    scores = [
+        CaseScore(id="a", verdict="PASS", fail_rate=0.0, samples=2,
+                  replies=["回复一", "回复二"]),
+        CaseScore(id="b", verdict="FAIL", fail_rate=1.0, samples=1,
+                  replies=["回复三"]),
+    ]
+    dump_replies(scores, tmp_path)
+    assert (tmp_path / "a.txt").read_text(encoding="utf-8") == (
+        "回复一\n\n---\n\n回复二")
+    assert (tmp_path / "b.txt").read_text(encoding="utf-8") == "回复三"
+
+
+def test_dump_replies_skips_cases_with_no_replies(tmp_path):
+    """A BROKEN case (or any case sampled zero times) writes no file rather
+    than an empty one."""
+    scores = [CaseScore(id="broken", verdict="BROKEN", premise_ok=False,
+                        premise_error="x", replies=[])]
+    dump_replies(scores, tmp_path)
+    assert not (tmp_path / "broken.txt").exists()
+
+
+def test_dump_replies_creates_the_output_directory(tmp_path):
+    out = tmp_path / "nested" / "dir"
+    scores = [CaseScore(id="a", verdict="PASS", fail_rate=0.0, samples=1,
+                        replies=["回复"])]
+    dump_replies(scores, out)
+    assert (out / "a.txt").read_text(encoding="utf-8") == "回复"
 
 
 def test_all_pass_cases_still_exit_zero(monkeypatch, capsys):

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from lingxi.evals.case import Case, load_all_cases, load_case
+from lingxi.evals.case import load_all_cases, load_case
 
 YAML = """
 id: offwork-state
@@ -101,3 +101,40 @@ def test_duplicate_ids_raise(tmp_path):
     _write(tmp_path, YAML, "b.yaml")
     with pytest.raises(ValueError, match="duplicate case id"):
         load_all_cases(tmp_path)
+
+
+def test_detect_unknown_detector_key_raises(tmp_path):
+    """A typoed detector key (any_off instead of any_of) must fail at
+    load time, not after 20 paid samples."""
+    bad = YAML.replace(
+        "fail: {any_of: [堵车, 到家]}", "fail: {any_off: [堵车, 到家]}")
+    with pytest.raises(ValidationError, match="未知判定器"):
+        load_case(_write(tmp_path, bad))
+
+
+def test_detect_empty_any_of_raises(tmp_path):
+    """An unedited --capture skeleton (any_of: []) can never fire and must
+    not load as if it were a real case."""
+    bad = YAML.replace("fail: {any_of: [堵车, 到家]}", "fail: {any_of: []}")
+    with pytest.raises(ValidationError, match="永远不会命中"):
+        load_case(_write(tmp_path, bad))
+
+
+def test_detect_empty_regex_raises(tmp_path):
+    bad = YAML.replace(
+        "fail: {any_of: [堵车, 到家]}", 'fail: {regex: ""}')
+    with pytest.raises(ValidationError, match="永远不会命中"):
+        load_case(_write(tmp_path, bad))
+
+
+def test_detect_valid_spec_is_accepted(tmp_path):
+    case = load_case(_write(tmp_path, YAML))
+    assert case.detect.fail == {"any_of": ["堵车", "到家"]}
+    assert case.detect.passing == {"any_of": ["快下班"]}
+
+
+def test_detect_absent_pass_is_accepted(tmp_path):
+    """`pass` is optional and its absence must not be validated at all."""
+    no_pass = YAML.replace("  pass: {any_of: [快下班]}\n", "")
+    case = load_case(_write(tmp_path, no_pass))
+    assert case.detect.passing is None
