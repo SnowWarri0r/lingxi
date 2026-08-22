@@ -9,7 +9,7 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-from lingxi.evals.case import load_all_cases, load_case
+from lingxi.evals.case import load_all_cases
 from lingxi.evals.runner import CaseScore, score_case
 
 CASES_DIR = Path("evals/cases")
@@ -88,6 +88,12 @@ def main() -> int:
     args = parser.parse_args()
 
     scores = asyncio.run(_run(args.cases))
+
+    # Exit with error if no cases were found or ran
+    if not scores:
+        print("没有找到任何案例（evals/cases/ 是空的）")
+        return 1
+
     print(format_table(scores, load_baseline()))
 
     if args.baseline:
