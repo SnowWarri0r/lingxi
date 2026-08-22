@@ -84,6 +84,7 @@ async def render_dynamic_blocks(
     recipient_key: str,
     persona=None,
     acquaintance: tuple[datetime, int] | None = None,
+    now: datetime | None = None,
 ) -> str:
     """Produce the dynamic prompt sections (up to 4) for this turn."""
     blocks: dict[str, list[str]] = {"self": [], "them": [], "world": []}
@@ -134,7 +135,7 @@ async def render_dynamic_blocks(
     them_lines: list[str] = []
     if acquaintance is not None:
         first, turns = acquaintance
-        days = max(0, (datetime.now().date() - first.date()).days)
+        days = max(0, ((now or datetime.now()).date() - first.date()).days)
         span = "今天刚认识" if days == 0 else (
             f"认识 {days} 天" if days < 60 else f"认识 {days // 30} 个多月")
         them_lines.append(
