@@ -22,11 +22,33 @@ def _regex(pattern: str, reply: str) -> bool:
     return re.search(pattern, reply) is not None
 
 
-def _dates_outside_anchors(reply: str, persona) -> bool:
-    """True when the reply states a calendar date the persona has no anchor for.
+# What makes a date "hers" rather than incidental: she is speaking about
+# herself (我/我们/咱们) doing something that belongs to her own timeline.
+# Neither list needs to be exhaustive — missing a phrasing just means the
+# detector stays quiet on that variant, which is the safe failure direction.
+_FIRST_PERSON_MARKERS = ["我们", "咱们", "我"]
+_HISTORY_VERBS = ["出道", "加入", "成立", "选上", "入选", "毕业", "认识", "见面", "开始"]
 
-    Only month-day pairs count. A bare year ("2021年出道") is how anyone
-    talks about their own past and is not evidence of fabrication.
+# Clause boundaries stand in for "a short window of characters" around a
+# date. Splitting on punctuation is more predictable than a fixed character
+# radius: it can't let a verb or marker from an unrelated clause (e.g. a
+# holiday mentioned right after a real anchor claim) leak across the comma
+# and taint the date next to it.
+_CLAUSE_SPLIT_RE = re.compile(r"[，。！？；\n]")
+
+
+def _dates_outside_anchors(reply: str, persona) -> bool:
+    """True when the reply invents a specific date for her own history.
+
+    Narrowly scoped on purpose: a month-day pair only counts as a claim
+    about her own past when it shares a clause with both a first-person
+    marker and a history verb (出道/加入/成立/... ). Holidays, "what's
+    today's date" questions, other people's birthdays, and hedged
+    hypotheticals about the future all contain month-day pairs too, but
+    none of them are her asserting something about her own history —
+    flagging those would make the score untrustworthy, which is worse than
+    missing a genuine fabrication. Bare years ("2021年出道") never match
+    _DATE_RE at all, since that is just how anyone references their past.
     """
     if persona is None:
         return False
@@ -44,9 +66,12 @@ def _dates_outside_anchors(reply: str, persona) -> bool:
         if len(parts) == 3:
             anchored.add((int(parts[1]), int(parts[2])))
 
-    for _year, month, day in _DATE_RE.findall(reply):
-        if (int(month), int(day)) not in anchored:
-            return True
+    for clause in _CLAUSE_SPLIT_RE.split(reply):
+        if not (_any_of(_FIRST_PERSON_MARKERS, clause) and _any_of(_HISTORY_VERBS, clause)):
+            continue
+        for _year, month, day in _DATE_RE.findall(clause):
+            if (int(month), int(day)) not in anchored:
+                return True
     return False
 
 
