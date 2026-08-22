@@ -12,6 +12,7 @@ import math
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
 
 from lingxi.facts.models import Fact, FactType
 from lingxi.facts.store import FactStore
@@ -27,8 +28,13 @@ class FactQuery:
 
 
 class FactRetriever:
-    def __init__(self, store: FactStore):
+    def __init__(self, store: FactStore, *,
+                 clock: Callable[[], datetime] | None = None):
         self._store = store
+        # Recency scoring is exp(-0.01 * hours_old). Left on the wall clock,
+        # a frozen eval case would see its facts age one week per week and
+        # silently change which facts reach the prompt.
+        self._clock = clock or datetime.now
 
     async def fetch(self, query: FactQuery) -> list[Fact]:
         """Return up to query.limit facts ranked by 3D scoring:
@@ -60,7 +66,7 @@ class FactRetriever:
         else:
             fts_ranks = {c.id: 0.0 for c in candidates}
 
-        now = datetime.now()
+        now = self._clock()
         scored: list[tuple[float, Fact]] = []
         for fact in candidates:
             # Existing rows may have tz-aware ts (legacy data); new writes from
