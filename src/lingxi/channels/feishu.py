@@ -1263,10 +1263,21 @@ class FeishuBot(OutboundChannel):
                 print(f"[feishu] stream raised: {e}", flush=True)
                 # Replace the "💭 thinking..." placeholder with a graceful
                 # error so the user isn't staring at it forever.
-                try:
-                    await card.update_content("嗯 网络抽了一下 你再说一次")
-                except Exception:
-                    pass
+                error_text = "嗯 网络抽了一下 你再说一次"
+                if card_ok:
+                    try:
+                        await card.update_content(error_text)
+                    except Exception:
+                        card_ok = False
+                if not card_ok:
+                    # No usable card AND the stream failed: update_content had
+                    # nowhere to land and the bubble path below is skipped on
+                    # error, so without this the turn vanishes silently — the
+                    # user watches a placeholder that never resolves.
+                    try:
+                        await self._send_static_card_async(chat_id, error_text)
+                    except Exception as e2:
+                        print(f"[feishu] error notice send failed: {e2}", flush=True)
 
             from lingxi.conversation.response_cleaner import split_into_bubbles
             bubbles: list[str] = []
@@ -1321,7 +1332,10 @@ class FeishuBot(OutboundChannel):
                 except Exception as e:
                     print(f"[feishu] extra bubble send failed: {e}", flush=True)
 
-            if turn_id:
+            # Annotation footer — skipped on an errored turn, where the only
+            # thing on screen is "网络抽了一下" and a 👍/👎 on it would feed
+            # noise into the voice corpus.
+            if turn_id and stream_error is None:
                 footer = build_annotation_footer_elements(turn_id)
                 try:
                     if last_extra_card_id is not None:
@@ -1330,6 +1344,9 @@ class FeishuBot(OutboundChannel):
                     elif card_ok:
                         # No extras → buttons on the first (only) streaming card
                         await card.append_elements(footer)
+                    else:
+                        print("[feishu] no card to carry annotation buttons",
+                              flush=True)
                 except Exception as e:
                     print(f"[feishu] append buttons failed: {e}", flush=True)
 
