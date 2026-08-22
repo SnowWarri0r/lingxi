@@ -114,3 +114,41 @@ def test_all_pass_cases_still_exit_zero(monkeypatch, capsys):
     assert result == 0, "Should return 0 when all cases pass"
     captured = capsys.readouterr()
     assert "没有找到任何案例" not in captured.out, "Should not print zero-cases error"
+
+
+def test_capture_refuses_to_write_where_git_would_track_it(tmp_path):
+    """A capture is a verbatim copy of a real person's conversation.
+
+    The tool must not be able to produce a committable artifact, regardless
+    of what .gitignore currently says — the ignore rule and the tool are two
+    independent lines of defence, and the ignore rule already failed once.
+    """
+    from lingxi.evals.cli import _is_git_ignored
+
+    # tmp_path is outside the repo, so git cannot vouch for it.
+    assert _is_git_ignored(tmp_path / "anything.yaml") is False
+
+
+def test_real_case_paths_are_ignored_and_the_example_is_not():
+    """The two lines of defence, asserted against the live repo."""
+    from pathlib import Path
+
+    from lingxi.evals.cli import _is_git_ignored
+
+    assert _is_git_ignored(Path("evals/cases/offwork-state.yaml")) is True
+    assert _is_git_ignored(Path("evals/baseline.json")) is True
+    assert _is_git_ignored(Path("evals/cases/example-case.yaml")) is False
+
+
+def test_no_real_case_file_is_tracked_by_git():
+    """Nothing under evals/cases/ may be tracked except the synthetic example.
+
+    This is the assertion that would have caught the 49-personal-facts case
+    before it was committed.
+    """
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files", "evals/"], capture_output=True, text=True,
+    ).stdout.split()
+    assert tracked == ["evals/cases/example-case.yaml"], tracked
