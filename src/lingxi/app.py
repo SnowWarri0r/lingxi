@@ -166,7 +166,7 @@ async def create_engine(
     # Create memory manager with the right embedding_dim.
     # Data root is namespaced per persona (data/personas/<slug>/) so switching
     # PERSONA_PATH switches the whole memory with it. MEMORY_DATA_DIR overrides.
-    from lingxi.paths import persona_data_root
+    from lingxi.paths import persona_data_root, stickers_root
     data_dir = persona_data_root(persona)
     print(f"[app] persona='{persona.name}' (slug={persona.slug}) "
           f"data_dir={data_dir}", flush=True)
@@ -220,7 +220,7 @@ async def create_engine(
     await facts_store.init()
 
     from lingxi.stickers.store import StickerStore
-    sticker_store = StickerStore(Path(data_dir).parent / "stickers" / "stickers.db")
+    sticker_store = StickerStore(Path(stickers_root()) / "stickers.db")
     await sticker_store.init()
 
     fact_retriever = FactRetriever(facts_store)
