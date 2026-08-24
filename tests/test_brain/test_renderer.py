@@ -18,8 +18,10 @@ def test_persona_block_extracts_static_sections():
     assert "Aria" in block or persona.name in block
     # The "how to talk" rules section should be in the format preamble
     assert "## 怎么说话" in block
-    # The output format marker should appear
-    assert "===META===" in block
+    # The output format should be specified — a single trailing tag line,
+    # which is what the single-pass responder can actually produce. The
+    # ===META=== JSON block it replaced was emitted 0% of the time.
+    assert "#表情" in block
 
 
 @pytest.fixture
