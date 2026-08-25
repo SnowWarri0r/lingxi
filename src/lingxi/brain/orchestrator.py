@@ -64,7 +64,10 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    在做的事（`对方在赶一个叫 canda 的项目，月底 deadline`）、喜好和雷区（`对方不吃香菜`）、
    约定（`说好下次演出对方来看`）、身份背景（`对方是后端工程师`）。
    用 `对方` 指称，**只写用户自己说过的**——没明说的性别/年龄/职业不要补。
-   纯寒暄、当下天气心情这类过去就过去的，留空 []。已经记过的同一件事不用重复写。
+   纯寒暄、当下天气心情这类过去就过去的，留空 []。
+   **下面【已经记住的】列的就是已有的，同一件事换个说法不用再写一遍**（同一个人的
+   不同叫法也算同一件事）；只有当这轮真的多出了新信息时才写，而且**把新旧合成完整的
+   一条**，不要只写增量。
 9. **user_state**：对方**此刻**人在哪、在干什么。**一个确定的状态**，一句话。
    依据只有一个：他自己在这几轮里说过的话。他说"想下班了"，他就在公司；他说"刚到家"，他就在家。
    说过之后没有新消息表明情况变了，那就还是那个状态——**又聊了几轮 ≠ 又过了几小时**，看
@@ -85,6 +88,9 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
 - 在做什么：{activity}
 - 心情：{mood}
 - 最近发生过：{last_lived}
+
+【已经记住的关于对方的事】（写 memory_writes 前先看这里——重复的别再写）
+{known_facts}
 
 【可用事实目录】（仅 count，不含内容）
 {catalog}
@@ -141,6 +147,7 @@ def build_orchestrator_prompt(
     history: list[dict] | None = None,
     prev_thread_summary: str = "",
     agent_name: str = "Aria",
+    known_facts: list[str] | None = None,
 ) -> str:
     last_lived = "；".join(digest.last_lived) if digest.last_lived else "（暂无）"
     catalog_str = "\n".join(f"  {k}: {v}" for k, v in sorted(catalog.items())) or "（空）"
@@ -153,6 +160,12 @@ def build_orchestrator_prompt(
         catalog=catalog_str,
         dialog_thread=_render_dialog_thread(history, agent_name=agent_name),
         prev_thread_summary=prev_thread_summary.strip() or "（无——这是话题开始或重启）",
+        # The catalog is counts only, so item 8's "don't write the same thing
+        # twice" was an instruction it had no way to follow: it wrote
+        # 「国庆会去广州漫展见鲤鱼」 one turn and 「…见Liyuu」 the next, unable
+        # to see the first. Showing the contents is what makes the rule real.
+        known_facts="\n".join(f"  - {c}" for c in (known_facts or []))
+                    or "  （还没记过什么）",
     )
 
 
@@ -166,11 +179,12 @@ async def decide(
     prev_thread_summary: str = "",
     model: str | None = None,
     agent_name: str = "Aria",
+    known_facts: list[str] | None = None,
 ) -> OrchestrationDecision:
     prompt = build_orchestrator_prompt(
         user_input, digest, catalog,
         history=history, prev_thread_summary=prev_thread_summary,
-        agent_name=agent_name,
+        agent_name=agent_name, known_facts=known_facts,
     )
     try:
         kwargs = {"model": model} if model else {}
