@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from lingxi.persona.models import PersonaConfig
 from lingxi.persona.prompt_builder import PromptBuilder
 from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
+from lingxi.providers.retry import is_retryable
 from lingxi.temporal.tracker import InteractionTracker
 from lingxi.temporal.relationship import RelationshipEvaluator
 
@@ -84,6 +86,12 @@ RESPONDER_PRESETS: dict[str, dict] = {
 # where the message is still on screen. Kept out of the dialogue history; see
 # _remember_reply.
 EMPTY_REPLY_FALLBACK = "诶 我这边卡了一下"
+
+# One extra attempt at the streamed reply, after a short pause. Long enough
+# for a load-shedding gateway to let the next one through, short enough that
+# the reply still reads as prompt.
+_RESPONDER_STREAM_ATTEMPTS = 2
+_RESPONDER_RETRY_DELAY = 0.5
 
 
 @dataclass
@@ -914,10 +922,10 @@ class ConversationEngine:
         """Convert Anthropic-format messages to OpenAI/ARK format.
 
         History turns are plain strings (unchanged). The current user turn may
-        carry Anthropic multimodal blocks (image + text); doubao is multimodal
-        too, it just wants the OpenAI shape: image blocks become image_url with
-        a data: URI. This is what lets image turns ride the doubao responder
-        instead of being split off to Claude."""
+        carry Anthropic multimodal blocks (image + text) when the responder can
+        read them; it just wants the OpenAI shape, so image blocks become
+        image_url with a data: URI. A responder that can't read images never
+        gets one — _prepare_turn_v2 converts the picture to text upstream."""
         out: list[dict] = []
         for m in messages:
             content = m.get("content")
@@ -948,11 +956,12 @@ class ConversationEngine:
         ===META=== out. NO function-calling — memory recall is front-loaded by
         the orchestrator, and memory writes / stickers ride the META block.
         Buffers the stream (META + clean_speech are global) and returns the
-        full raw text. Retries once on empty generation (transient hiccup)."""
+        full raw text. Retries once on an empty generation and on a transient
+        API failure; a rejected request is not sent a second time."""
         llm = self._get_responder_llm()
         oai_messages = self._to_openai_messages(messages)
         full = ""
-        for _attempt in range(2):
+        for attempt in range(_RESPONDER_STREAM_ATTEMPTS):
             full = ""
             try:
                 async for chunk in llm.complete_stream(
@@ -965,11 +974,15 @@ class ConversationEngine:
                     if chunk.content:
                         full += chunk.content
             except Exception as e:
-                print(f"[engine] single-pass generation failed: {e}")
+                print(f"[engine] single-pass generation failed: {e}", flush=True)
                 full = ""
+                if not is_retryable(e):
+                    break
             if full.strip():
                 break
-            print("[engine] empty generation — retrying once", flush=True)
+            if attempt < _RESPONDER_STREAM_ATTEMPTS - 1:
+                print("[engine] empty generation — retrying once", flush=True)
+                await asyncio.sleep(_RESPONDER_RETRY_DELAY)
         return full
 
     async def _resolve_sticker(self, query: str, recipient_key: str) -> None:
@@ -1399,28 +1412,44 @@ class ConversationEngine:
             oai_messages = self._to_openai_messages(messages)
             raw = ""
             sent = 0  # chars of prose already emitted as chunks
-            try:
-                async for chunk in llm.complete_stream(
-                    messages=oai_messages,
-                    system=system_prompt,
-                    temperature=self.persona.sampling.temperature,
-                    top_p=self.persona.sampling.top_p,
-                    _debug_purpose="chat_single_pass",
-                ):
-                    if not chunk.content:
-                        continue
-                    raw += chunk.content
-                    cut = raw.find(META_DELIMITER)
-                    prose = raw if cut == -1 else raw[:cut]
-                    # Hold back a tail that could be a partial delimiter so we
-                    # never stream a half-written "===MET" into the bubble.
-                    emit_upto = (len(prose) if cut != -1
-                                 else max(0, len(prose) - (len(META_DELIMITER) - 1)))
-                    if emit_upto > sent:
-                        yield StreamEvent("chunk", prose[sent:emit_upto])
-                        sent = emit_upto
-            except Exception as e:
-                print(f"[engine] single-pass stream failed: {e}")
+            # A dropped connection or a 503 costs the whole turn otherwise —
+            # the user gets the fallback for something that would have worked a
+            # second later. Only once, only for transient causes, and only
+            # while nothing has been streamed yet: text already on the card
+            # would be repeated by a second attempt starting from scratch.
+            for attempt in range(_RESPONDER_STREAM_ATTEMPTS):
+                raw = ""
+                sent = 0
+                try:
+                    async for chunk in llm.complete_stream(
+                        messages=oai_messages,
+                        system=system_prompt,
+                        temperature=self.persona.sampling.temperature,
+                        top_p=self.persona.sampling.top_p,
+                        _debug_purpose="chat_single_pass",
+                    ):
+                        if not chunk.content:
+                            continue
+                        raw += chunk.content
+                        cut = raw.find(META_DELIMITER)
+                        prose = raw if cut == -1 else raw[:cut]
+                        # Hold back a tail that could be a partial delimiter so
+                        # we never stream a half-written delimiter into the
+                        # bubble.
+                        emit_upto = (len(prose) if cut != -1
+                                     else max(0, len(prose) - (len(META_DELIMITER) - 1)))
+                        if emit_upto > sent:
+                            yield StreamEvent("chunk", prose[sent:emit_upto])
+                            sent = emit_upto
+                    break
+                except Exception as e:
+                    last = attempt == _RESPONDER_STREAM_ATTEMPTS - 1
+                    if last or sent > 0 or not is_retryable(e):
+                        print(f"[engine] single-pass stream failed: {e}", flush=True)
+                        break
+                    print(f"[engine] single-pass stream failed, retrying: {e}",
+                          flush=True)
+                    await asyncio.sleep(_RESPONDER_RETRY_DELAY)
             output = self._process_response(raw)
             if not output.speech.strip():
                 output.speech = EMPTY_REPLY_FALLBACK
