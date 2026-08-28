@@ -222,6 +222,55 @@ def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -
     return None
 
 
+# Calibrated on the 19 proactive messages actually delivered up to 2026-08-28,
+# 171 pairs. Median pairwise similarity 0.385, p90 0.540. Every pair at or
+# above 0.62 was a genuine repeat of an earlier message's function — six of
+# them, four being variants of "are you busy / haven't heard from you". The
+# first pair that would be wrong to block sits at 0.579 (her own concrete
+# scene at a train station, which merely happens to end with a question about
+# his work), so the threshold has room beneath it.
+_SEMANTIC_DUP_THRESHOLD = 0.62
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    return dot / (na * nb)
+
+
+async def _semantically_too_similar(
+    candidate: str, previous: list[str], embedder,
+    *, threshold: float = _SEMANTIC_DUP_THRESHOLD,
+) -> str | None:
+    """Return the earlier message this repeats in meaning, if any.
+
+    `_too_similar` compares characters, and that is blind to the failure
+    people actually notice. 「你那边最近忙完了吗 都好几天没听到你消息了」 and
+    「都一个星期没你消息了 你最近是不是特别忙呀」 are the same message sent
+    twice; their character overlap is 0.30, nowhere near the 0.75 that guard
+    needs. Both went out, three days apart.
+
+    Fail-safe by design: no embedder, or an embedding call that errors, means
+    this check abstains. Repeating is a smaller harm than falling silent.
+    """
+    if embedder is None or not candidate.strip() or not previous:
+        return None
+    try:
+        cand_vec = await embedder.embed(candidate)
+        for prev in previous:
+            if not prev.strip():
+                continue
+            if _cosine(cand_vec, await embedder.embed(prev)) >= threshold:
+                return prev
+    except Exception as e:
+        print(f"[proactive] semantic dup check unavailable: {e}", flush=True)
+        return None
+    return None
+
+
 def _format_own_life_block(facts: list[Fact]) -> str:
     """Render Aria's own recent events as an opener-seed block.
 
@@ -569,13 +618,22 @@ class ProactiveScheduler:
         # word for word a day later, and a topic stayed alive for days on the
         # strength of her own repeats. Skipping lets the next check pick a
         # different thread rather than reinforcing this one.
-        dup = _too_similar(message, [e.get("text", "")
-                                     for e in self._recent_proactive.get(key, [])])
+        previous = [e.get("text", "")
+                    for e in self._recent_proactive.get(key, [])]
+        dup = _too_similar(message, previous)
+        reason = "near_duplicate"
+        if dup is None:
+            # Same question asked in different words is the repeat that gets
+            # noticed; the character-level check above cannot see it.
+            dup = await _semantically_too_similar(
+                message, previous, self.engine.memory.embedding_provider)
+            reason = "semantic_duplicate"
         if dup is not None:
-            print(f"[proactive] rejected (repeat of {dup[:40]!r}): {message[:60]}")
+            print(f"[proactive] rejected ({reason}, repeat of {dup[:40]!r}): "
+                  f"{message[:60]}")
             return {
                 "key": key, "status": "validation_rejected",
-                "reason": "near_duplicate", "message": message,
+                "reason": reason, "message": message,
             }
 
         print(f"[proactive] sending to {key} → {message[:60]}")
