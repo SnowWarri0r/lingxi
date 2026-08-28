@@ -848,6 +848,26 @@ class FeishuBot(OutboundChannel):
             except Exception:
                 pass
 
+    @staticmethod
+    def _sniff_media_type(data: bytes) -> str | None:
+        """The image's real type, read from its first bytes.
+
+        Feishu's content-type is not to be trusted: a sticker downloaded via
+        the `type=file` fallback comes back without an image/* header, and the
+        old default of image/png then mislabelled a JPEG. Vision APIs check,
+        and answer `the image appears to be a image/jpeg image` — a 400 that
+        costs the whole turn, for a picture that arrived intact.
+        """
+        if data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "image/gif"
+        if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            return "image/webp"
+        return None
+
     async def _download_image(
         self,
         http: httpx.AsyncClient,
@@ -871,11 +891,14 @@ class FeishuBot(OutboundChannel):
         if resp is None or resp.status_code != 200:
             return None
 
-        media_type = resp.headers.get("content-type", "image/png").split(";")[0]
-        # A sticker resource may report a non-image content-type; the responder
-        # needs an image/* media_type to render it, so default unknowns to png.
-        if not media_type.startswith("image/"):
-            media_type = "image/png"
+        # The bytes win over the header — see _sniff_media_type. Only when the
+        # format is unrecognised does the header get a say, and png remains the
+        # last resort because the responder needs some image/* type to render.
+        media_type = self._sniff_media_type(resp.content)
+        if media_type is None:
+            media_type = resp.headers.get("content-type", "").split(";")[0]
+            if not media_type.startswith("image/"):
+                media_type = "image/png"
         data_b64 = base64.standard_b64encode(resp.content).decode("ascii")
         print(f"[image] downloaded {image_key}: {len(resp.content)} bytes, {media_type}")
         return {"media_type": media_type, "data": data_b64}
