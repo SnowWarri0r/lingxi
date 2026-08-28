@@ -3,6 +3,10 @@
 An image-only message arrives with no text at all. That empty string went
 straight to the embedding API, which rejects it (`400 MissingParameter`), so
 voice anchors were silently off for exactly those turns.
+
+Images now always carry a description, so that particular route is closed;
+the guard stays because any turn that reaches here with nothing to say would
+fail the same way.
 """
 
 from pathlib import Path
@@ -53,7 +57,8 @@ async def _engine(tmp_path, retriever):
     await store.init()
 
     class _LLM:
-        async def complete(self, **kw): ...
+        async def complete(self, **kw):
+            return type("R", (), {"content": "一只白色卡通狗头"})()
 
     return ConversationEngine(
         # doubao reads images itself, so an image-only turn keeps its empty
@@ -73,10 +78,21 @@ async def test_an_empty_query_never_reaches_the_embedder(tmp_path, stub_brain):
     rec = _Recorder()
     eng = await _engine(tmp_path, rec)
 
+    await eng._prepare_turn_v2("", None, "feishu", "oc_test")
+
+    assert rec.queries == []
+
+
+@pytest.mark.asyncio
+async def test_an_image_turn_queries_with_its_description(tmp_path, stub_brain):
+    """The description is the query — it is the only text the turn has."""
+    rec = _Recorder()
+    eng = await _engine(tmp_path, rec)
+
     await eng._prepare_turn_v2(
         "", [{"data": "AAAA", "media_type": "image/png"}], "feishu", "oc_test")
 
-    assert rec.queries == []
+    assert rec.queries and "一只白色卡通狗头" in rec.queries[0]
 
 
 @pytest.mark.asyncio

@@ -505,23 +505,29 @@ class ConversationEngine:
                     self._acquaintance = (rec.first_interaction, rec.total_turns)
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
-        # A responder that can't read image blocks would 400 on the whole turn,
-        # so the main model looks at the picture and the turn carries its
-        # description as text from here on. Everything downstream — orchestrator,
-        # voice-anchor retrieval, the reply itself, the short-term buffer — then
-        # works off the same sentence, and the buffer keeps a record of what the
-        # picture was rather than the bare fact that one arrived.
-        if images and not self._responder_sees_images():
+        # Every picture is described, whatever the responder can read, because
+        # history is text either way: a bare `[发送了1张图片]` is a blank slot
+        # that later turns and the proactive path fill with whatever vivid text
+        # sits nearest in the prompt. On 2026-08-27 that produced a detailed
+        # account of a photo she had never seen, borrowed almost verbatim from
+        # something he had said three days earlier — it was a sticker.
+        #
+        # The description carries the turn (orchestrator, voice-anchor query,
+        # the reply, the buffer all work off the same sentence). Whether the
+        # image blocks ride along too is a separate question: a responder that
+        # can't read them answers 400 and costs the whole turn.
+        if images:
             desc = await describe_images(self.llm, images)
             if desc:
                 print(f"[image] described: {desc}", flush=True)
-            user_input = f"[对方发来的图片：{desc or '没看清'}] {user_input}".strip()
-            images = None
+            marker = (f"[发送了{len(images)}张图片：{desc}]" if desc
+                      else f"[发送了{len(images)}张图片]")
+            user_input = f"{marker} {user_input}".strip()
+            if not self._responder_sees_images():
+                images = None
 
-        # Text persisted to short-term for the user turn (with image marker).
+        # The user turn goes to short-term exactly as the model sees it.
         memory_text = user_input
-        if images:
-            memory_text = f"[发送了{len(images)}张图片] {user_input}".strip()
 
         # No facts layer wired (tests / minimal embeds): degrade to a plain
         # persona prompt + short-term dialog history, skipping the
