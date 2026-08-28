@@ -88,8 +88,12 @@ def build_pet_state_app(engine) -> FastAPI:
                 activity_name = None
 
         # Desktop companion: what the user is doing with their coding agent +
-        # any in-character line the pet wants to say about it.
+        # any in-character line the pet wants to say about it. This request is
+        # also the only evidence that the window is open — the companion stays
+        # silent without it rather than talking to a closed window.
         comp = getattr(engine, "pet_companion", None)
+        if comp is not None:
+            comp.mark_polled()
         snap = comp.snapshot() if comp is not None else {}
         activity = snap.get("activity")  # tool_running / thinking / awaiting_user / idle
 
