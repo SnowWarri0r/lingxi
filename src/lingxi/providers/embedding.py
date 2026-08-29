@@ -114,7 +114,8 @@ class DoubaoEmbeddingProvider(EmbeddingProvider):
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "doubao-embedding-large-text-240915",
+        *,
+        model: str,
         base_url: str = "https://ark.cn-beijing.volces.com/api/v3",
     ):
         self._api_key = api_key or os.environ.get("ARK_API_KEY", "")
@@ -204,9 +205,17 @@ def create_embedding_provider(
         if not key:
             print("[embedding] doubao backend requires ARK_API_KEY, skipping")
             return None
-        model_name = model or "doubao-embedding-large-text-240915"
+        # No default: the model is an ARK endpoint id belonging to one account,
+        # so there is no value that can ship in the repo. The old default named
+        # a public model that has since been retired — every call returned 404
+        # `does not exist or you do not have access`, which reads like a
+        # permissions problem rather than a missing setting.
+        if not model:
+            print("[embedding] doubao backend needs a model — set EMBEDDING_MODEL "
+                  "in .env to your ARK endpoint id (ep-xxxxx), skipping")
+            return None
         url = base_url or "https://ark.cn-beijing.volces.com/api/v3"
-        return DoubaoEmbeddingProvider(api_key=key, model=model_name, base_url=url)
+        return DoubaoEmbeddingProvider(api_key=key, model=model, base_url=url)
 
     print(f"[embedding] unknown embedding kind: {kind}")
     return None
