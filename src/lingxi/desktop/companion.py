@@ -7,6 +7,12 @@ publishes it through the snapshot the /pet/state endpoint reads.
 Throttled hard — a desktop companion that pipes up every poll is a nightmare.
 Only fires on transitions, with a global cooldown + anti-repeat. The persona
 engine + doubao voice live here in the bot; the pet window just shows the line.
+
+It also stays quiet when nobody is looking. The pet window polls /pet/state
+every ~3s, so a gap much longer than that means it is closed — and a line
+generated then is written for an empty room. Measured over eight days with no
+window open: 187 of 217 generated lines, 86% of everything she said, paid for
+and read by no one.
 """
 
 from __future__ import annotations
@@ -18,6 +24,9 @@ from lingxi.desktop.activity_sensor import ActivitySignal, detect_activity
 
 
 class PetCompanion:
+    # The window polls every ~3s. Ten missed polls is not a hiccup.
+    VIEWER_TIMEOUT = 30.0
+
     def __init__(
         self,
         engine,
@@ -28,6 +37,10 @@ class PetCompanion:
         self.engine = engine
         self.poll_secs = poll_secs
         self.min_gap_secs = min_gap_secs
+        # 0.0 = never polled. Starting "unwatched" is the point: a window that
+        # has never opened must not cost a single call.
+        self._last_poll = 0.0
+        self._was_watched = False
 
         self._sig = ActivitySignal("no_session", "", 0.0, "")
         self._prev: ActivitySignal | None = None
@@ -40,6 +53,18 @@ class PetCompanion:
         self._recent_lines: list[str] = []
 
     # ---- read side (called from the /pet/state endpoint thread) ----------
+    def mark_polled(self, *, now: float | None = None) -> None:
+        """Record that the pet window just asked for state — someone is looking.
+
+        Called from the endpoint's thread; a float assignment is atomic enough
+        for this, and being one tick late about a window opening costs nothing.
+        """
+        self._last_poll = time.time() if now is None else now
+
+    def is_watched(self, *, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        return self._last_poll > 0.0 and (now - self._last_poll) <= self.VIEWER_TIMEOUT
+
     def snapshot(self) -> dict:
         return {
             "activity": self._sig.kind,
@@ -72,6 +97,17 @@ class PetCompanion:
         self._prev = sig
         if not sig.is_active:
             self._active_since = None
+
+        # Sensing continues either way — it is local and cheap, and it keeps
+        # the transition state honest so the first line after the window opens
+        # describes what he is actually doing rather than a stale reading.
+        watched = self.is_watched(now=now)
+        if watched != self._was_watched:
+            print(f"[pet-companion] viewer {'back' if watched else 'gone'} — "
+                  f"{'speaking' if watched else 'quiet'}", flush=True)
+            self._was_watched = watched
+        if not watched:
+            return
 
         if situation and (now - self._last_comment_ts) >= self.min_gap_secs:
             line = await self._generate(situation)
