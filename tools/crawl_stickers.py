@@ -21,6 +21,7 @@ import httpx
 
 from lingxi.stickers.crawler import download_images
 from lingxi.stickers.captioner import caption_image
+from lingxi.paths import stickers_root
 from lingxi.stickers.store import StickerStore
 from lingxi.stickers.models import Sticker
 
@@ -39,8 +40,8 @@ STICKER_KEYWORDS: list[str] = [
 ]
 
 DATA_DIR = os.environ.get("MEMORY_DATA_DIR", "./data/memory")
-IMG_DIR = Path(DATA_DIR).parent / "stickers" / "img"
-DB_PATH = Path(DATA_DIR).parent / "stickers" / "stickers.db"
+IMG_DIR = Path(stickers_root()) / "img"
+DB_PATH = Path(stickers_root()) / "stickers.db"
 
 _DOUTULA_SEARCH = "https://www.doutula.com/search?keyword={kw}"
 _DOUTULA_CDN = "img.doutupk.com"  # primary CDN; OSS backup is byte-identical
