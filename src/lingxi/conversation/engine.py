@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from lingxi.persona.biography_retriever import BiographyRetriever
 
 from lingxi.conversation.context import ContextAssembler
+from lingxi.conversation.image_context import describe_images
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
 from lingxi.facts.models import FactType
 from lingxi.facts.retriever import FactQuery
@@ -48,6 +49,8 @@ RESPONDER_PRESETS: dict[str, dict] = {
         # stream_options accepted by ARK; cache hits arrive as
         # prompt_tokens_details.cached_tokens. Verified against the live endpoint.
         "report_usage": True,
+        # Vision-capable: image blocks convert to OpenAI form and ride along.
+        "supports_images": True,
     },
     "deepseek": {
         "key_env": "DEEPSEEK_API_KEY",
@@ -69,8 +72,18 @@ RESPONDER_PRESETS: dict[str, dict] = {
         # Without it a prompt-order change that kills the prefix cache is
         # invisible — it costs latency and money and nothing in the log moves.
         "report_usage": True,
+        # Text only — `400 This model does not support image`. Image turns are
+        # described by the main model first (see conversation/image_context).
+        "supports_images": False,
     },
 }
+
+
+# Shown when generation came back empty (API error, exhausted retries). She
+# owns a plain technical hiccup — no "走神"/"再说一遍", which don't exist in IM
+# where the message is still on screen. Kept out of the dialogue history; see
+# _remember_reply.
+EMPTY_REPLY_FALLBACK = "诶 我这边卡了一下"
 
 
 @dataclass
@@ -484,6 +497,19 @@ class ConversationEngine:
                     self._acquaintance = (rec.first_interaction, rec.total_turns)
             self.interaction_tracker.record_interaction(channel, recipient_id)
 
+        # A responder that can't read image blocks would 400 on the whole turn,
+        # so the main model looks at the picture and the turn carries its
+        # description as text from here on. Everything downstream — orchestrator,
+        # voice-anchor retrieval, the reply itself, the short-term buffer — then
+        # works off the same sentence, and the buffer keeps a record of what the
+        # picture was rather than the bare fact that one arrived.
+        if images and not self._responder_sees_images():
+            desc = await describe_images(self.llm, images)
+            if desc:
+                print(f"[image] described: {desc}", flush=True)
+            user_input = f"[对方发来的图片：{desc or '没看清'}] {user_input}".strip()
+            images = None
+
         # Text persisted to short-term for the user turn (with image marker).
         memory_text = user_input
         if images:
@@ -634,9 +660,12 @@ class ConversationEngine:
         # fewshot store loaded but never queried. Threshold-gated so off-topic
         # turns get nothing (e.g. an emo-only corpus won't surface on a happy
         # turn). corrected_speech is real human text; we anchor cadence only.
-        if self.fewshot_retriever is not None:
+        query_text = self._last_inner_thought_for(recipient_key) or user_input
+        # An image-only message used to reach here as an empty string, and the
+        # embedding API rejects those (400 MissingParameter) — voice anchors
+        # were silently off for exactly the turns already going wrong.
+        if self.fewshot_retriever is not None and query_text.strip():
             try:
-                query_text = self._last_inner_thought_for(recipient_key) or user_input
                 anchors = await self.fewshot_retriever.retrieve(
                     query_text=query_text, recipient_key=recipient_key,
                     k=4, threshold=0.5)
@@ -815,6 +844,34 @@ class ConversationEngine:
         (e.g. doubao) — a single coherent pass with no chat-time tools."""
         return getattr(self.persona, "responder", None) is not None \
             and self.persona.responder.provider not in ("", "main")
+
+    def _remember_reply(
+        self, output: TurnOutput, channel: str | None, recipient_id: str | None,
+    ) -> None:
+        """Close out a turn: record what she said and persist state.
+
+        The empty-reply fallback is deliberately not recorded — it goes to the
+        screen so the card resolves, but it is a technical notice rather than
+        something she said. Keeping it out leaves the user's turn unanswered in
+        the buffer, which is both the truthful record and a second chance at it.
+        """
+        if output.speech != EMPTY_REPLY_FALLBACK:
+            self._last_response_text = output.speech
+            self.memory.add_turn("assistant", output.speech)
+        self._persist_state(channel, recipient_id)
+
+    def _responder_sees_images(self) -> bool:
+        """True when the model that writes the reply can read image blocks.
+
+        The main model can. An external responder can only if its preset says
+        so — handing images to one that can't costs the entire turn.
+        """
+        if not self._responder_is_external():
+            return True
+        preset = RESPONDER_PRESETS.get(self.persona.responder.provider)
+        if preset is None:
+            return True  # unknown provider degrades to the main LLM, which sees
+        return bool(preset.get("supports_images", False))
 
     def _get_responder_llm(self) -> LLMProvider:
         """Lazy-build the chat responder — the model that speaks to the user.
@@ -1151,9 +1208,7 @@ class ConversationEngine:
                 # Don't let storage errors break the chat
                 pass
 
-        self._last_response_text = output.speech
-        self.memory.add_turn("assistant", output.speech)
-        self._persist_state(channel, recipient_id)
+        self._remember_reply(output, channel, recipient_id)
         return output
 
     async def chat_stream(
@@ -1214,9 +1269,7 @@ class ConversationEngine:
                 # Don't let storage errors break the chat
                 pass
 
-        self._last_response_text = output.speech
-        self.memory.add_turn("assistant", output.speech)
-        self._persist_state(channel, recipient_id)
+        self._remember_reply(output, channel, recipient_id)
 
     async def chat_stream_events(
         self,
@@ -1330,7 +1383,7 @@ class ConversationEngine:
             cleaned = clean_speech(full_speech)
             if not cleaned.strip():
                 # No "走神"/"再说一遍" — IM-anti-pattern (see memory). Plain hiccup.
-                cleaned = "诶 我这边卡了一下"
+                cleaned = EMPTY_REPLY_FALLBACK
 
             output = output_pre
             output.speech = cleaned
@@ -1370,7 +1423,7 @@ class ConversationEngine:
                 print(f"[engine] single-pass stream failed: {e}")
             output = self._process_response(raw)
             if not output.speech.strip():
-                output.speech = "诶 我这边卡了一下"
+                output.speech = EMPTY_REPLY_FALLBACK
             # No chat-time tools on this path, so a sticker the persona wanted
             # rides the META block: resolve the intent → stage a sticker file,
             # which the turn-end emit below sends.
@@ -1400,7 +1453,7 @@ class ConversationEngine:
                 # Last resort. Do NOT fabricate inattention ("走神") or ask the
                 # user to repeat — in IM the message is right there in history.
                 # Own a plain technical hiccup instead.
-                output.speech = "诶 我这边卡了一下"
+                output.speech = EMPTY_REPLY_FALLBACK
         output.turn_id = str(uuid.uuid4())
 
         # Persist AnnotationTurn so the user can annotate later
@@ -1417,9 +1470,7 @@ class ConversationEngine:
                 # Don't let storage errors break the chat
                 pass
 
-        self._last_response_text = output.speech
-        self.memory.add_turn("assistant", output.speech)
-        self._persist_state(channel, recipient_id)
+        self._remember_reply(output, channel, recipient_id)
 
         # Surface turn_id so annotation UIs can reference this turn
         if output.turn_id:
