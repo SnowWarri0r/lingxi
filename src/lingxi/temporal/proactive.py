@@ -242,6 +242,51 @@ def _format_own_life_block(facts: list[Fact]) -> str:
     )
 
 
+def _format_user_recent(turns: list) -> str:
+    """His recent messages, verbatim enough to still mean what he meant.
+
+    Two things this fixes. They were cut at 80 characters, and his longest
+    messages carry the qualifiers in the tail — which event, whose, when —
+    so the cut removed exactly the disambiguating half. And he sometimes
+    double-sends the same line, which spent two of eight slots saying one
+    thing.
+    """
+    lines: list[str] = []
+    seen: set[str] = set()
+    for t in turns:
+        body = (getattr(t, "content", "") or "").replace("\n", " ").strip()
+        if not body or body in seen:
+            continue
+        seen.add(body)
+        if len(body) > 220:
+            body = body[:220] + "…"
+        lines.append(f"- [{t.timestamp.strftime('%m-%d %H:%M')}] {body}")
+    return "\n".join(lines)
+
+
+def _format_known_block(facts: list[Fact]) -> str:
+    """What she actually knows about him, consolidated and dated.
+
+    The proactive prompt used to carry only raw recent messages, each cut to
+    80 characters. Reconstructing his life from truncated fragments is how
+    「22号夜场」 plus 「昨天回的」 plus a severed mention of a *future* 国庆
+    广州漫展 came back out as 「连着两天跑漫展」. These same facts were sitting
+    in facts.db, already extracted, deduplicated and dated — the chat path
+    renders them and this one did not.
+    """
+    if not facts:
+        return ""
+    lines = "\n".join(
+        f"- [{f.ts.strftime('%m-%d')}] {f.content}" for f in facts)
+    return (
+        "## 你知道的关于他的事（已经整理过的，**比上面的聊天片段可靠**）\n"
+        f"{lines}\n\n"
+        "（上面那些片段是原话、可能被截断；这里是整理过的事实。两边对不上时以这里为准。"
+        "**这里没写的别自己推**——尤其是哪天、去了几天、是什么活动这种，"
+        "拿不准就不提，或者直接问他。）\n"
+    )
+
+
 # Tokens that signal "I'm continuing/responding to something just said".
 # Real openers don't start with these — only replies do.
 _RESPONSE_TOKEN_PREFIXES = (
@@ -611,14 +656,10 @@ class ProactiveScheduler:
         try:
             recent_turns = await self.engine.memory.short_term.snapshot_for_recipient(rec_key)
             # Last ~8 user-side messages (skip assistant)
-            user_msgs = [t for t in recent_turns if t.role == "user"][-8:]
-            if user_msgs:
-                lines = []
-                for t in user_msgs:
-                    when = t.timestamp.strftime("%m-%d %H:%M")
-                    body = (t.content or "").replace("\n", " ")[:80]
-                    lines.append(f"- [{when}] {body}")
-                user_recent_block = "\n".join(lines)
+            rendered = _format_user_recent(
+                [t for t in recent_turns if t.role == "user"][-8:])
+            if rendered:
+                user_recent_block = rendered
         except Exception as e:
             print(f"[proactive] user_recent fetch failed: {e}")
 
@@ -692,6 +733,18 @@ class ProactiveScheduler:
             except Exception as e:
                 print(f"[proactive] own_life fetch failed (non-fatal): {e}")
 
+        # What she knows about him. Same source the chat path renders; the
+        # proactive path only ever queried subject="aria", so it opened with
+        # whatever it could infer from truncated chat fragments instead.
+        known_block = ""
+        if self.fact_retriever is not None:
+            try:
+                known = await self.fact_retriever.fetch(FactQuery(
+                    subject=f"user:{rec_key}", type=FactType.PATTERN, limit=8))
+                known_block = _format_known_block(known)
+            except Exception as e:
+                print(f"[proactive] known-facts fetch failed (non-fatal): {e}")
+
         opener_shape = (
             "## 这条消息是 OPENER（你主动起头），形态：\n"
             "- **第一句直接进入正题**——开口就是你要说的那件事。\n"
@@ -727,8 +780,10 @@ class ProactiveScheduler:
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
-                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
+                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，"
+                f"原话、可能被截断）\n"
                 f"{user_recent_block}\n\n"
+                f"{known_block}"
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
                 f"{opener_shape}\n"
@@ -741,8 +796,10 @@ class ProactiveScheduler:
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
-                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，比长期记忆更重要）\n"
+                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，"
+                f"原话、可能被截断）\n"
                 f"{user_recent_block}\n\n"
+                f"{known_block}"
                 f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
                 f"{opener_shape}\n"
