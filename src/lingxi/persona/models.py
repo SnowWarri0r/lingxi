@@ -348,6 +348,22 @@ class TimelineAnchor(BaseModel):
     note: str = ""
 
 
+class UpcomingShow(BaseModel):
+    """A date she's booked to perform on; the prompt renders how far off it is.
+
+    Same reason anchors carry dates instead of "已经五年": a hand-written
+    「11 月」 tells the model when, but not how far away, and it rendered
+    that as 「明天就是名古屋」 in August. Write the date, compute the gap.
+
+    `date` is ISO, either YYYY-MM-DD or YYYY-MM when only the month is known.
+    """
+
+    event: str
+    date: str
+    venue: str = ""
+    note: str = ""
+
+
 class LocationConfig(BaseModel):
     """Where the persona lives — feeds real sunrise/sunset computation.
 
@@ -582,6 +598,10 @@ class PersonaConfig(BaseModel):
     # "已经五年" into the background bakes in a number that silently goes stale;
     # anchoring to the date keeps it right every year.
     anchors: list[TimelineAnchor] = Field(default_factory=list)
+    # Dates she is booked to perform on. Same rule as anchors, pointing
+    # forward instead of back: the prompt states how far off each one is,
+    # so a show in November cannot be announced as tomorrow.
+    upcoming_shows: list[UpcomingShow] = Field(default_factory=list)
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive
