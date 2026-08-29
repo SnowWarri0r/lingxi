@@ -78,6 +78,17 @@ async def test_an_empty_reply_yields_no_description():
 
 
 @pytest.mark.asyncio
+async def test_a_provider_answering_with_nothing_at_all_costs_no_turn():
+    """Not every provider returns a result object; none may cost the turn."""
+
+    class _ReturnsNone:
+        async def complete(self, **kwargs):
+            return None
+
+    assert await describe_images(_ReturnsNone(), [_img()]) == ""
+
+
+@pytest.mark.asyncio
 async def test_no_images_costs_no_call():
     p = _Provider()
     assert await describe_images(p, []) == ""
