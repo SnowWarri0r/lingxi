@@ -129,3 +129,38 @@ class TestPetStateEndpoint:
         r = client.get("/pet/state")
         assert r.status_code == 200
         assert r.json()["activity_name"] is None
+
+
+class TestViewerPresence:
+    """The state request is the only evidence the pet window is open.
+
+    Without this wiring the companion never learns anyone is looking and stays
+    silent forever — the gate would be a mute button, not a viewer check.
+    """
+
+    def test_a_state_request_marks_the_companion_watched(self):
+        from lingxi.desktop.companion import PetCompanion
+
+        engine = _make_mock_engine()
+        engine.pet_companion = PetCompanion(engine)
+        assert engine.pet_companion.is_watched() is False
+
+        TestClient(build_pet_state_app(engine)).get("/pet/state")
+
+        assert engine.pet_companion.is_watched() is True
+
+    def test_a_health_check_is_not_a_viewer(self):
+        from lingxi.desktop.companion import PetCompanion
+
+        engine = _make_mock_engine()
+        engine.pet_companion = PetCompanion(engine)
+
+        TestClient(build_pet_state_app(engine)).get("/pet/health")
+
+        assert engine.pet_companion.is_watched() is False
+
+    def test_state_still_serves_without_a_companion(self):
+        engine = _make_mock_engine()
+        engine.pet_companion = None
+        r = TestClient(build_pet_state_app(engine)).get("/pet/state")
+        assert r.status_code == 200
