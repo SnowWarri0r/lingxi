@@ -61,6 +61,7 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
         return None
     today = today or date.today()
     lines = []
+    on_dates = []
     for sh in shows:
         raw = (sh.date or "").strip()
         for fmt, precise in (("%Y-%m-%d", True), ("%Y-%m", False)):
@@ -71,6 +72,7 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
                 d = None
         if d is None:
             continue
+        on_dates.append(d)
         when = f"{d.year}年{d.month}月" + (f"{d.day}日" if precise else "")
         gap = _gap_cn(d, today)
         where = f"，{sh.venue}" if sh.venue else ""
@@ -79,8 +81,18 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
             lines.append(f"  {sh.note}")
     if not lines:
         return None
+    # State today's status outright. The countdown says when the show is and
+    # leaves "am I performing today" to be inferred, and the inference goes
+    # wrong in the direction of a career high point: with 「还有 2 个多月」 in
+    # front of her she still opened with 「今天正式上台了！刚过完下午的场地」.
+    # Rare, but the cure for an inferential gap is to close it, the same way
+    # user_state closed the one the clock table was guessing at.
+    today_line = ("**今天没有你的演出**——今天是平常的一天。"
+                  if not any(d == today for d in on_dates)
+                  else "**今天就是演出日**。")
     return ("## 接下来你要演的场（**日子和还有多久都在这儿，别自己估**；"
             "只写到月份的就是你还不知道具体哪天，被问到就说还没定/记不清，不用凑一个出来）\n"
+            + today_line + "\n"
             + "\n".join(lines))
 
 

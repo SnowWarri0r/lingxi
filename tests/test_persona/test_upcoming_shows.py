@@ -66,3 +66,26 @@ def test_the_live_persona_states_the_distance():
     b = build_persona_block(load_persona("config/personas/tangkeke.yaml"))
     assert "接下来你要演的场" in b
     assert "别自己估" in b
+
+
+def test_today_is_stated_outright_not_left_to_inference():
+    """With 「还有 2 个多月」 in front of her she still opened with
+    「今天正式上台了！刚过完下午的场地，晚上还有一场」. The countdown says when
+    the show is; whether today is one was left to be worked out."""
+    block = _upcoming_shows_block(
+        [UpcomingShow(event="Love Live Fes 15th", date="2026-11")], TODAY)
+    assert "今天没有你的演出" in block
+
+
+def test_a_show_dated_today_says_so():
+    block = _upcoming_shows_block(
+        [UpcomingShow(event="X", date="2026-08-24")], TODAY)
+    assert "今天就是演出日" in block
+    assert "今天没有你的演出" not in block
+
+
+def test_a_month_only_show_never_counts_as_today():
+    """2026-11 resolves to the 1st; that must not read as a show date."""
+    block = _upcoming_shows_block(
+        [UpcomingShow(event="X", date="2026-08")], TODAY)
+    assert "今天没有你的演出" in block
