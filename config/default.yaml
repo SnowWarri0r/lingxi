@@ -35,8 +35,10 @@ auth:
 #   "none"    - 关闭语义检索，使用关键词匹配
 embedding:
   provider: "doubao"
-  # model 填你在火山方舟控制台创建的接入点 ID (ep-xxxxx) 或直接用模型名
-  model: "doubao-embedding-large-text-240915"
+  # 接入点 ID 属于你自己的账号，所以这里不写死：填在 .env 的 EMBEDDING_MODEL
+  # （形如 ep-xxxxx，在火山方舟控制台创建）。没填就跳过语义检索、退回关键词匹配，
+  # 启动日志会说清楚缺什么。
+  # model: "ep-xxxxx"
   # base_url: "https://ark.cn-beijing.volces.com/api/v3"
   # api_key 优先从环境变量 ARK_API_KEY 读取
 
