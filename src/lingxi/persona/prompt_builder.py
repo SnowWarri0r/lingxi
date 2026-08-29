@@ -32,6 +32,58 @@ def _birthday_line(birthdate: str | None, today=None) -> str | None:
     return f"生日：{b.month}月{b.day}日（{when}）。"
 
 
+def _gap_cn(target, today) -> str:
+    """How far off a date is, in the words someone would actually use."""
+    days = (target - today).days
+    if days < -31:
+        return f"已经过去 {abs(days) // 30} 个多月"
+    if days < 0:
+        return f"已经过去 {abs(days)} 天"
+    if days == 0:
+        return "**就是今天**"
+    if days == 1:
+        return "**就是明天**"
+    if days <= 30:
+        return f"还有 {days} 天"
+    return f"还有 {days // 30} 个多月（{days} 天）"
+
+
+def _upcoming_shows_block(shows, today=None) -> str | None:
+    """Her booked dates, each with the distance computed.
+
+    A bare 「11 月」 in prose says when but not how far, and she announced a
+    November show as 「明天就是名古屋」 on 8月24日. The distance is the part
+    that has to be computed, for the same reason ages and elapsed years are.
+    """
+    from datetime import date, datetime
+
+    if not shows:
+        return None
+    today = today or date.today()
+    lines = []
+    for sh in shows:
+        raw = (sh.date or "").strip()
+        for fmt, precise in (("%Y-%m-%d", True), ("%Y-%m", False)):
+            try:
+                d = datetime.strptime(raw, fmt).date()
+                break
+            except ValueError:
+                d = None
+        if d is None:
+            continue
+        when = f"{d.year}年{d.month}月" + (f"{d.day}日" if precise else "")
+        gap = _gap_cn(d, today)
+        where = f"，{sh.venue}" if sh.venue else ""
+        lines.append(f"- {sh.event}：{when}{where}——{gap}")
+        if sh.note:
+            lines.append(f"  {sh.note}")
+    if not lines:
+        return None
+    return ("## 接下来你要演的场（**日子和还有多久都在这儿，别自己估**；"
+            "只写到月份的就是你还不知道具体哪天，被问到就说还没定/记不清，不用凑一个出来）\n"
+            + "\n".join(lines))
+
+
 class PromptBuilder:
     """Assembles the system prompt that defines the agent's persona in every LLM call."""
 
@@ -600,6 +652,10 @@ class PromptBuilder:
                     f"{months} 个月" if months >= 1 else "不到一个月")
                 tail = f"——{a.note}" if a.note else ""
                 lines.append(f"- {a.event}：{d.year}年{d.month}月，到现在 **{span}**{tail}")
+
+        shows = _upcoming_shows_block(getattr(p, "upcoming_shows", None))
+        if shows:
+            lines.append("\n" + shows)
 
         lexicon = getattr(p, "lexicon", None) or []
         if lexicon:
