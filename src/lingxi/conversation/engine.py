@@ -111,6 +111,16 @@ _HEAVY_TOPIC_MARKERS = (
 )
 
 
+def _cosine(a: list[float], b: list[float]) -> float:
+    import math
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    return dot / (na * nb) if na and nb else 0.0
+
+
 def _looks_like_heavy_topic(user_input: str) -> bool:
     """Cheap substring check for heavy-emotion markers in user message.
 
@@ -530,11 +540,24 @@ class ConversationEngine:
         prev_summary = self._thread_summaries.get(recipient_key, "") if hasattr(self, "_thread_summaries") else ""
 
         # 3. Orchestrator decides
+        # Hand it the facts it already holds about him. Without them item 8's
+        # "don't record the same thing twice" is unfollowable — it only ever
+        # saw a count.
+        known_facts: list[str] = []
+        if self.fact_retriever is not None and recipient_key:
+            try:
+                known_facts = [f.content for f in await self.fact_retriever.fetch(
+                    FactQuery(subject=f"user:{recipient_key}",
+                              type=FactType.PATTERN, limit=15))]
+            except Exception as e:
+                print(f"[brain] known-facts fetch failed (non-fatal): {e}", flush=True)
+
         decision = await decide(
             self.llm, user_input, digest, catalog,
             history=messages,
             prev_thread_summary=prev_summary,
             agent_name=self.persona.name,
+            known_facts=known_facts,
         )
         print(
             f"[brain] orch decision: register={decision.register} "
@@ -1466,7 +1489,6 @@ class ConversationEngine:
             return
         if self.user_statement_writer is None or not self._current_recipient_key:
             return
-        from lingxi.facts.models import Source
         subject = f"user:{self._current_recipient_key}"
 
         def _report(t: "asyncio.Task") -> None:
@@ -1480,19 +1502,66 @@ class ConversationEngine:
         for content in contents:
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(
-                    self.user_statement_writer.write(
-                        subject=subject,
-                        content=content,
-                        type=FactType.PATTERN,
-                        source=Source.USER_STATED,
-                        ts=datetime.now(),
-                    )
-                )
+                task = loop.create_task(self._write_one_user_fact(subject, content))
                 self._pending_memory_tasks.add(task)
                 task.add_done_callback(_report)
             except RuntimeError as e:
                 print(f"[memory] user-fact write not scheduled: {e}", flush=True)
+
+    # Same fact, reworded, written again. Calibrated on the 666 pairs this
+    # persona had accumulated: median similarity 0.37, p90 0.57, and every
+    # genuine duplicate at or above 0.786 — including 「国庆会去广州漫展见
+    # Liyuu」 against 「…见鲤鱼」 at 0.790, which is the same sentence with the
+    # same person's two names. The nearest genuinely-different pair, a return
+    # date against a departure date, sits at 0.741. The gap is narrow, so a
+    # match does not drop anything: whichever wording carries more detail is
+    # kept and the other is superseded, and a misfire costs precision rather
+    # than a fact.
+    _FACT_DUP_THRESHOLD = 0.78
+
+    async def _write_one_user_fact(self, subject: str, content: str) -> None:
+        """Write a fact about him, folding it into a near-duplicate if one exists."""
+        from lingxi.facts.models import Source
+
+        existing = await self._near_duplicate_fact(subject, content)
+        if existing is not None:
+            if len(content) <= len(existing.content):
+                print(f"[memory] duplicate, kept the fuller one: {content[:34]}",
+                      flush=True)
+                return
+            print(f"[memory] supersedes a shorter duplicate: {content[:34]}",
+                  flush=True)
+        await self.user_statement_writer.write(
+            subject=subject, content=content, type=FactType.PATTERN,
+            source=Source.USER_STATED, ts=datetime.now(),
+            supersedes=existing.id if existing is not None else None,
+        )
+
+    async def _near_duplicate_fact(self, subject: str, content: str):
+        """The closest stored fact if it's a restatement, else None.
+
+        Best-effort: without an embedder or on any failure this returns None
+        and the write proceeds, because losing a fact is worse than keeping
+        a duplicate.
+        """
+        emb = getattr(self.memory, "embedding_provider", None)
+        if emb is None or self.fact_retriever is None:
+            return None
+        try:
+            existing = await self.fact_retriever._store.query(
+                subject=subject, type=FactType.PATTERN, limit=60)
+            if not existing:
+                return None
+            vec = await emb.embed(content)
+            best, best_sim = None, 0.0
+            for f in existing:
+                sim = _cosine(vec, await emb.embed(f.content))
+                if sim > best_sim:
+                    best, best_sim = f, sim
+            return best if best_sim >= self._FACT_DUP_THRESHOLD else None
+        except Exception as e:
+            print(f"[memory] dedup check failed (non-fatal): {e}", flush=True)
+            return None
 
     async def flush_pending_memory_writes(self) -> int:
         """Await all in-flight memory_write tasks. Call before consolidation
