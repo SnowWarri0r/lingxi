@@ -54,10 +54,13 @@ async def describe_images(provider, images: list[dict]) -> str:
             temperature=0.3,
             _debug_purpose="image_describe",
         )
+        # Multiple images come back as several lines; join them into one so the
+        # description stays a single inline marker in the prompt and the buffer.
+        # Reading the result is inside the try on purpose: a provider that
+        # answers with nothing at all must cost a description, not the turn.
+        lines = [ln.strip() for ln in (result.content or "").splitlines()
+                 if ln.strip()]
     except Exception as e:
         print(f"[image] describe failed: {e}", flush=True)
         return ""
-    # Multiple images come back as several lines; join them into one so the
-    # description stays a single inline marker in the prompt and the buffer.
-    lines = [ln.strip() for ln in (result.content or "").splitlines() if ln.strip()]
     return "；".join(lines)[:_MAX_CHARS]

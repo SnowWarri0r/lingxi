@@ -123,16 +123,32 @@ async def test_a_failed_look_still_produces_a_turn(sample_persona, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_vision_responder_keeps_the_image_and_costs_no_extra_call(
-        sample_persona, tmp_path):
+async def test_a_vision_responder_keeps_the_image(sample_persona, tmp_path):
     from tests.conftest import MockLLMProvider
 
-    llm = MockLLMProvider(["unused"])
-    eng = _engine(sample_persona, llm, tmp_path, provider="doubao")
+    eng = _engine(sample_persona, MockLLMProvider(["海边的照片"]), tmp_path,
+                  provider="doubao")
     _sys, messages = await eng._prepare_turn_v2("", [IMG], "feishu", "oc_test")
 
     assert len(_image_blocks(messages)) == 1
-    assert llm._call_count == 0, "no describe call when the responder can look"
+
+
+@pytest.mark.asyncio
+async def test_a_vision_responder_still_leaves_a_description_in_the_buffer(
+        sample_persona, tmp_path):
+    """History is text for every path.
+
+    Seeing the image on this turn does nothing for the next one, or for the
+    proactive path — both read the buffer, and a bare `[发送了1张图片]` there is
+    a blank slot waiting to be filled with whatever text sits nearest.
+    """
+    from tests.conftest import MockLLMProvider
+
+    eng = _engine(sample_persona, MockLLMProvider(["海边的照片"]), tmp_path,
+                  provider="doubao")
+    await eng._prepare_turn_v2("", [IMG], "feishu", "oc_test")
+
+    assert "海边的照片" in eng.memory.short_term.get_history()[-1].content
 
 
 @pytest.mark.asyncio
