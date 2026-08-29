@@ -20,6 +20,7 @@ delimiter and is parsed as a whole. No regex multi-tag parsing.
 from __future__ import annotations
 
 import json
+import re
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +28,18 @@ from lingxi.conversation.response_cleaner import clean_speech
 
 
 META_DELIMITER = "===META==="
+
+# A single trailing `#表情 <情绪词>` line, which is how the single-pass
+# responder actually asks for a sticker.
+#
+# The ===META=== JSON block below is the Claude-with-tools format and it
+# still works there (74% of logged tool-loop turns carried one). The
+# domestic single-pass responder emits it 0% of the time — measured across
+# DeepSeek and doubao, and unchanged by strengthening the instruction. A
+# JSON trailer fights everything else the prompt asks of it, which is to
+# type short IM messages and stop. One short line does not, and lands at
+# ~25% on an emotional turn and 0% on a flat one.
+_STICKER_TAG = re.compile(r"^[ \t]*#\s*表情[ \t:：]+([^\s#]{1,20})[ \t]*$", re.M)
 
 
 class TurnOutput(BaseModel):
@@ -71,11 +84,22 @@ def parse_turn_output(raw: str) -> TurnOutput:
     """
     out = TurnOutput(raw=raw)
 
-    if META_DELIMITER not in raw:
-        out.speech = clean_speech(raw.strip())
+    # Lift the sticker tag out first, before any early return — the common
+    # case now is a reply with a tag and no ===META=== block at all. Last one
+    # wins if several are written. Stripping it here is what keeps the marker
+    # out of the chat window.
+    tags = _STICKER_TAG.findall(raw)
+    if tags:
+        out.sticker = tags[-1].strip()[:60]
+        raw_body = _STICKER_TAG.sub("", raw)
+    else:
+        raw_body = raw
+
+    if META_DELIMITER not in raw_body:
+        out.speech = clean_speech(raw_body.strip())
         return out
 
-    parts = raw.split(META_DELIMITER, 1)
+    parts = raw_body.split(META_DELIMITER, 1)
     speech_part = parts[0].strip()
     meta_part = parts[1].strip() if len(parts) > 1 else ""
 
@@ -127,6 +151,10 @@ def parse_turn_output(raw: str) -> TurnOutput:
     if isinstance(inner, str):
         out.inner_thought = inner.strip()
 
-    out.sticker = str(data.get("sticker", "") or "").strip()[:60]
+    # A JSON sticker field still wins if one is present (Claude path); the
+    # tag is what the single-pass responder can actually produce.
+    from_json = str(data.get("sticker", "") or "").strip()[:60]
+    if from_json:
+        out.sticker = from_json
 
     return out
