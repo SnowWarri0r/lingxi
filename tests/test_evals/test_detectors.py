@@ -39,3 +39,38 @@ def test_dates_outside_anchors_is_no_longer_a_known_detector():
     "unknown detector" path instead of being silently skipped."""
     with pytest.raises(ValueError, match="unknown detector"):
         evaluate({"dates_outside_anchors": True}, "我是2021年2月14号被选上的")
+
+
+class TestRegexAbsent:
+    """Failures defined by what a reply is missing.
+
+    Enumerating how a fabricated memory can be phrased does not work: the
+    first detector written for the Nagoya case matched 3 of 20 replies that
+    were all wrong, because she narrated a concert she never played in twenty
+    different vocabularies. What every correct reply must contain is small
+    and closed — that the date is still ahead.
+    """
+
+    PATTERN = r"还没(到|去|开始|演)|还有.{0,8}(天|个多月)|11月|十一月"
+
+    def test_it_fires_when_the_correction_is_missing(self):
+        reply = "呜哇！那场真的好棒！！台下的灯棒亮起来的时候整个人都起鸡皮疙瘩了"
+        assert evaluate({"regex_absent": self.PATTERN}, reply) is True
+
+    def test_it_stays_quiet_when_the_reply_places_it_ahead(self):
+        reply = "诶？那场还没到呀，是11月的事呢，你记错啦"
+        assert evaluate({"regex_absent": self.PATTERN}, reply) is False
+
+    def test_a_countdown_counts_as_placing_it_ahead(self):
+        assert evaluate({"regex_absent": self.PATTERN}, "还有63天呢！") is False
+
+    def test_an_empty_reply_fires(self):
+        assert evaluate({"regex_absent": self.PATTERN}, "") is True
+
+
+def test_an_empty_regex_absent_is_rejected_at_load_time():
+    """An empty pattern matches everywhere, so 'absent' would never be true."""
+    from lingxi.evals.case import Detect
+
+    with pytest.raises(ValueError, match="regex_absent"):
+        Detect(fail={"regex_absent": ""})
