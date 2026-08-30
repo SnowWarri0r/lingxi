@@ -48,6 +48,25 @@ class ProactiveConfig(BaseModel):
     # friend who's been ignored for most of a day pokes once more ("还在忙呀").
     # If this long has passed since the last proactive, allow one past the cap.
     reengage_after_hours: float = 14.0
+    # And the wait doubles with each further unanswered message. A flat 14h
+    # never gives up: one recipient's buffer held 30 turns, none of them his,
+    # and 24 consecutive unanswered openers. By then there is nothing left to
+    # open with — no new facts, no messages to follow up — so every attempt
+    # degenerates into 「你还在忙吗」「都一个星期没你消息了」. That vocabulary
+    # was blamed on the wording; it is what having nothing to say sounds like.
+    reengage_backoff: float = 2.0
+    # Ceiling on the doubling. Two weeks apart is a friend who drifted off,
+    # not a bot on a timer, and still leaves the door open if he comes back.
+    reengage_max_hours: float = 336.0
+
+    def reengage_wait_for(self, unanswered: int) -> timedelta:
+        """How long to wait before poking again, given unanswered messages.
+
+        Grows from the first attempt past the cap: 14h, 28h, 2.3d, 4.7d …
+        """
+        over = max(0, unanswered - self.max_consecutive_proactive)
+        hours = self.reengage_after_hours * (self.reengage_backoff ** over)
+        return timedelta(hours=min(hours, self.reengage_max_hours))
     quiet_hours_start: int = 23  # inclusive
     quiet_hours_end: int = 8  # exclusive
 
@@ -566,22 +585,27 @@ class ProactiveScheduler:
         # Consecutive cap: a real friend who notices silence reaches out
         # once, maybe twice — then waits. Spamming 4 proactives during a
         # long user silence reads as needy/AI.
+        reengage_wait = self.config.reengage_wait_for(
+            record.consecutive_proactive_count)
         if (
             not force
             and record.consecutive_proactive_count >= self.config.max_consecutive_proactive
             # Re-engage gate: once it's been a long while since the last
             # proactive, let a clingy persona poke again instead of going mute
-            # forever. (last_proactive_sent is None on a fresh record.)
+            # forever. (last_proactive_sent is None on a fresh record.) The
+            # wait doubles per unanswered message, so being ignored costs
+            # progressively more silence rather than nothing at all.
             and (
                 record.last_proactive_sent is None
-                or (now - record.last_proactive_sent)
-                < timedelta(hours=self.config.reengage_after_hours)
+                or (now - record.last_proactive_sent) < reengage_wait
             )
         ):
             return {
                 "key": key, "status": "skipped_consecutive_cap",
                 "sent_without_reply": record.consecutive_proactive_count,
                 "cap": self.config.max_consecutive_proactive,
+                "reengage_wait_hours": round(
+                    reengage_wait.total_seconds() / 3600, 1),
             }
 
         # Channel must be available
@@ -697,13 +721,20 @@ class ProactiveScheduler:
             results.append(result)
         return results
 
-    async def _ask_llm(
+    async def build_proactive_prompt(
         self,
         record: InteractionRecord,
         silence: timedelta,
         now: datetime,
         force: bool = False,
-    ) -> dict | None:
+    ) -> tuple[str, list[dict]]:
+        """Assemble the opener turn: (system prompt, messages).
+
+        Split out of _ask_llm so the eval harness can replay this path
+        through the real assembly. A harness that rebuilt the prompt itself
+        would be scoring its own copy — and the assembly is where the
+        interesting mistakes live.
+        """
         rec_key = f"{record.channel}:{record.recipient_id}"
 
         # Time-bound user state: pull recent USER turns directly. These
@@ -890,6 +921,18 @@ class ProactiveScheduler:
         # Final messages = recent chat history (so model sees what was
         # actually said today) + the proactive trigger as the latest user msg
         final_messages = recent_history_msgs + [{"role": "user", "content": user_prompt}]
+
+        return system_prompt, final_messages
+
+    async def _ask_llm(
+        self,
+        record: InteractionRecord,
+        silence: timedelta,
+        now: datetime,
+        force: bool = False,
+    ) -> dict | None:
+        system_prompt, final_messages = await self.build_proactive_prompt(
+            record, silence, now, force)
 
         # Generate in the SAME voice as reactive chat: route through the chat
         # responder (doubao) so a proactive ping doesn't sound like a different
