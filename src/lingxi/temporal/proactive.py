@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from lingxi.conversation.engine import ConversationEngine
 
 from lingxi.channels.outbound import ChannelRegistry
+from lingxi.facts.diversify import select_diverse
 from lingxi.facts.models import Fact, FactType
 from lingxi.facts.retriever import FactQuery, FactRetriever
 from lingxi.fewshot.models import AnnotationTurn
@@ -887,8 +888,15 @@ class ProactiveScheduler:
         known_block = ""
         if self.fact_retriever is not None:
             try:
+                # Fetch a wider pool and spread it across subjects. Taking the
+                # top eight by score returns the top eight of one subject: on
+                # 2026-08-31 that was the Chengdu autograph three times, the
+                # letter twice, the trip twice — three subjects in eight slots,
+                # out of twenty-eight distinct facts she held.
                 known = await self.fact_retriever.fetch(FactQuery(
-                    subject=f"user:{rec_key}", type=FactType.PATTERN, limit=8))
+                    subject=f"user:{rec_key}", type=FactType.PATTERN, limit=24))
+                known = await select_diverse(
+                    known, 8, self.engine.memory.embedding_provider)
                 known_block = _format_known_block(known)
             except Exception as e:
                 print(f"[proactive] known-facts fetch failed (non-fatal): {e}")
