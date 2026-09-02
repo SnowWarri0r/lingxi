@@ -40,7 +40,15 @@ class TokenBudget:
 
     max_context_tokens: int = 100000
     persona_budget: int = 4000
-    recent_turns_min: int = 6  # at least last N turns always included
+    # At least this many of the most recent turns, whatever their age. Six was
+    # written for a conversation that runs daily; this one runs in bursts a few
+    # days apart, and six turns is a single evening. Measured on the live
+    # buffer: 27 turns held, 6 reaching the prompt, 21 dropped — and dropped by
+    # the session window below, not by history_budget, which was nowhere near
+    # spent. So a callback to something said two days and eight turns ago found
+    # 「[省略了 6 轮较早的对话]」 where the referent should have been, and she
+    # answered it with enthusiasm and no content.
+    recent_turns_min: int = 24
     recent_turns_budget: int = 6000
     history_budget: int = 8000
     memory_budget: int = 4000  # used by prompt builder, not here
