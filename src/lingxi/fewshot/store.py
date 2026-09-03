@@ -279,6 +279,12 @@ class FewShotStore:
 
         out: list[FewShotQueryResult] = []
         for sample_id, meta, dist in zip(ids_list, metas_list, dists_list):
+            # A row stored without metadata comes back as None, and reading it
+            # raised — taking down the whole query, not just that row. The
+            # caller catches and logs 「retrieve failed」, so one bad row
+            # silently costs every voice anchor for the turn.
+            if not meta:
+                continue
             similarity = max(0.0, 1.0 - float(dist))
             sample = FewShotSample(
                 id=sample_id,

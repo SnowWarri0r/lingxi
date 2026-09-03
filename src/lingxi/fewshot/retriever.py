@@ -53,6 +53,19 @@ class FewShotRetriever:
         scored.sort(key=lambda x: x[0], reverse=True)
         # Threshold filters on raw similarity (not boosted score)
         filtered = [(s, raw_sim, x) for s, raw_sim, x in scored if raw_sim >= threshold]
+        # Say so when candidates existed and none of them cleared. This block
+        # had never once rendered — measured across every log on disk — and
+        # nothing said why, because "no anchors" and "anchors not retrieved"
+        # looked identical from outside. Against real user messages the best
+        # match ran 0.17–0.41 (median 0.30) while the gate stood at 0.50, so
+        # the answer was always no. The gate is not the interesting part: the
+        # pool holds 43 generic seeds and 2 approved lines, and the seeds are
+        # from unrelated contexts. Lowering it would inject those. What fills
+        # the pool is annotating turns, not tuning this number.
+        if scored and not filtered:
+            print(f"[fewshot] {len(scored)} candidates, best "
+                  f"{scored[0][1]:.3f} < threshold {threshold} — no anchors",
+                  flush=True)
         # Dedup by the actual demonstrated speech. (Keying on context/inner
         # thought collapsed real-corpus samples that share a thread-title
         # context + empty inner_thought down to one — we want the diverse
