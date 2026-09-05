@@ -290,6 +290,62 @@ async def _semantically_too_similar(
     return None
 
 
+# Her life-sim emits a moment every half hour, so the six most recent events
+# are always the last three hours and nothing else. Measured on 2026-08-30 the
+# block spanned 17:28–19:59: one evening run by the river, and that was her
+# entire stock of things to say. It shows in what she opens with — sampling
+# the opener path, 11 of 20 openers led with the one rehearsal in her recent
+# events, phrased eleven different ways.
+#
+# Semantic dedup was the wrong instrument here and was tried first: even at a
+# 0.60 threshold it only widened the span to 3.5 hours, because those moments
+# genuinely differ. They are different beats of one evening, not restatements.
+# What is missing is the rest of the day.
+
+
+def select_spread_events(facts: list[Fact], k: int = 6) -> list[Fact]:
+    """Up to `k` events spread across the range they cover, newest first.
+
+    Buckets rather than a minimum gap: a fixed gap has to be guessed against
+    the life sim's emission rate, and when it does not divide the day into `k`
+    it under-fills and then tops up from the newest — which puts the block
+    right back where it started. Dividing whatever range exists into `k` and
+    taking the newest of each spreads correctly whether she had a full day or
+    an hour, and needs no constant that drifts when the tick rate changes.
+    """
+    if not facts:
+        return []
+    ordered = sorted(facts, key=lambda f: f.ts, reverse=True)
+    if len(ordered) <= k:
+        return ordered
+
+    span = (ordered[0].ts - ordered[-1].ts).total_seconds()
+    if span <= 0:
+        return ordered[:k]
+
+    bucket = span / k
+    picked: list[Fact] = []
+    seen_buckets: set[int] = set()
+    for f in ordered:
+        # Bucket 0 is the newest slice; clamp the oldest event into the last.
+        idx = min(int((ordered[0].ts - f.ts).total_seconds() / bucket), k - 1)
+        if idx in seen_buckets:
+            continue
+        seen_buckets.add(idx)
+        picked.append(f)
+        if len(picked) == k:
+            break
+    # Empty buckets (a gap in her day) leave room; fill from the newest
+    # remainder so the block is never short.
+    if len(picked) < k:
+        for f in ordered:
+            if f not in picked:
+                picked.append(f)
+            if len(picked) == k:
+                break
+    return sorted(picked, key=lambda f: f.ts, reverse=True)
+
+
 def _format_own_life_block(facts: list[Fact]) -> str:
     """Render Aria's own recent events as an opener-seed block.
 
@@ -813,8 +869,11 @@ class ProactiveScheduler:
         life_sim_on = getattr(self.engine.persona, "life_sim_enabled", True)
         if self.fact_retriever is not None and life_sim_on:
             try:
+                # Fetch a day's worth, then spread — see select_spread_events.
+                # Fetching six gives six half-hourly ticks of the same hour.
                 own_facts = await self.fact_retriever.fetch(FactQuery(
-                    subject="aria", type=FactType.EVENT, limit=6))
+                    subject="aria", type=FactType.EVENT, limit=40))
+                own_facts = select_spread_events(own_facts)
                 own_life_block = _format_own_life_block(own_facts)
                 if own_facts:
                     print(f"[proactive] own-life seed: {own_facts[0].content[:40]}...",
