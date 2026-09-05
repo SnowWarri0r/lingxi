@@ -52,6 +52,7 @@ lingxi-server = "lingxi.web.server:main"
 lingxi-feishu = "lingxi.channels.feishu_cli:main"
 lingxi-pet = "lingxi.pet.app:main"
 lingxi-eval = "lingxi.evals.cli:main"
+lingxi-annotate = "lingxi.fewshot.queue_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lingxi"]
