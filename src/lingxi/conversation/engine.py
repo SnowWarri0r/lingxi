@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 from lingxi.conversation.context import ContextAssembler
 from lingxi.conversation.image_context import describe_images
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
+from lingxi.facts.diversify import select_diverse
 from lingxi.facts.models import FactType
 from lingxi.facts.retriever import FactQuery
 from lingxi.conversation.prompt_assembly import pick_prefill
@@ -667,6 +668,19 @@ class ConversationEngine:
             state_blocks.append(shows_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
+
+        # A floor of what she knows about him, for the turns the orchestrator
+        # asks for nothing. The renderer is entirely query-driven, so on those
+        # turns the reply prompt carried no facts about him at all — half of
+        # the decisions sampled from production. The opener path never has this
+        # problem: it always renders what it knows. Replies are the side he
+        # actually experiences, and they were the poorer of the two.
+        if not any(q.category.startswith("user:")
+                   for q in decision.fact_queries):
+            floor = await self._known_facts_floor(recipient_key)
+            if floor:
+                state_blocks.append(floor)
+
         if grounding:
             # Injected as verified knowledge the persona can speak from — she
             # weaves it into her own voice, not "I just googled it".
@@ -742,6 +756,32 @@ class ConversationEngine:
         "下班", "上班", "起床", "睡", "加班", "通勤", "作息",
         "上课", "放学", "午休", "值班", "排班", "工作日", "周末",
     )
+
+    async def _known_facts_floor(self, recipient_key: str | None) -> str:
+        """A few durable facts about him, spread across subjects.
+
+        Deliberately small. This is a floor, not a dump: the orchestrator's
+        targeted queries are still the main channel and go deeper when the
+        turn calls for it. What this prevents is a reply written with no
+        recollection of him at all.
+        """
+        if not recipient_key or self.fact_retriever is None:
+            return ""
+        try:
+            pool = await self.fact_retriever.fetch(FactQuery(
+                subject=f"user:{recipient_key}", type=FactType.PATTERN,
+                limit=18))
+            picked = await select_diverse(
+                pool, 5, self.memory.embedding_provider)
+        except Exception as e:
+            print(f"[engine] known-facts floor failed (non-fatal): {e}",
+                  flush=True)
+            return ""
+        if not picked:
+            return ""
+        lines = "\n".join(f"- [{f.ts.strftime('%m-%d')}] {f.content}"
+                          for f in picked)
+        return ("## 你记得关于他的事（这些是真的，别再问一遍）\n" + lines)
 
     async def _user_schedule_facts(self, recipient_key: str | None) -> list[str]:
         """His stated routine, pulled every turn regardless of the orchestrator.
