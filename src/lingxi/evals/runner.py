@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import random
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,13 +94,44 @@ async def build_turn(
         # deterministic, and worth exercising end to end.
         engine.prompt_builder._weather_line = lambda _now: None
 
-        system, messages = await engine._prepare_turn_v2(
-            case.input, None, channel, recipient_id, now=case.clock,
-        )
+        if case.mode == "proactive":
+            system, messages = await _proactive_turn(case, engine, tmp_path)
+        else:
+            system, messages = await engine._prepare_turn_v2(
+                case.input, None, channel, recipient_id, now=case.clock,
+            )
         # Assembled and returned INSIDE the TemporaryDirectory block: the
         # store file (and the fact_retriever reading from it) must still
-        # exist while _prepare_turn_v2 runs its facts/renderer path.
+        # exist while assembly runs its facts/renderer path.
         return system, messages, persona
+
+
+async def _proactive_turn(case: Case, engine, tmp_path: Path):
+    """Assemble an opener through the real scheduler.
+
+    Goes through ProactiveScheduler.build_proactive_prompt rather than
+    rebuilding the blocks here: the assembly is where this path's mistakes
+    live, and a harness that reconstructed it would be scoring its own copy.
+    """
+    from lingxi.temporal.proactive import ProactiveConfig, ProactiveScheduler
+
+    channel, _, recipient_id = case.recipient.partition(":")
+    from lingxi.channels.outbound import ChannelRegistry
+
+    scheduler = ProactiveScheduler(
+        config=ProactiveConfig(),
+        tracker=engine.interaction_tracker,
+        channel_registry=ChannelRegistry(),
+        engine=engine,
+        data_dir=str(tmp_path / "proactive"),
+        fact_retriever=engine.fact_retriever,
+    )
+    scheduler._recent_proactive = {
+        case.recipient: case.sent_proactive_entries()
+    }
+    record = engine.interaction_tracker._records[case.recipient]
+    silence = case.clock - (case.last_interaction() or case.clock)
+    return await scheduler.build_proactive_prompt(record, silence, case.clock)
 
 
 def _seeded_tracker(case: Case, tmp_path: Path):
@@ -223,8 +255,19 @@ async def score_case(
     case: Case, *, overrides: dict | None = None, sampler=None, llm=None,
 ) -> CaseScore:
     """Replay one case and score it. `sampler` is injectable for offline tests."""
-    system, messages, persona = await build_turn(
-        case, overrides=overrides, llm=llm)
+    # The opener path picks one of six message styles at random per send, so a
+    # single assembly measures one style and reports it as the path's
+    # behaviour. Reassemble per sample instead, seeded so two runs of the same
+    # case draw the same styles and stay comparable. Assembly here costs no
+    # model call — the blocks come from SQLite.
+    per_sample = case.mode == "proactive"
+
+    async def _assemble(i: int):
+        if per_sample:
+            random.seed(f"{case.id}:{i}")
+        return await build_turn(case, overrides=overrides, llm=llm)
+
+    system, messages, persona = await _assemble(0)
 
     error = _check_premise(case, system, messages)
     if error:
@@ -234,8 +277,14 @@ async def score_case(
         return CaseScore(id=case.id, verdict="BROKEN",
                          premise_ok=False, premise_error=error)
 
-    replies = await (sampler or _make_default_sampler(persona))(
-        system, messages, case.samples)
+    sample = sampler or _make_default_sampler(persona)
+    if per_sample:
+        replies = list(await sample(system, messages, 1))
+        for i in range(1, case.samples):
+            sys_i, msgs_i, _ = await _assemble(i)
+            replies += list(await sample(sys_i, msgs_i, 1))
+    else:
+        replies = await sample(system, messages, case.samples)
     fails = sum(1 for r in replies if evaluate(case.detect.fail, r, persona))
     passes = (
         sum(1 for r in replies if evaluate(case.detect.passing, r, persona))

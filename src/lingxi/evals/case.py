@@ -13,7 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (BaseModel, ConfigDict, Field, field_validator,
+                      model_validator)
 
 from lingxi.evals.detectors import KNOWN_DETECTORS
 from lingxi.facts.models import Fact, FactType, Source
@@ -109,6 +110,14 @@ class Detect(_Strict):
         return _check_detector_spec(v, "pass")
 
 
+class SentProactive(_Strict):
+    """One opener she already sent, as the anti-repeat block will render it."""
+
+    text: str
+    days_ago: float = 0.0
+    minutes_ago: float = 0.0
+
+
 class Acquaintance(_Strict):
     """How long the two have known each other, as of the frozen clock.
 
@@ -128,8 +137,15 @@ class Case(_Strict):
     persona: str
     recipient: str
     clock: datetime
-    input: str
     detect: Detect
+    # A proactive turn has no user message — that is the whole point of it.
+    # Left optional because `--capture` against a recipient with no history
+    # emits an empty one, and that skeleton has to survive validation.
+    input: str = ""
+    mode: str = "reactive"
+    # Openers already sent, feeding the 「你最近发过的主动消息」 block. The
+    # repetition this path is prone to only shows up against them.
+    sent_proactive: list[SentProactive] = Field(default_factory=list)
     origin: str = ""
     facts: list[CaseFact] = Field(default_factory=list)
     history: list[CaseTurn] = Field(default_factory=list)
@@ -137,6 +153,30 @@ class Case(_Strict):
     premise: Premise = Field(default_factory=Premise)
     budget: Budget = Field(default_factory=Budget)
     acquaintance: Acquaintance = Field(default_factory=Acquaintance)
+
+    @field_validator("mode")
+    @classmethod
+    def _known_mode(cls, v: str) -> str:
+        if v not in ("reactive", "proactive"):
+            raise ValueError(f"mode 只能是 reactive 或 proactive，收到 {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _input_matches_mode(self):
+        if self.mode == "proactive" and self.input.strip():
+            raise ValueError(
+                "proactive 案例不该有 input：这一轮没有对方的消息，"
+                "写了也不会进 prompt，只会让人以为测的是回复")
+        return self
+
+    def sent_proactive_entries(self) -> list[dict]:
+        """As the scheduler stores them: {text, ts} newest last."""
+        return [
+            {"text": s.text,
+             "ts": (self.clock - timedelta(days=s.days_ago,
+                                           minutes=s.minutes_ago)).isoformat()}
+            for s in self.sent_proactive
+        ]
 
     def last_interaction(self) -> datetime | None:
         """When they last spoke before this turn — the newest frozen turn."""
