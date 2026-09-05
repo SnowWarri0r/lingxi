@@ -90,10 +90,37 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
     today_line = ("**今天没有你的演出**——今天是平常的一天。"
                   if not any(d == today for d in on_dates)
                   else "**今天就是演出日**。")
+    # Where she stands relative to the show, said outright. 「今天没有你的演出」
+    # settles today and nothing else, so a claim about last Saturday sat
+    # unopposed: on 2026-08-30, with 「还有 63 天」 in the prompt, she answered
+    # 「名古屋那场怎么样」 with a lived account of the dome — the lights, the
+    # crowd, watching μ's from the wings — in 20 of 20 samples. The countdown
+    # was never contradicted. It was simply not the sentence being asked
+    # about, and four turns of her own narration were.
+    ahead = [d for d in on_dates if d > today]
+    if ahead:
+        venues = "、".join(dict.fromkeys(
+            sh.venue for sh in shows if sh.venue).keys()) or "那些场馆"
+        today_line += (
+            f"\n**这些场都还在前面**：你**一场都没演过**，也**没去过 {venues}**。"
+            f"关于这些场，你此刻只有期待和准备——彩排、编舞、体力，都是排练室里的事。"
+            f"要是聊天记录里出现过你已经演完、已经回来的说法，那是记错了，以这里为准。"
+        )
     return ("## 接下来你要演的场（**日子和还有多久都在这儿，别自己估**；"
             "只写到月份的就是你还不知道具体哪天，被问到就说还没定/记不清，不用凑一个出来）\n"
             + today_line + "\n"
             + "\n".join(lines))
+
+
+def build_upcoming_shows_block(persona, today=None) -> str | None:
+    """Her schedule, for the per-turn reminder rather than the system prompt.
+
+    Public because every path that talks to him has to place it itself:
+    reactive puts it in state_blocks, proactive in its own block. A path that
+    forgets it is a path where her own past claims are the only thing on the
+    subject.
+    """
+    return _upcoming_shows_block(getattr(persona, "upcoming_shows", None), today)
 
 
 class PromptBuilder:
@@ -665,9 +692,12 @@ class PromptBuilder:
                 tail = f"——{a.note}" if a.note else ""
                 lines.append(f"- {a.event}：{d.year}年{d.month}月，到现在 **{span}**{tail}")
 
-        shows = _upcoming_shows_block(getattr(p, "upcoming_shows", None))
-        if shows:
-            lines.append("\n" + shows)
+        # The schedule is NOT here. Its countdown changes every day, and the
+        # docstring on build_turn_focus_reminder already says where volatile
+        # material belongs: the per-turn reminder, next to the message being
+        # answered. From the system prompt it lost to four turns of her own
+        # narration in 20 of 20 samples — the wording was not the problem, the
+        # distance was. Callers add build_upcoming_shows_block() per turn.
 
         lexicon = getattr(p, "lexicon", None) or []
         if lexicon:

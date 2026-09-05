@@ -26,7 +26,7 @@ from lingxi.fewshot.seeds_loader import load_seeds
 from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import PersonaConfig
-from lingxi.persona.prompt_builder import PromptBuilder
+from lingxi.persona.prompt_builder import PromptBuilder, build_upcoming_shows_block
 from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
 from lingxi.providers.retry import is_retryable
@@ -658,6 +658,13 @@ class ConversationEngine:
         # described all along.
         system_prompt = persona_block
         state_blocks: list[str] = []
+        # First, and per-turn: this is the only thing in the prompt that knows
+        # whether a show has happened yet, and it has to sit next to the turn
+        # to outweigh whatever she said about it earlier in the conversation.
+        shows_block = build_upcoming_shows_block(self.persona, now.date() if now
+                                                 else None)
+        if shows_block:
+            state_blocks.append(shows_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
         if grounding:

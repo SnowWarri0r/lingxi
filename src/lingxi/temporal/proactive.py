@@ -827,6 +827,14 @@ class ProactiveScheduler:
         # guidance at all and defaulted to the persona's peak energy — every
         # opener came out at maximum volume. The style examples are deliberately
         # ordinary-volume, which is what supplies the missing middle register.
+        # The schedule moved out of the system prompt (it changes daily, and
+        # from up there it lost to her own earlier claims). Every path that
+        # speaks has to place it itself now — without this the proactive path
+        # would have nothing at all on whether a show has happened.
+        from lingxi.persona.prompt_builder import build_upcoming_shows_block
+        shows_block = build_upcoming_shows_block(self.engine.persona)
+        shows_block = f"{shows_block}\n\n" if shows_block else ""
+
         style = random.choice(_MESSAGE_STYLES)
         style_block = (
             f"## 这次试一种语气：【{style['name']}】\n"
@@ -844,6 +852,7 @@ class ProactiveScheduler:
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
+                f"{shows_block}"
                 f"{opener_shape}\n"
                 f"{style_block}"
                 f"按 system prompt 里的 `===META===` 格式输出。如果**真的**没什么想说，就让对白空、"
@@ -860,6 +869,7 @@ class ProactiveScheduler:
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
+                f"{shows_block}"
                 f"{opener_shape}\n"
                 f"{style_block}"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"

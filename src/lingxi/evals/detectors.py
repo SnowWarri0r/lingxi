@@ -25,7 +25,7 @@ import re
 # The single source of truth for which detector keys exist. `evaluate` and
 # `Case`'s load-time validator both read this set, so a new detector only
 # needs to be added here once — a second hardcoded list would drift.
-KNOWN_DETECTORS = frozenset({"any_of", "regex"})
+KNOWN_DETECTORS = frozenset({"any_of", "regex", "regex_absent"})
 
 
 def _any_of(needles: list[str], reply: str) -> bool:
@@ -34,6 +34,22 @@ def _any_of(needles: list[str], reply: str) -> bool:
 
 def _regex(pattern: str, reply: str) -> bool:
     return re.search(pattern, reply) is not None
+
+
+def _regex_absent(pattern: str, reply: str) -> bool:
+    """Fires when the reply does NOT contain `pattern`.
+
+    For failures defined by something missing rather than something said.
+    Enumerating the ways a fabricated memory can be phrased is hopeless — a
+    first attempt at this case matched 3 of 20 replies that were all wrong,
+    because she narrated a concert she had not played in twenty different
+    vocabularies. What every correct reply must contain is small and closed:
+    a statement that the date is still ahead.
+
+    Only use this where the case's input demands that statement. Applied to
+    an open-ended turn it marks every ordinary reply as a failure.
+    """
+    return re.search(pattern, reply) is None
 
 
 def evaluate(spec: dict, reply: str, persona=None) -> bool:
@@ -47,4 +63,6 @@ def evaluate(spec: dict, reply: str, persona=None) -> bool:
         return _any_of(spec["any_of"], reply)
     if "regex" in spec:
         return _regex(spec["regex"], reply)
+    if "regex_absent" in spec:
+        return _regex_absent(spec["regex_absent"], reply)
     raise ValueError(f"unknown detector: {sorted(spec)}")
