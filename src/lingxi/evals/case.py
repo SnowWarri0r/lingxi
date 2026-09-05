@@ -81,6 +81,12 @@ def _check_detector_spec(spec: dict, field_name: str) -> dict:
         raise ValueError(
             f"detect.{field_name}.regex 是空字符串，永远不会命中，需要手写正则"
         )
+    if "regex_absent" in spec and not spec["regex_absent"]:
+        # The mirror image of the empty-regex trap: an empty pattern matches
+        # everywhere, so "absent" is never true and the detector never fires.
+        raise ValueError(
+            f"detect.{field_name}.regex_absent 是空字符串，永远不会命中，需要手写正则"
+        )
     return spec
 
 
