@@ -14,8 +14,8 @@ def _prompt(known=None):
 def test_known_facts_are_shown_not_just_counted():
     """The catalog carries counts only, so 'don't write it twice' was an
     instruction the model had no way to follow."""
-    out = _prompt(["对方说国庆会去广州漫展见鲤鱼"])
-    assert "对方说国庆会去广州漫展见鲤鱼" in out
+    out = _prompt(["对方说下个月会去邻市的漫展见阿澪"])
+    assert "对方说下个月会去邻市的漫展见阿澪" in out
     assert "已经记住的关于对方的事" in out
 
 
@@ -25,7 +25,7 @@ def test_no_known_facts_says_so_rather_than_leaving_a_hole():
 
 
 def test_the_rule_names_the_rename_case():
-    """鲤鱼 and Liyuu are one person; the duplicate that started this was
+    """阿澪 and Mio are one spelling apart; the duplicate that started this was
     exactly that substitution."""
     out = _prompt(["x"])
     assert "不同叫法也算同一件事" in out
@@ -60,8 +60,8 @@ async def test_a_reworded_duplicate_is_folded_in_keeping_the_fuller_one(tmp_path
 
     store = FactStore(tmp_path / "f.db")
     await store.init()
-    SHORT = "对方说国庆会去广州漫展见鲤鱼"
-    LONG = "对方说国庆会去广州漫展见Liyuu，还要递手写信"
+    SHORT = "对方说下个月会去邻市的漫展见阿澪"
+    LONG = "对方说下个月会去邻市的漫展见 Mio，还要递手写信"
     await store.write(Fact(subject="user:feishu:x", content=SHORT,
                            source=Source.USER_STATED, type=FactType.PATTERN,
                            ts=datetime.now(), importance=5))
@@ -100,7 +100,7 @@ async def test_a_genuinely_new_fact_is_still_written(tmp_path):
 
     store = FactStore(tmp_path / "f.db")
     await store.init()
-    OLD, NEW = "对方8月22日要去成都", "对方8月23日从成都返回"
+    OLD, NEW = "对方本周六要去邻市", "对方本周日从邻市返回"
     await store.write(Fact(subject="user:feishu:x", content=OLD,
                            source=Source.USER_STATED, type=FactType.PATTERN,
                            ts=datetime.now(), importance=5))

@@ -1642,8 +1642,8 @@ class ConversationEngine:
 
     # Same fact, reworded, written again. Calibrated on the 666 pairs this
     # persona had accumulated: median similarity 0.37, p90 0.57, and every
-    # genuine duplicate at or above 0.786 — including 「国庆会去广州漫展见
-    # Liyuu」 against 「…见鲤鱼」 at 0.790, which is the same sentence with the
+    # genuine duplicate at or above 0.786 — including 「去漫展见 Mio」
+    # against 「…见阿澪」 at 0.790, which is the same sentence with the
     # same person's two names. The nearest genuinely-different pair, a return
     # date against a departure date, sits at 0.741. The gap is narrow, so a
     # match does not drop anything: whichever wording carries more detail is
