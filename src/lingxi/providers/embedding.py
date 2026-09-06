@@ -70,7 +70,7 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             ) from e
         print(f"[embedding] loading model {self.model_name} on {self.device}...")
         model = SentenceTransformer(self.model_name, device=self.device)
-        print(f"[embedding] model loaded")
+        print("[embedding] model loaded")
         return model
 
     def _embed_sync(self, text: str) -> list[float]:

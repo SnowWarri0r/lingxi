@@ -19,7 +19,7 @@ from lingxi.auth.models import (
     PROVIDER_OAUTH_CONFIGS,
     TokenInfo,
 )
-from lingxi.auth.pkce_flow import PKCEFlowAuth, PKCEFlowError
+from lingxi.auth.pkce_flow import PKCEFlowAuth
 from lingxi.auth.profile_store import ProfileStore
 from lingxi.auth.token_store import TokenStore
 
