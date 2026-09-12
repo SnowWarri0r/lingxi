@@ -6,9 +6,9 @@ doesn't expose. The fetcher is offline / batch-only, so direct SDK use
 is fine — it's not in the chat hot path.
 
 The model's job:
-1. Search a few queries (天文 / 文学 / 上海 / 科技 / 全球大事)
-2. Pick 0-1 item per category, total ≤ 5
-3. Re-voice each in Aria's IM register
+1. Search the persona's own `world_interests` categories
+2. Pick 0-1 item per category, total ≤ 5, skipping what she scanned recently
+3. Re-voice each in her IM register, in the language she speaks
 
 Failure modes (network / quota / model refusal) return an empty
 briefing so the chat path never breaks; logs the cause.
@@ -26,7 +26,7 @@ from lingxi.world.models import DailyBriefing, NewsItem
 
 _FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/昨天的新闻，从这些类目里挑：
 {topics_block}
-
+{already_block}
 挑选标准：
 - 每个类目 0-1 条**真正值得读到的**事，不必凑数
 - 总数 **≤ 5 条**
@@ -68,7 +68,19 @@ _FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/
 如果今天实在没什么值得记的，items 给空 list 就行——比凑数好。"""
 
 
-def build_fetch_prompt(persona, target_date: date) -> str | None:
+_ALREADY_TMPL = """
+她这几天已经扫到过下面这些，**别再报一遍**——同一件事有真的新进展才提，
+否则换别的：
+{lines}
+"""
+
+# Three days of scanning is enough context to avoid a repeat; more is an
+# archive that eats the prompt.
+_MAX_ALREADY = 24
+
+
+def build_fetch_prompt(persona, target_date: date,
+                       recent: list[str] | None = None) -> str | None:
     """The search prompt for this persona, or None when she follows nothing.
 
     Both halves used to be literal text describing the first character this
@@ -95,10 +107,18 @@ def build_fetch_prompt(persona, target_date: date) -> str | None:
                      f"别的地方要说清是哪儿。")
     except Exception:
         pass
+    # What she already scanned. Without it the fetch re-reported the same
+    # story on later days — 「8th的会场和日程出来了 有明→福冈→名古屋」 came back
+    # twice in three days, both at importance 6, and the block pushes the one
+    # highest-importance item, so that line was in her head on two of them.
+    seen = [str(s).strip() for s in (recent or []) if str(s).strip()]
+    already = (_ALREADY_TMPL.format(
+        lines="\n".join(f"- {s}" for s in seen[:_MAX_ALREADY])) if seen else "")
     return _FETCH_PROMPT.format(
         today=target_date.isoformat(),
         where=where,
         topics_block="\n".join(f"- {t}" for t in interests),
+        already_block=already,
         self_context=build_self_context(persona),
     )
 
@@ -143,6 +163,7 @@ async def fetch_daily_briefing(
     persona,
     target_date: date | None = None,
     *,
+    recent: list[str] | None = None,
     max_tokens: int = 4000,
     max_searches: int = 5,
 ) -> DailyBriefing:
@@ -158,7 +179,7 @@ async def fetch_daily_briefing(
     if target_date is None:
         target_date = date.today()
 
-    prompt = build_fetch_prompt(persona, target_date)
+    prompt = build_fetch_prompt(persona, target_date, recent=recent)
     if prompt is None:
         # She follows nothing in particular; there is no morning to fetch.
         return DailyBriefing(date=target_date)
