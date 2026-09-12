@@ -27,7 +27,11 @@ from lingxi.fewshot.seeds_loader import load_seeds
 from lingxi.fewshot.store import AnnotationStore, FewShotStore
 from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import PersonaConfig
-from lingxi.persona.prompt_builder import PromptBuilder, build_upcoming_shows_block
+from lingxi.persona.prompt_builder import (
+    PromptBuilder,
+    build_upcoming_shows_block,
+    build_world_block,
+)
 from lingxi.providers.base import LLMProvider
 from lingxi.providers.embedding import EmbeddingProvider
 from lingxi.providers.retry import is_retryable
@@ -666,6 +670,9 @@ class ConversationEngine:
                                                  else None)
         if shows_block:
             state_blocks.append(shows_block)
+        world_block = build_world_block(await self._todays_world_facts())
+        if world_block:
+            state_blocks.append(world_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
 
@@ -756,6 +763,24 @@ class ConversationEngine:
         "下班", "上班", "起床", "睡", "加班", "通勤", "作息",
         "上课", "放学", "午休", "值班", "排班", "工作日", "周末",
     )
+
+    async def _todays_world_facts(self) -> list:
+        """What she scanned this morning, if anything.
+
+        Same push rationale as the schedule block: the orchestrator can ask
+        for world facts and never does, because ambient context is not what
+        answering a message calls for.
+        """
+        if self.fact_retriever is None:
+            return []
+        try:
+            from datetime import date, time as _time
+            since = datetime.combine(date.today(), _time.min)
+            return await self.fact_retriever.fetch(FactQuery(
+                subject="world", type=FactType.EVENT, since=since, limit=5))
+        except Exception as e:
+            print(f"[engine] world lookup failed (non-fatal): {e}", flush=True)
+            return []
 
     async def _known_facts_floor(self, recipient_key: str | None) -> str:
         """A few durable facts about him, spread across subjects.
