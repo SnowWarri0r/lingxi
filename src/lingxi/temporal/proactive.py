@@ -394,8 +394,8 @@ def _format_known_block(facts: list[Fact]) -> str:
 
     The proactive prompt used to carry only raw recent messages, each cut to
     80 characters. Reconstructing his life from truncated fragments is how
-    「22号夜场」 plus 「昨天回的」 plus a severed mention of a *future* 国庆
-    广州漫展 came back out as 「连着两天跑漫展」. These same facts were sitting
+    「夜场」 plus 「昨天回的」 plus a severed mention of a *future*
+    con came back out as 「连着两天跑展」. These same facts were sitting
     in facts.db, already extracted, deduplicated and dated — the chat path
     renders them and this one did not.
     """

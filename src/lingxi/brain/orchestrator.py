@@ -162,7 +162,7 @@ def build_orchestrator_prompt(
         prev_thread_summary=prev_thread_summary.strip() or "（无——这是话题开始或重启）",
         # The catalog is counts only, so item 8's "don't write the same thing
         # twice" was an instruction it had no way to follow: it wrote
-        # 「国庆会去广州漫展见鲤鱼」 one turn and 「…见Liyuu」 the next, unable
+        # 「去漫展见阿澪」 one turn and 「…见 Mio」 the next, unable
         # to see the first. Showing the contents is what makes the rule real.
         known_facts="\n".join(f"  - {c}" for c in (known_facts or []))
                     or "  （还没记过什么）",

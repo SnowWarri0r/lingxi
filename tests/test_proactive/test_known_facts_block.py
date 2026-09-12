@@ -12,17 +12,17 @@ def _fact(content, day=22):
 
 
 def test_facts_are_rendered_with_their_dates():
-    out = _format_known_block([_fact("对方8月22日去成都参加Liyuu活动")])
+    out = _format_known_block([_fact("对方下个月要去邻市参加 Mio 的活动")])
     assert "08-22" in out
-    assert "对方8月22日去成都参加Liyuu活动" in out
+    assert "对方下个月要去邻市参加 Mio 的活动" in out
 
 
 def test_the_block_says_it_outranks_the_raw_fragments():
     """The fragments above it are truncated originals; these are cleaned up.
 
     Without saying which wins, she reconstructed a trip from cut-off chat
-    lines and produced 「连着两天跑漫展」 for a one-day Liyuu event, borrowing
-    the 漫展 from a separate future plan.
+    lines and produced 「连着两天跑展」 for a one-day event, borrowing
+    the 展 from a separate future plan.
     """
     out = _format_known_block([_fact("x")])
     assert "以这里为准" in out
@@ -39,10 +39,10 @@ def test_no_facts_renders_nothing():
 
 def test_several_facts_all_appear():
     out = _format_known_block([
-        _fact("对方8月22日去成都参加Liyuu活动"),
-        _fact("对方说国庆会去广州漫展见Liyuu", day=24),
+        _fact("对方下个月要去邻市参加 Mio 的活动"),
+        _fact("对方下个月要去邻市的漫展见 Mio", day=24),
     ])
-    assert "成都" in out and "广州漫展" in out
+    assert "参加 Mio 的活动" in out and "漫展" in out
     assert out.count("- [") == 2
 
 
@@ -57,21 +57,21 @@ def test_long_messages_keep_the_tail_that_disambiguates():
     """80 chars cut his longest line at 「说了自己从24年广州亚」.
 
     The tail is where it says which event and whose — losing it is how the
-    Chengdu trip and a future Guangzhou con became one thing.
+    past trip and a separate future con became one thing.
     """
     from lingxi.temporal.proactive import _format_user_recent
 
-    long = ("是鲤鱼抽到的我，上台的时候我还给她展示了一下，还夸了她晚场的衣服比下午场的更可爱了，"
-            "还说了国庆会去广州漫展见她，手写信也给她了，说了自己从24年广州亚巡开始跑现地")
+    long = ("是阿澪抽到的我，上台的时候我还给她展示了一下，还夸了她晚场的衣服比下午场的更可爱了，"
+            "还说了下个月会去邻市的漫展见她，手写信也给她了，说了自己从前年开始跑现地")
     out = _format_user_recent([_Turn(long)])
-    assert "国庆会去广州漫展见她" in out
-    assert "24年广州亚巡开始跑现地" in out
+    assert "下个月会去邻市的漫展见她" in out
+    assert "从前年开始跑现地" in out
 
 
 def test_a_repeated_message_does_not_take_two_slots():
     from lingxi.temporal.proactive import _format_user_recent
 
-    dup = "是鲤鱼抽到的我，哈哈"
+    dup = "是阿澪抽到的我，哈哈"
     out = _format_user_recent([_Turn(dup, 33), _Turn(dup, 34), _Turn("另一句", 35)])
     assert out.count(dup) == 1
     assert "另一句" in out

@@ -1790,7 +1790,7 @@ Expected: 4 passed
 
 - [ ] **Step 6: 真机跑一次**
 
-Run: `PERSONA_PATH=config/personas/tangkeke.yaml .venv/bin/lingxi-eval --capture feishu:oc_c394e90ef07527af9e8d186645e87df1 --turns 8`
+Run: `PERSONA_PATH=config/personas/tangkeke.yaml .venv/bin/lingxi-eval --capture feishu:oc_example --turns 8`
 Expected: 打印骨架路径；打开该 YAML，`facts` 与 `history` 非空，`symptom` 与 `detect` 为空
 
 - [ ] **Step 7: 全量回归并提交**
