@@ -11,11 +11,20 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from lingxi.persona.models import Identity, PersonaConfig
 from lingxi.world.fetcher import (
     _extract_text_from_blocks,
     _strip_json_fences,
     fetch_daily_briefing,
 )
+
+
+def _persona():
+    """Any persona with interests — these tests are about parsing, not topics."""
+    return PersonaConfig(
+        name="唐可可", id="tangkeke",
+        identity=Identity(full_name="唐可可", age=18),
+        world_interests=["Love Live / 偶像圈"])
 
 
 def _fake_llm(text: str = "", *, error: Exception | None = None):
@@ -78,7 +87,7 @@ async def test_fetcher_parses_well_formed_response():
         ],
     })
 
-    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), _persona(), date(2026, 5, 9))
 
     assert len(b.items) == 1
     assert b.items[0].category == "天文"
@@ -87,7 +96,7 @@ async def test_fetcher_parses_well_formed_response():
 
 @pytest.mark.asyncio
 async def test_fetcher_returns_empty_on_garbage_response():
-    b = await fetch_daily_briefing(_fake_llm("not json at all"), date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm("not json at all"), _persona(), date(2026, 5, 9))
 
     assert b.is_empty()
 
@@ -95,23 +104,45 @@ async def test_fetcher_returns_empty_on_garbage_response():
 @pytest.mark.asyncio
 async def test_fetcher_returns_empty_on_api_error():
     llm = _fake_llm(error=RuntimeError("network down"))
-    b = await fetch_daily_briefing(llm, date(2026, 5, 9))
+    b = await fetch_daily_briefing(llm, _persona(), date(2026, 5, 9))
 
     assert b.is_empty()
 
 
 @pytest.mark.asyncio
-async def test_fetcher_invalid_category_falls_to_其他():
+async def test_fetcher_keeps_the_personas_own_category():
+    """No whitelist: the categories asked for are the persona's interests."""
     payload = json.dumps({
         "items": [{
-            "headline": "x", "aria_voice": "y",
-            "category": "garbage_category",
+            "headline": "x", "voice": "y",
+            "category": "Love Live / 偶像圈",
         }],
     })
 
-    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), _persona(), date(2026, 5, 9))
 
-    assert b.items[0].category == "其他"
+    assert b.items[0].category == "Love Live / 偶像圈"
+
+
+@pytest.mark.asyncio
+async def test_fetcher_bounds_a_runaway_category():
+    payload = json.dumps({
+        "items": [{"headline": "x", "voice": "y", "category": "категория" * 40}],
+    })
+
+    b = await fetch_daily_briefing(_fake_llm(payload), _persona(), date(2026, 5, 9))
+
+    assert len(b.items[0].category) <= 40
+
+
+@pytest.mark.asyncio
+async def test_fetcher_still_reads_the_old_key():
+    """A cached prompt or older reply may still say aria_voice."""
+    payload = json.dumps({"items": [{"headline": "x", "aria_voice": "旧键"}]})
+
+    b = await fetch_daily_briefing(_fake_llm(payload), _persona(), date(2026, 5, 9))
+
+    assert b.items[0].voice == "旧键"
 
 
 @pytest.mark.asyncio
@@ -125,7 +156,7 @@ async def test_fetcher_skips_items_missing_required_fields():
         ],
     })
 
-    b = await fetch_daily_briefing(_fake_llm(payload), date(2026, 5, 9))
+    b = await fetch_daily_briefing(_fake_llm(payload), _persona(), date(2026, 5, 9))
 
     assert len(b.items) == 1
     assert b.items[0].headline == "ok"

@@ -25,11 +25,7 @@ from lingxi.world.models import DailyBriefing, NewsItem
 
 
 _FETCH_PROMPT = """今天是 {today}。请用 web_search 查一下今天/昨天的新闻，从这些类目里挑：
-- 天文 / 太空（NASA, JWST, 天文事件等）
-- 文学 / 出版（新书, 文坛事件, 重要写作奖项）
-- 上海本地（天气, 大事件, 文化活动）
-- 科技 / AI（重要发布, 行业动态, 但不是无聊宣传稿）
-- 全球大事（值得关注的国际新闻）
+{topics_block}
 
 挑选标准：
 - 每个类目 0-1 条**真正值得读到的**事，不必凑数
@@ -37,15 +33,20 @@ _FETCH_PROMPT = """今天是 {today}。请用 web_search 查一下今天/昨天�
 - 跳过广告 / 无聊宣传稿 / 标题党
 - 发生在最近 24-48 小时内
 
-然后，用 Aria 的语气改写每一条——她是 28 岁的天文人 + 写作者，住上海，
-contemplative 内向但好奇心强。她**不**用新闻播报口吻——她是"今早扫到的"那种
-个人语气：简短、带一点自己的反应、IM 风格短句。
+然后，用下面这个人的语气改写每一条：
 
-❌ "NASA 今日宣布在火星样本中发现微生物迹象"（新闻稿口吻）
-✅ "今早扫到 NASA 说火星样本里有点微生物的迹象 真的吗"
+{self_context}
 
-❌ "上海今日预计降水概率 80%"
-✅ "今天上海要下大雨"
+她**不**用新闻播报口吻——她是"今早扫到的"那种个人语气：简短、带一点自己的
+反应、IM 风格短句。
+
+示例只示范**语气的分量**，别从里面取题材——题材看上面的类目：
+
+❌ "某机构今日宣布相关项目将于下月正式启动"（新闻稿口吻）
+✅ "今早扫到他们下个月就要开始弄那个了 真的假的"
+
+❌ "该地区今日预计降水概率 80%"
+✅ "那边明天要下大雨"
 
 整条输出就是那个 JSON 对象本身。
 **字符串值内一律用中文「」做引号**，确保 JSON 可解析。
@@ -53,8 +54,8 @@ contemplative 内向但好奇心强。她**不**用新闻播报口吻——她�
   "items": [
     {{
       "headline": "原标题或主题（<= 30 字）",
-      "aria_voice": "她语气的一句（<= 50 字）",
-      "category": "天文|文学|上海本地|科技|全球大事|其他",
+      "voice": "她语气的一句（<= 50 字）",
+      "category": "上面那几个类目之一，原样抄",
       "source": "来源域名或媒体名",
       "url": "可选"
     }}
@@ -62,6 +63,27 @@ contemplative 内向但好奇心强。她**不**用新闻播报口吻——她�
 }}
 
 如果今天实在没什么值得记的，items 给空 list 就行——比凑数好。"""
+
+
+def build_fetch_prompt(persona, target_date: date) -> str | None:
+    """The search prompt for this persona, or None when she follows nothing.
+
+    Both halves used to be literal text describing the first character this
+    ran for — its categories and its writer. Any other persona then received
+    that character's morning: a school idol woke up to telescope launches,
+    re-voiced as a contemplative 28-year-old astronomer in Shanghai.
+    """
+    interests = [str(t).strip()
+                 for t in (getattr(persona, "world_interests", None) or [])
+                 if str(t).strip()]
+    if not interests:
+        return None
+    from lingxi.persona.self_context import build_self_context
+    return _FETCH_PROMPT.format(
+        today=target_date.isoformat(),
+        topics_block="\n".join(f"- {t}" for t in interests),
+        self_context=build_self_context(persona),
+    )
 
 
 def _strip_json_fences(text: str) -> str:
@@ -101,6 +123,7 @@ def _extract_text_from_blocks(content_blocks: list) -> str:
 
 async def fetch_daily_briefing(
     llm,
+    persona,
     target_date: date | None = None,
     *,
     max_tokens: int = 4000,
@@ -118,7 +141,10 @@ async def fetch_daily_briefing(
     if target_date is None:
         target_date = date.today()
 
-    prompt = _FETCH_PROMPT.format(today=target_date.isoformat())
+    prompt = build_fetch_prompt(persona, target_date)
+    if prompt is None:
+        # She follows nothing in particular; there is no morning to fetch.
+        return DailyBriefing(date=target_date)
 
     # Retry once on empty/unparseable output: the model occasionally emits
     # invalid JSON (e.g. an unescaped " inside a value), which is random, so a
@@ -168,22 +194,23 @@ async def fetch_daily_briefing(
         return DailyBriefing(date=target_date)
 
     items: list[NewsItem] = []
-    valid_categories = {"天文", "文学", "上海本地", "科技", "全球大事", "其他"}
     now = datetime.now()
     for raw in items_raw:
         if not isinstance(raw, dict):
             continue
         headline = (raw.get("headline") or "").strip()
-        aria_voice = (raw.get("aria_voice") or "").strip()
-        if not headline or not aria_voice:
+        # `aria_voice` is the old key; personas that are not Aria still get
+        # read correctly if a cached prompt or an older model reply uses it.
+        voice = (raw.get("voice") or raw.get("aria_voice") or "").strip()
+        if not headline or not voice:
             continue
-        category = raw.get("category", "其他")
-        if category not in valid_categories:
-            category = "其他"
+        # Categories are the persona's own interests now, so there is no
+        # whitelist to check against — just a length bound.
+        category = str(raw.get("category") or "其他").strip()[:40] or "其他"
         items.append(
             NewsItem(
                 headline=headline[:80],
-                aria_voice=aria_voice[:200],
+                voice=voice[:200],
                 category=category,
                 source=(raw.get("source") or "").strip()[:60],
                 url=(raw.get("url") or "").strip()[:300],
