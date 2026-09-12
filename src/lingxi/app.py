@@ -170,6 +170,10 @@ async def create_engine(
     data_dir = persona_data_root(persona)
     print(f"[app] persona='{persona.name}' (slug={persona.slug}) "
           f"data_dir={data_dir}", flush=True)
+    # Keep the request log beside the facts it was generated against, so
+    # reading it back cannot mix one persona's calls with another's.
+    from lingxi.debug.request_log import set_log_root
+    set_log_root(data_dir)
     memory_config = config.get("memory", {})
     memory_manager = MemoryManager(
         data_dir=data_dir,
