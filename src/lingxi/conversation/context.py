@@ -86,18 +86,20 @@ class ContextAssembler:
 
     def assemble_messages(self, memory_context: MemoryContext, *,
                           now: datetime | None = None) -> list[dict]:
-        """Build messages list with layered memory.
+        """Build the messages list.
 
-        L1 (≤verbatim_window_minutes): full content
-        L2 (verbatim..session_window): summary if available, else fall back to content
-        beyond session_window: dropped entirely (L3 episodes/L4 facts handle these)
+        Every included turn is rendered verbatim. Turns are kept by count
+        (recent_turns_min, whatever their age) and by the session window,
+        then trimmed to the token budget; what falls off is covered by
+        facts.db rather than by a summary. The mid-term summary tier this
+        used to have was removed — rendering her own past in the third
+        person taught her to narrate ("我询问 / 我追问") instead of speak.
         """
         turns = memory_context.short_term_turns
         if not turns:
             return []
 
         now = now or datetime.now()
-        l2_cutoff = now - timedelta(minutes=self.budget.verbatim_window_minutes)
         session_cutoff = now - timedelta(minutes=self.budget.session_window_minutes)
 
         # ALWAYS preserve the last N turns regardless of age — losing them

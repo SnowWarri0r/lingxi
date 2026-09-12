@@ -20,8 +20,8 @@ length and re-render with reduced queries if needed.
 
 from __future__ import annotations
 
-from lingxi.brain.models import OrchestrationDecision, OrchestratorFactQuery
-from lingxi.facts.models import Fact, FactType
+from lingxi.brain.models import OrchestrationDecision
+from lingxi.facts.models import FactType
 from datetime import datetime
 
 from lingxi.facts.retriever import FactQuery, FactRetriever

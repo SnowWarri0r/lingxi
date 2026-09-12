@@ -14,7 +14,6 @@ from pathlib import Path
 from lingxi.auth.models import (
     AuthProfile,
     CredentialType,
-    FailureCooldown,
     TokenInfo,
 )
 
