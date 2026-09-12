@@ -297,7 +297,7 @@ class ConversationEngine:
         agent can recover."""
         from datetime import datetime
         from lingxi.brain.memory_tools import CORE_BLOCK_MAX_CHARS
-        from lingxi.facts.models import Fact, FactType, Source
+        from lingxi.facts.models import FactType, Source
         from lingxi.facts.retriever import FactQuery
 
         def _subject_for(scope: str) -> str:
@@ -1586,7 +1586,6 @@ class ConversationEngine:
         Returns the full TurnOutput (all modalities). Channels adapt it
         to their needs via adapters.
         """
-        import asyncio
 
         output = parse_turn_output(raw)
 

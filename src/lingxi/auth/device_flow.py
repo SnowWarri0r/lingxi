@@ -9,7 +9,6 @@ This is the same flow used by Claude Code (`claude login`) and Codex CLI:
 from __future__ import annotations
 
 import asyncio
-import sys
 import webbrowser
 
 import httpx
@@ -128,7 +127,7 @@ class DeviceFlowAuth:
 
         # Step 2: Display to user and open browser
         print(f"\n{'='*50}")
-        print(f"  请在浏览器中完成登录")
+        print("  请在浏览器中完成登录")
         print(f"{'='*50}")
 
         if device_resp.verification_uri_complete:
