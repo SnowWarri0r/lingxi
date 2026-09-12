@@ -278,7 +278,7 @@ async def create_engine(
         )
         plan_executor = PlanExecutor(
             llm_provider, fact_retriever, life_writer, planner=daily_planner,
-            persona=persona,
+            persona=persona, embedder=embedding_provider,
         )
 
     # Create engine
