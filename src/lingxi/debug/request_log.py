@@ -46,9 +46,28 @@ def is_enabled() -> bool:
     return v in ("1", "on", "true", "yes")
 
 
+# Set once at bootstrap to the running persona's data root. facts.db moved to
+# data/personas/<slug>/ when personas were namespaced and this path did not
+# follow, so every persona appended to one shared data/debug/llm_requests/.
+# Reading that back mixes databases: a tangkeke-era analysis silently included
+# Aria-era calls, and twice produced a defect that was not there — a catalog
+# bucket with 50 rows in the database of the day and none in today's.
+_LOG_ROOT: Path | None = None
+
+
+def set_log_root(path: str | Path) -> None:
+    """Point the log at this persona's data root (app bootstrap calls this)."""
+    global _LOG_ROOT
+    _LOG_ROOT = Path(path).expanduser().resolve()
+
+
 def _log_dir() -> Path:
+    if _LOG_ROOT is not None:
+        return _LOG_ROOT / "debug" / "llm_requests"
+    # No root set (tools, tests, direct library use): the pre-namespacing
+    # layout, where MEMORY_DATA_DIR pointed at the memory subdir and debug
+    # lived alongside it.
     base = os.environ.get("MEMORY_DATA_DIR", "./data/memory")
-    # MEMORY_DATA_DIR points at the memory subdir; debug lives alongside it
     parent = Path(base).expanduser().resolve().parent
     return parent / "debug" / "llm_requests"
 
