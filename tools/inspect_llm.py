@@ -30,26 +30,59 @@ from datetime import datetime
 from pathlib import Path
 
 
-def log_dir() -> Path:
+def log_dirs() -> list[Path]:
+    """Every place a day's log may sit, newest layout first.
+
+    Logs moved under data/personas/<slug>/debug/ so they sit beside the
+    facts.db they were generated against; the shared data/debug/ still holds
+    everything written before that. Reading both keeps history visible, and
+    the persona dirs stay separate so one persona's calls cannot be read as
+    another's.
+    """
+    dirs: list[Path] = []
+    override = os.environ.get("MEMORY_DATA_DIR")
+    if override:
+        dirs.append(Path(override).expanduser().resolve() / "debug" / "llm_requests")
+    personas = Path("data/personas")
+    if personas.is_dir():
+        dirs += sorted(p / "debug" / "llm_requests" for p in personas.iterdir()
+                       if p.is_dir())
     base = os.environ.get("MEMORY_DATA_DIR", "./data/memory")
-    return Path(base).expanduser().resolve().parent / "debug" / "llm_requests"
+    dirs.append(Path(base).expanduser().resolve().parent / "debug" / "llm_requests")
+    seen, out = set(), []
+    for d in dirs:
+        if d not in seen:
+            seen.add(d)
+            out.append(d)
+    return out
+
+
+def log_dir() -> Path:
+    """The first existing location (kept for callers wanting a single path)."""
+    for d in log_dirs():
+        if d.is_dir():
+            return d
+    return log_dirs()[-1]
 
 
 def load_day(date: str | None) -> list[dict]:
     date = date or datetime.now().strftime("%Y-%m-%d")
-    path = log_dir() / f"{date}.jsonl"
-    if not path.exists():
+    paths = [d / f"{date}.jsonl" for d in log_dirs()]
+    paths = [p for p in paths if p.exists()]
+    if not paths:
         return []
     records = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                records.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    for path in paths:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+    records.sort(key=lambda r: r.get("ts", ""))
     return records
 
 
