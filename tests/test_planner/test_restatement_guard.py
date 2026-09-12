@@ -163,3 +163,40 @@ async def test_the_prompt_asks_for_what_changed():
     await _executor(llm, _Writer()).tick()
 
     assert "新发生的" in llm.prompts[0]
+
+
+# --- where in the step we are -----------------------------------------
+
+class TestPosition:
+    """Steps run 30 to 210 minutes while this ticks every 30.
+
+    A 3.5-hour step has to yield seven distinct moments. Given only a clock
+    reading the model restated the start of the block for two hours — and the
+    restatement guard would then throw those ticks away, emptying a morning.
+    """
+
+    def _at(self, hhmm, window):
+        from lingxi.planner.executor import _parse_time_window, describe_position
+        h, m = map(int, hhmm.split(":"))
+        return describe_position(h * 60 + m, *_parse_time_window(window))
+
+    def test_the_start_of_a_long_step(self):
+        assert "刚开始" in self._at("08:50", "08:30-12:00")
+
+    def test_the_middle_says_how_much_is_left(self):
+        assert "还剩 100 分钟" in self._at("10:20", "08:30-12:00")
+
+    def test_the_end_asks_to_wrap_up(self):
+        assert "收尾" in self._at("11:40", "08:30-12:00")
+
+    def test_a_short_step_is_not_carved_up(self):
+        """A 30-minute step gets one tick; beginning/middle/end is nonsense."""
+        assert self._at("07:10", "07:00-07:30") == "这一段就这么点时间"
+
+    def test_a_step_crossing_midnight(self):
+        assert "收尾" in self._at("00:45", "23:00-01:00")
+
+    def test_the_three_phases_of_one_step_differ(self):
+        w = "08:30-12:00"
+        assert len({self._at("08:40", w), self._at("10:20", w),
+                    self._at("11:50", w)}) == 3
