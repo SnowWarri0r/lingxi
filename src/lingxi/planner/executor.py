@@ -29,8 +29,18 @@ _MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_wind
 写一条**现在这一刻**，1-2 句，第一人称当下时态，符合你自己的口吻，直接以动作或观察开头（如『趴窗台晒太阳』）。
 - **取景放在正常生活的尺度上**：眼前在做的那件事、周围的动静、身边的人和刚说的一句话、脑子里冒出来的念头、外面的天气声音——像跟人讲"我刚在干嘛"那样的粒度。
 - **音量按事情本身来**：一天里绝大多数时刻是平的，平铺直叙记一句就好；真遇上让你激动的事，那一条再放开写。
+- 已经过去半小时了，写这半小时里**新发生的**：手上的事推到了下一步、或者换了件事做、或者身边有了别的动静。
 """
 
+
+# Retry nudge when the fresh moment restates the last one.
+_MOVE_ON = (
+    "\n\n（刚才那条已经把这件事写过了。半小时过去了，写接下来发生的："
+    "手上这件事做完了、或者做到了下一步、或者你已经在做别的了。）"
+)
+
+
+_RESTATEMENT_THRESHOLD = 0.80
 
 _TW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
 
@@ -61,12 +71,14 @@ class PlanExecutor:
         planner: DailyPlanner | None = None,
         model: str | None = None,
         persona=None,
+        embedder=None,
     ):
         self._llm = llm
         self._retriever = retriever
         self._writer = life_writer
         self._planner = planner
         self._model = model
+        self._embedder = embedder
         self._replan_requested = False
         from lingxi.persona.self_context import build_self_context
         self._self_ctx = (build_self_context(persona)
@@ -99,6 +111,34 @@ class PlanExecutor:
             recent_events=self._bullets(recent_events) or "（没什么特别的）",
             now_hhmm=now.strftime("%H:%M"),
         )
+        previous = recent_events[0].content if recent_events else ""
+        content = await self._generate(prompt)
+        if not content:
+            return
+
+        # A plan step spans a couple of hours and this ticks every thirty
+        # minutes, so when the step has no internal progression the model
+        # restates it. Measured over three days: 「守着锅等它咕嘟」 four times
+        # across two hours, the same sentence reworded. Give it one nudge to
+        # move on, and if it still restates, write nothing — an hour with one
+        # entry is honest; four entries about waiting for porridge is not.
+        if await self._restates(content, previous):
+            content = await self._generate(prompt + _MOVE_ON) or content
+            if await self._restates(content, previous):
+                print(f"[executor] still restating, skipped: {content[:34]}",
+                      flush=True)
+                return
+
+        event = Fact(
+            subject="aria",
+            content=content,
+            source=Source.LIFE_SIMULATED,
+            type=FactType.EVENT,
+            ts=now,
+        )
+        await self._writer.write(event)
+
+    async def _generate(self, prompt: str) -> str:
         try:
             kwargs = {"model": self._model} if self._model else {}
             response = await self._llm.complete(
@@ -109,22 +149,38 @@ class PlanExecutor:
                 _debug_purpose="plan_executor_moment",
                 **kwargs,
             )
-            content = response.content.strip()
+            return response.content.strip()
         except Exception as e:
             print(f"[executor] moment gen failed: {e}", flush=True)
-            return
+            return ""
 
-        if not content:
-            return
+    async def _restates(self, candidate: str, previous: str) -> bool:
+        """Whether this moment just rewords the one before it.
 
-        event = Fact(
-            subject="aria",
-            content=content,
-            source=Source.LIFE_SIMULATED,
-            type=FactType.EVENT,
-            ts=now,
-        )
-        await self._writer.write(event)
+        Calibrated on 100 consecutive pairs from three days of her own
+        events. Restatements sit at 0.85 and above — 「走在银杏街上，叶子还
+        绿着」 against 「走到银杏街了，叶子还硬邦邦绿着」 at 0.845. Real
+        progression sits at 0.62–0.65: same preoccupation, but she has moved.
+        The nearest pair that would be wrong to drop is 0.789, where she
+        finishes one line and turns to the next, so the gate has room below it.
+
+        Fail-safe: no embedder, or an embedding error, and the moment is
+        written. A repeat costs a line; refusing to write costs the hour.
+        """
+        if not self._embedder or not candidate or not previous:
+            return False
+        try:
+            a = await self._embedder.embed(candidate)
+            b = await self._embedder.embed(previous)
+        except Exception as e:
+            print(f"[executor] restatement check unavailable: {e}", flush=True)
+            return False
+        dot = sum(x * y for x, y in zip(a, b))
+        na = sum(x * x for x in a) ** 0.5
+        nb = sum(x * x for x in b) ** 0.5
+        if na == 0.0 or nb == 0.0:
+            return False
+        return dot / (na * nb) >= _RESTATEMENT_THRESHOLD
 
     async def _find_current_plan(self, now: datetime) -> Fact | None:
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
