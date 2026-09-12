@@ -338,6 +338,10 @@ class FeishuBot(OutboundChannel):
             # Fallback to plain text if card fails
             await self._send_text_async(recipient_id, text)
 
+    async def send_sticker(self, recipient_id: str, file_path: str) -> None:
+        """OutboundChannel implementation — upload and send the image."""
+        await self._send_image(recipient_id, file_path)
+
     async def _send_proactive_card(
         self,
         chat_id: str,

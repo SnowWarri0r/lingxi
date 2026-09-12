@@ -222,6 +222,72 @@ def _ago_label(ts: str | None, now: datetime | None = None) -> str:
     return f"{days}天前"
 
 
+def parse_proactive_output(raw: str) -> dict:
+    """Split an opener reply into {should_send, message, sticker, reason}.
+
+    A missing ===META=== used to mean "the model spat raw JSON (legacy)", so
+    the whole reply went to meta_part and speech came out empty — should_send
+    False, message dropped, no log line. Over 119 logged openers, 66 had no
+    META block and 64 of those carried a real message: more than half of what
+    she wrote was discarded on a format technicality, and the scheduler
+    retried five minutes later. The single-pass responder usually just writes
+    the message and stops, which is what the prompt's own example shows.
+
+    The legacy shape is still read as meta when the reply really is bare JSON.
+    """
+    from lingxi.conversation.output_schema import META_DELIMITER, _STICKER_TAG
+    from lingxi.conversation.response_cleaner import clean_speech
+
+    text = (raw or "").strip()
+    # Lift the sticker tag before anything else, exactly as the reply path
+    # does — otherwise, now that these messages send, `#表情 开心` goes out as
+    # a visible line.
+    tags = _STICKER_TAG.findall(text)
+    sticker = tags[-1].strip()[:60] if tags else ""
+    text = _STICKER_TAG.sub("", text).strip()
+
+    if META_DELIMITER in text:
+        speech_part, _, meta_part = text.partition(META_DELIMITER)
+    elif text.startswith("{") and '"' in text:
+        speech_part, meta_part = "", text
+    else:
+        speech_part, meta_part = text, ""
+
+    message = clean_speech(speech_part.strip())
+
+    match = re.search(r"\{.*\}", meta_part, re.DOTALL) if meta_part else None
+    if not match:
+        return {"should_send": bool(message), "message": message,
+                "sticker": sticker, "reason": ""}
+    try:
+        meta = json.loads(match.group())
+    except json.JSONDecodeError:
+        return {"should_send": bool(message), "message": message,
+                "sticker": sticker, "reason": ""}
+
+    # Honour explicit should_send=false; otherwise infer from speech.
+    # Coerce carefully — LLM occasionally emits string "false" / "true"
+    # / "no" / "yes", and bool("false") is True in Python (any non-empty
+    # string is truthy), so we'd ignore the false signal and send.
+    flag = meta.get("should_send")
+    if flag is None:
+        should_send = bool(message)
+    elif isinstance(flag, bool):
+        should_send = flag
+    elif isinstance(flag, str):
+        should_send = flag.strip().lower() not in ("false", "no", "0", "")
+    else:
+        should_send = bool(flag)
+
+    # A bare-JSON legacy reply carries its text in `message`.
+    if not message:
+        message = clean_speech(str(meta.get("message", "") or "").strip())
+        should_send = should_send and bool(message)
+
+    return {"should_send": should_send, "message": message,
+            "sticker": sticker, "reason": meta.get("inner", "")}
+
+
 def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -> str | None:
     """Return the near-duplicate this repeats, if any.
 
@@ -743,6 +809,22 @@ class ProactiveScheduler:
             print(f"[proactive] send failed: {e}")
             return {"key": key, "status": "send_failed", "error": str(e)}
 
+        # The mood she tagged, as an image after the line. The reply path has
+        # done this all along; this path parsed the tag off and dropped it, so
+        # she never once sent a sticker unprompted. A sticker that fails to
+        # resolve or upload costs a sticker, not the message — it has already
+        # gone out.
+        sticker_intent = decision.get("sticker", "")
+        if sticker_intent:
+            try:
+                await self.engine._resolve_sticker(sticker_intent, key)
+                path = self.engine._pending_stickers.pop(key, None)
+                if path:
+                    await channel.send_sticker(record.recipient_id, path)
+            except Exception as e:
+                print(f"[proactive] sticker send failed (non-fatal): {e}",
+                      flush=True)
+
         # Record the proactive message in the recipient's short-term buffer
         # as an assistant turn. Without this, the next user reply has no
         # preceding assistant turn in history, and Aria treats user's "怎么说"
@@ -1035,47 +1117,7 @@ class ProactiveScheduler:
             print(f"[proactive] LLM call failed: {e}")
             return None
 
-        # Parse: speech + ===META=== + json (matching reactive output)
-        text = result.content.strip()
-        from lingxi.conversation.output_schema import META_DELIMITER
-        if META_DELIMITER in text:
-            speech_part, _, meta_part = text.partition(META_DELIMITER)
-        else:
-            # Fallback: maybe model just spat raw JSON (legacy).
-            speech_part, meta_part = "", text
-
-        # Clean speech (same regex as reactive)
-        from lingxi.conversation.response_cleaner import clean_speech
-        message = clean_speech(speech_part.strip())
-
-        # Extract JSON
-        match = re.search(r"\{.*\}", meta_part, re.DOTALL)
-        if not match:
-            return {"should_send": bool(message), "message": message}
-        try:
-            meta = json.loads(match.group())
-        except json.JSONDecodeError:
-            return {"should_send": bool(message), "message": message}
-
-        # Honour explicit should_send=false; otherwise infer from speech.
-        # Coerce carefully — LLM occasionally emits string "false" / "true"
-        # / "no" / "yes", and bool("false") is True in Python (any non-empty
-        # string is truthy), so we'd ignore the false signal and send.
-        raw = meta.get("should_send")
-        if raw is None:
-            should_send = bool(message)
-        elif isinstance(raw, bool):
-            should_send = raw
-        elif isinstance(raw, str):
-            should_send = raw.strip().lower() not in ("false", "no", "0", "")
-        else:
-            should_send = bool(raw)
-
-        return {
-            "should_send": should_send,
-            "message": message,
-            "reason": meta.get("inner", ""),
-        }
+        return parse_proactive_output(result.content)
 
     def _is_quiet_hours(self, now: datetime) -> bool:
         hour = now.hour

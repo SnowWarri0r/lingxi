@@ -26,6 +26,15 @@ class OutboundChannel(ABC):
         (👍/👎/✏️) so the user can rate the proactive message.
         """
 
+    async def send_sticker(self, recipient_id: str, file_path: str) -> None:
+        """Send a 表情包 image, if this channel can.
+
+        Not abstract: a channel with no image support is a channel where the
+        sticker is simply skipped, which is better than every such channel
+        having to write the same no-op.
+        """
+        return None
+
 
 class ChannelRegistry:
     """Maps channel names to OutboundChannel instances."""
