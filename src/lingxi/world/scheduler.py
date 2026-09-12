@@ -87,6 +87,26 @@ class WorldScheduler:
                 print(f"[world] scheduler tick error: {e}", flush=True)
             await asyncio.sleep(self._check_interval)
 
+    async def _recently_scanned(self, days: int = 3) -> list[str]:
+        """What she already picked up, so the fetch does not re-report it.
+
+        include_expired: these carry a two-day TTL, and an item that has just
+        aged out is exactly the one most likely to come back around.
+        """
+        if self._fact_retriever is None:
+            return []
+        try:
+            from lingxi.facts.models import FactType as _FactType
+            since = datetime.now() - timedelta(days=days)
+            facts = await self._fact_retriever._store.query(
+                subject="world", type=_FactType.EVENT, since=since,
+                limit=40, include_expired=True,
+            )
+            return [f.content for f in facts]
+        except Exception as e:
+            print(f"[world] recent-scan lookup failed: {e}", flush=True)
+            return []
+
     async def _already_fetched_today(self) -> bool:
         """Return True if world facts for today already exist in the facts table."""
         if self._fact_retriever is None:
@@ -116,6 +136,7 @@ class WorldScheduler:
 
         briefing = await fetch_daily_briefing(
             self._llm, self._persona, target_date=today,
+            recent=await self._recently_scanned(),
         )
         await self._write(briefing)
 
@@ -145,5 +166,6 @@ class WorldScheduler:
         """Manual trigger (for /world refresh-style commands or tests)."""
         briefing = await fetch_daily_briefing(
             self._llm, self._persona, target_date=date.today(),
+            recent=await self._recently_scanned(),
         )
         await self._write(briefing)
