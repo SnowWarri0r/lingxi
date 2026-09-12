@@ -124,10 +124,21 @@ class PlanExecutor:
         if current_plan is None:
             return
 
-        recent_events = await self._retriever.fetch(FactQuery(
+        # fetch() ranks 0.5*recency + 0.3*(importance/10), and across a
+        # two-hour window the recency term moves 0.010 end to end while
+        # importance moves 0.27 — so importance decided both which moments
+        # came back and what order they were in. Over 194 real ticks the
+        # guard's `previous` was not the latest moment on 47%, and the list
+        # the model read was out of time order on 57%; three ticks running
+        # once wrote 「千砂那段还在耳朵边转 / 懒得动」 while the guard compared
+        # each against an older entry. Over-fetch, then take the last three by
+        # the clock and hand them over oldest-first, so "刚才经历过" reads
+        # forward and ends on the moment this one has to follow.
+        pool = await self._retriever.fetch(FactQuery(
             subject="aria", type=FactType.EVENT,
-            since=now - timedelta(hours=2), limit=3,
+            since=now - timedelta(hours=2), limit=12,
         ))
+        recent_events = sorted(pool, key=lambda f: f.ts)[-3:]
         tw = self._tag_value(current_plan, "time_window") or "?"
         window = _parse_time_window(tw)
         position = (
@@ -141,7 +152,7 @@ class PlanExecutor:
             now_hhmm=now.strftime("%H:%M"),
             position=position,
         )
-        previous = recent_events[0].content if recent_events else ""
+        previous = recent_events[-1].content if recent_events else ""
         content = await self._generate(prompt)
         if not content:
             return
