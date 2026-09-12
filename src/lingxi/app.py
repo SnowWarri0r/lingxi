@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from lingxi.auth.manager import AuthManager, AuthError
-from lingxi.auth.models import AuthConfig, AuthMethod
+from lingxi.auth.models import AuthMethod
 from lingxi.auth.profile_store import ProfileStore
 from lingxi.auth.external_sync import ExternalCredentialSync
 from lingxi.conversation.engine import ConversationEngine
@@ -83,7 +83,7 @@ async def _handle_annotation_command(engine, cmd: dict) -> None:
                 print(f"[annotate] ✏️ 记下修正 ({last_turn_id[:8]})")
             else:
                 await collector.record_negative(last_turn_id)
-                print(f"[annotate] 👎 记下了（欢迎补 :bad <应该说>）")
+                print("[annotate] 👎 记下了（欢迎补 :bad <应该说>）")
     except Exception as e:
         print(f"[annotate] 失败: {e}")
 
@@ -358,9 +358,9 @@ async def cmd_login(
         # Check env var as fallback
         env_var = AuthManager._env_var_name(provider)
         print(f"未找到 '{provider}' 的 OAuth 配置。")
-        print(f"你可以:")
+        print("你可以:")
         print(f"  1. 设置环境变量 {env_var}")
-        print(f"  2. 在 config/default.yaml 的 auth.providers 中配置 OAuth")
+        print("  2. 在 config/default.yaml 的 auth.providers 中配置 OAuth")
         return
 
     method = AuthMethod.OAUTH_DEVICE_FLOW if use_device_flow else None
@@ -368,7 +368,7 @@ async def cmd_login(
     try:
         await auth.login(provider, method=method)
         print(f"已成功登录 {provider}。")
-        print(f"Token 已缓存到 ~/.persona-agent/tokens/")
+        print("Token 已缓存到 ~/.persona-agent/tokens/")
     except Exception as e:
         print(f"登录失败: {e}")
         sys.exit(1)
@@ -500,12 +500,12 @@ async def run_cli() -> None:
 
     print(f"\n{'='*50}")
     print(f"  {persona_name} 已上线")
-    print(f"  /quit    退出")
-    print(f"  /stats   查看记忆状态")
-    print(f"  /mood    查看当前心情")
-    print(f"  /memories <query>  搜索记忆")
-    print(f"  /entities  查看实体图谱")
-    print(f"  /episodes  查看最近session摘要")
+    print("  /quit    退出")
+    print("  /stats   查看记忆状态")
+    print("  /mood    查看当前心情")
+    print("  /memories <query>  搜索记忆")
+    print("  /entities  查看实体图谱")
+    print("  /episodes  查看最近session摘要")
     print(f"{'='*50}\n")
 
     try:
@@ -571,19 +571,19 @@ async def run_cli() -> None:
 
 def _print_help() -> None:
     print("""
-persona-agent - 虚拟人格对话代理
+lingxi - 虚拟人格对话代理
 
 用法:
-  persona-agent                              启动对话 (使用默认人设)
-  persona-agent -p <persona.yaml>            使用指定人设
-  persona-agent -c <config.yaml>             使用指定配置
-  persona-agent login [provider]             浏览器 OAuth 登录 (PKCE)
-  persona-agent login [provider] --device-auth  设备码登录 (适合远程/无头环境)
-  persona-agent logout [provider]            登出并清除缓存 token
-  persona-agent auth-status                  查看认证状态
+  lingxi                              启动对话 (使用默认人设)
+  lingxi -p <persona.yaml>            使用指定人设
+  lingxi -c <config.yaml>             使用指定配置
+  lingxi login [provider]             浏览器 OAuth 登录 (PKCE)
+  lingxi login [provider] --device-auth  设备码登录 (适合远程/无头环境)
+  lingxi logout [provider]            登出并清除缓存 token
+  lingxi auth-status                  查看认证状态
 
 认证方式 (按优先级):
-  1. 缓存的 OAuth Token     persona-agent login openai
+  1. 缓存的 OAuth Token     lingxi login openai
   2. 环境变量                ANTHROPIC_API_KEY=sk-ant-xxx
   3. 配置文件中的 api_key
 

@@ -14,7 +14,7 @@ import os
 import platform
 import subprocess
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from lingxi.auth.models import (

@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import os
 import secrets
 import urllib.parse
 import webbrowser
@@ -23,7 +22,7 @@ from datetime import datetime, timedelta
 
 import httpx
 
-from lingxi.auth.models import AuthConfig, OAuthProviderConfig, TokenInfo
+from lingxi.auth.models import AuthConfig, TokenInfo
 
 
 class PKCEFlowError(Exception):
@@ -135,8 +134,8 @@ class PKCEFlowAuth:
 
         try:
             print(f"\n{'='*50}")
-            print(f"  正在打开浏览器进行登录...")
-            print(f"  如果浏览器没有自动打开，请手动访问：")
+            print("  正在打开浏览器进行登录...")
+            print("  如果浏览器没有自动打开，请手动访问：")
             print(f"  {authorize_url[:80]}...")
             print(f"{'='*50}\n")
 
