@@ -197,7 +197,15 @@ class Reflector:
         return sum(1 for s in sims if s >= self._echo_threshold), closest
 
     async def _generate_questions(self, recent: list[Fact]) -> list[str]:
-        facts_block = "\n".join(f"  - {f.content}" for f in recent[-50:])
+        # `recent` arrives newest-first from the store, so the old `[-50:]`
+        # took the OLDEST 50: on the 3 of 33 logged runs whose window ran past
+        # 50 events (86, 61, 53) the newest 36 / 11 / 3 moments were dropped
+        # and she reflected on the day before last. Reversing also puts the
+        # day back in the order it happened — a logged prompt opened with the
+        # late-night noodles and closed with that morning's corridor, and read
+        # backwards nothing leads to anything.
+        day = list(reversed(recent[:50]))
+        facts_block = "\n".join(f"  - {f.content}" for f in day)
         prompt = _QUESTIONS_PROMPT.format(facts_block=facts_block)
         try:
             kwargs = {"model": self._model} if self._model else {}
