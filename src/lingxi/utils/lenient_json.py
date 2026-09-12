@@ -87,4 +87,22 @@ def loads(text: str) -> Any:
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
+        pass
+    try:
         return json.loads(escape_inner_quotes(cleaned))
+    except json.JSONDecodeError:
+        pass
+    # A well-formed payload with commentary after it ("Extra data") — the
+    # scorer hit this and every fact in that batch silently took its source
+    # default. raw_decode reads the first complete value and stops, which is
+    # the whole payload when there is no trailing prose and the right answer
+    # when there is. Still raises for a genuinely broken payload, so callers
+    # keep their fallback.
+    for candidate in (cleaned, escape_inner_quotes(cleaned)):
+        stripped = candidate.lstrip()
+        if stripped[:1] in ("[", "{"):
+            try:
+                return json.JSONDecoder().raw_decode(stripped)[0]
+            except json.JSONDecodeError:
+                continue
+    return json.loads(cleaned)
