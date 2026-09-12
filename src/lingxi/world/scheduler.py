@@ -144,12 +144,28 @@ class WorldScheduler:
         """Store each item as a world EVENT fact."""
         if self._world_writer is None or not briefing.items:
             return
+        # What she writes like, drawn from every text field she is authored
+        # with — her lexicon and venue names are where the borrowed scripts
+        # live, and those are as much hers as the prose.
+        try:
+            from lingxi.world.script_filter import persona_script_reference
+            reference = persona_script_reference(self._persona)
+        except Exception:
+            reference = ""
+
         try:
             from lingxi.facts.models import FactType as _FactType
+            from lingxi.world.script_filter import foreign_ratio, reads_as_hers
             from datetime import datetime as _dt, timedelta as _td
             for item in briefing.items:
                 content = (item.voice or item.headline or "").strip()
                 if not content:
+                    continue
+                # The prompt asks for her language and gets it about half the
+                # time; an item she cannot say is worse than one item fewer.
+                if not reads_as_hers(content, reference):
+                    print(f"[world] dropped ({foreign_ratio(content, reference):.0%} "
+                          f"foreign script): {content[:40]}", flush=True)
                     continue
                 await self._world_writer.write(
                     subject="world",

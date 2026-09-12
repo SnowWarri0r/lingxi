@@ -2,7 +2,6 @@
 
 from datetime import date
 
-import pytest
 
 from lingxi.world.models import DailyBriefing, NewsItem
 
