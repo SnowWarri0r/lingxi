@@ -28,6 +28,7 @@ class WorldScheduler:
     def __init__(
         self,
         llm,
+        persona=None,
         *,
         morning_after_hour: int = 6,
         check_interval_minutes: int = 30,
@@ -36,6 +37,7 @@ class WorldScheduler:
         fact_retriever=None,
     ):
         self._llm = llm
+        self._persona = persona
         self._morning_after_hour = morning_after_hour
         self._check_interval = check_interval_minutes * 60
         self._empty_retry = timedelta(hours=empty_retry_hours)
@@ -46,6 +48,15 @@ class WorldScheduler:
 
     async def start(self) -> None:
         if self._task is not None:
+            return
+        # A persona who follows nothing has no morning to fetch. Checking here
+        # rather than inside the loop keeps the whole task from existing: the
+        # searches are the single most expensive call in the app (4.33M input
+        # tokens over 77 fetches), so a persona that would only discard them
+        # should never make one.
+        if not (getattr(self._persona, "world_interests", None) or []):
+            print("[world] persona follows nothing in particular — "
+                  "scheduler not started", flush=True)
             return
         self._running = True
         self._task = asyncio.create_task(self._loop())
@@ -104,49 +115,35 @@ class WorldScheduler:
         print(f"[world] no briefing for {today}, fetching...", flush=True)
 
         briefing = await fetch_daily_briefing(
-            self._llm, target_date=today,
+            self._llm, self._persona, target_date=today,
         )
+        await self._write(briefing)
 
-        if self._world_writer is not None and briefing.items:
-            try:
-                from lingxi.facts.models import FactType as _FactType
-                from datetime import datetime as _dt, timedelta as _td
-                for item in briefing.items:
-                    content = (item.aria_voice or item.headline or "").strip()
-                    if not content:
-                        continue
-                    await self._world_writer.write(
-                        subject="world",
-                        content=content,
-                        type=_FactType.EVENT,
-                        ts=_dt.combine(briefing.date, _dt.min.time()),
-                        tags=[item.category],
-                        expires_at=_dt.now() + _td(days=2),
-                    )
-            except Exception as e:
-                print(f"[world] facts write failed: {e}", flush=True)
+    async def _write(self, briefing) -> None:
+        """Store each item as a world EVENT fact."""
+        if self._world_writer is None or not briefing.items:
+            return
+        try:
+            from lingxi.facts.models import FactType as _FactType
+            from datetime import datetime as _dt, timedelta as _td
+            for item in briefing.items:
+                content = (item.voice or item.headline or "").strip()
+                if not content:
+                    continue
+                await self._world_writer.write(
+                    subject="world",
+                    content=content,
+                    type=_FactType.EVENT,
+                    ts=_dt.combine(briefing.date, _dt.min.time()),
+                    tags=[item.category],
+                    expires_at=_dt.now() + _td(days=2),
+                )
+        except Exception as e:
+            print(f"[world] facts write failed: {e}", flush=True)
 
     async def trigger_now(self) -> None:
         """Manual trigger (for /world refresh-style commands or tests)."""
-        today = date.today()
         briefing = await fetch_daily_briefing(
-            self._llm, target_date=today,
+            self._llm, self._persona, target_date=date.today(),
         )
-        if self._world_writer is not None and briefing.items:
-            try:
-                from lingxi.facts.models import FactType as _FactType
-                from datetime import datetime as _dt, timedelta as _td
-                for item in briefing.items:
-                    content = (item.aria_voice or item.headline or "").strip()
-                    if not content:
-                        continue
-                    await self._world_writer.write(
-                        subject="world",
-                        content=content,
-                        type=_FactType.EVENT,
-                        ts=_dt.combine(briefing.date, _dt.min.time()),
-                        tags=[item.category],
-                        expires_at=_dt.now() + _td(days=2),
-                    )
-            except Exception as e:
-                print(f"[world] trigger_now facts write failed: {e}", flush=True)
+        await self._write(briefing)

@@ -412,6 +412,7 @@ class FeishuBot(OutboundChannel):
             from lingxi.world.scheduler import WorldScheduler
             self._world_scheduler = WorldScheduler(
                 llm=self.engine.llm,
+                persona=getattr(self.engine, "persona", None),
                 world_writer=self.engine.world_writer,
                 fact_retriever=getattr(self.engine, "fact_retriever", None),
             )

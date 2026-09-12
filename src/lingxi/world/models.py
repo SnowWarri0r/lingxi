@@ -14,27 +14,24 @@ bring something up when relevant.
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
 
 from pydantic import BaseModel, Field
-
-
-NewsCategory = Literal[
-    "天文", "文学", "上海本地", "科技", "全球大事", "其他"
-]
 
 
 class NewsItem(BaseModel):
     """One item in today's briefing.
 
-    aria_voice is what gets surfaced — not the headline. The fetcher
-    re-writes each item in her register ("今早扫到 X" / "看了下 X")
-    so it reads as "what she absorbed", not a news ticker.
+    `voice` is what gets surfaced — not the headline. The fetcher re-writes
+    each item in her register ("今早扫到 X" / "看了下 X") so it reads as what
+    she absorbed, not a news ticker.
+
+    category is free text: the subjects come from the persona's
+    world_interests, so no fixed vocabulary can cover them.
     """
 
     headline: str             # original headline / topic
-    aria_voice: str           # her one-line take, IM-style
-    category: NewsCategory = "其他"
+    voice: str                # her one-line take, IM-style
+    category: str = "其他"
     source: str = ""          # outlet / domain
     url: str = ""             # optional
     fetched_at: datetime = Field(default_factory=datetime.now)

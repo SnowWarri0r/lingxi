@@ -602,6 +602,15 @@ class PersonaConfig(BaseModel):
     # forward instead of back: the prompt states how far off each one is,
     # so a show in November cannot be announced as tomorrow.
     upcoming_shows: list[UpcomingShow] = Field(default_factory=list)
+    # What she'd plausibly scan for in a morning — the subjects the daily
+    # world fetch searches, and the reason it is a persona field at all. The
+    # fetch prompt used to name its own categories (astronomy, publishing,
+    # Shanghai) and its own writer ("28 岁的天文人 + 写作者"), so every persona
+    # woke up to telescope launches in the previous character's register.
+    # Empty means she doesn't follow anything in particular and the fetch is
+    # skipped entirely — that path had cost 4.33M input tokens for output
+    # nothing ever read.
+    world_interests: list[str] = Field(default_factory=list)
     # Run the introspective life-sim (DailyPlanner + PlanExecutor writing
     # subject="aria" inner-life events)? On for a persona with a rich simulated
     # life (Aria); off for a simple companion (a house catgirl) whose proactive
