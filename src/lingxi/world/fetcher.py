@@ -24,7 +24,7 @@ from typing import Any
 from lingxi.world.models import DailyBriefing, NewsItem
 
 
-_FETCH_PROMPT = """今天是 {today}。请用 web_search 查一下今天/昨天的新闻，从这些类目里挑：
+_FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/昨天的新闻，从这些类目里挑：
 {topics_block}
 
 挑选标准：
@@ -79,8 +79,22 @@ def build_fetch_prompt(persona, target_date: date) -> str | None:
     if not interests:
         return None
     from lingxi.persona.self_context import build_self_context
+    # Which city counts as 外面. The weather block and the daylight calc both
+    # read persona.location; the fetch did not, so on its first real day it
+    # returned local weather for one country and the persona's home city as
+    # somewhere else, in a prompt whose own weather line was the home city.
+    from lingxi.temporal.sun import persona_location
+    where = ""
+    try:
+        name = (persona_location(persona).name or "").strip()
+        if name:
+            where = (f"她人在{name}——「本地/外面」指的是{name}，"
+                     f"别的地方要说清是哪儿。")
+    except Exception:
+        pass
     return _FETCH_PROMPT.format(
         today=target_date.isoformat(),
+        where=where,
         topics_block="\n".join(f"- {t}" for t in interests),
         self_context=build_self_context(persona),
     )
