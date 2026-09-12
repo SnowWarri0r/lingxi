@@ -112,6 +112,26 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
             + "\n".join(lines))
 
 
+def build_world_block(facts) -> str | None:
+    """The one thing she picked up from outside the room today.
+
+    Pushed, not retrieved. The orchestrator was offered `world.event` in all
+    324 logged calls and asked for it zero times, by either the fact_queries
+    path or archival_memory_search — which is what a pull path does with
+    ambient context, since it is by definition not what you need to answer the
+    message in front of you. The only read those facts ever got was the
+    fetcher's own "did I run today?" probe.
+
+    One item, not a digest: she noticed something, she did not read the news.
+    """
+    if not facts:
+        return None
+    top = max(facts, key=lambda f: (f.importance if f.importance is not None
+                                    else 5))
+    return ("## 今天你扫到的一条（自己看到的，不用非讲出来——聊到相关的再顺口提）\n"
+            f"- {top.content}")
+
+
 def build_upcoming_shows_block(persona, today=None) -> str | None:
     """Her schedule, for the per-turn reminder rather than the system prompt.
 
