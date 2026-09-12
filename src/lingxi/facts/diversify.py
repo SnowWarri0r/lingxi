@@ -3,7 +3,7 @@
 Selecting the highest-scoring N along a single axis returns a cluster. The
 opener block asks for the eight best facts about him and, on 2026-08-31, got
 eight slots holding three subjects: the autograph at the Chengdu show three
-times over, the handwritten letter twice, the trip to see Liyuu twice. She
+times over, the handwritten letter twice, the trip to the event twice. She
 held twenty-eight distinct facts at the time and could see three of them. It
 shows in what she says — she circles the same thing.
 
