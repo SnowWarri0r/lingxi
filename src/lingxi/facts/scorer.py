@@ -53,6 +53,35 @@ _PROMPT_TEMPLATE = """我在给自己最近经历的事打分——这些事对*
 """
 
 
+# The rubric above asks how much an event moved her, which is the right
+# question for her own life and the wrong one for facts about him. Rated by
+# emotional impact, 「他是阿澪的粉丝，很在意抽选」 scored 3 — the same as a
+# haircut — and 「他住在邻市」 ranked 28th of 39, both far outside the pool that
+# reaches the prompt, squeezed out by a cluster of dated facts about one
+# weekend. For knowing a person the axis is not impact but durability: what
+# still explains him next month.
+_USER_PROMPT_TEMPLATE = """我在给"我知道的关于对方的事"打分——这条对**了解他这个人**有多要紧（1-10）。
+不是问这件事多轰动，是问：下个月它还能不能帮我理解他、跟他说上话。
+  - 具体某一天的一次性细节（"周三加班到十点"） → 1-3
+  - 一次性的事件，但会留下后续（"上周去了某地"） → 3-5
+  - 稳定的作息、口味、习惯、他在哪 → 5-7
+  - 他是谁：长期热爱的事、在意的人、反复出现的处境、他怎么定义你们的关系 → 7-10
+
+同一件事的日期细节分低，那件事**为什么对他重要**分高。
+
+输入 {n} 条，输出 JSON array：
+[{{"id": "...", "score": 1-10, "reason": "一句话"}}, ...]
+
+事实：
+{facts_block}
+"""
+
+
+def _prompt_for(bucket: str) -> str:
+    """Her own life and what she knows about him need different questions."""
+    return _USER_PROMPT_TEMPLATE if bucket == "other" else _PROMPT_TEMPLATE
+
+
 @dataclass
 class _PendingFact:
     fact: Fact
@@ -137,13 +166,21 @@ class ImportanceScorer:
             f"[{i+1}] id={p.fact.id} type={p.fact.type.value} content=\"{p.fact.content}\""
             for i, p in enumerate(pending)
         )
-        prompt = _PROMPT_TEMPLATE.format(n=len(pending), facts_block=facts_block)
+        prompt = _prompt_for(bucket).format(
+            n=len(pending), facts_block=facts_block)
         try:
             kwargs = {"model": self._model} if self._model else {}
             response = await self._llm.complete(
                 messages=[{"role": "user", "content": prompt}],
                 system=system,
-                max_tokens=400,
+                # A full batch is five facts, each answered with a 32-char id
+                # and a sentence of Chinese — 400 truncated the array mid
+                # string, and a truncated array parses as nothing, so every
+                # fact in the batch silently took its source default instead
+                # of a score. Invisible afterwards: the fallback looks like a
+                # real rating. Production rarely filled a batch, so it showed
+                # up only when 39 facts were rescored at once.
+                max_tokens=1200,
                 temperature=0.3,
                 _debug_purpose="importance_scorer",
                 **kwargs,

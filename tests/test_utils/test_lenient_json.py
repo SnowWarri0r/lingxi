@@ -104,3 +104,36 @@ class TestEscapeInnerQuotesDirectly:
 
     def test_inner_quote_gets_escaped(self):
         assert escape_inner_quotes('{"a": "x"y"}') == '{"a": "x\\"y"}'
+
+
+class TestTrailingProse:
+    """A complete payload followed by commentary.
+
+    json.loads calls that "Extra data" and raises, so the scorer's whole batch
+    fell back to source defaults — invisible afterwards, because a default
+    looks exactly like a rating.
+    """
+
+    def test_an_array_with_a_note_after_it_still_parses(self):
+        out = loads('[{"id":"a","score":7}]\n\n以上是我的打分。')
+        assert out == [{"id": "a", "score": 7}]
+
+    def test_an_object_with_a_note_after_it_still_parses(self):
+        assert loads('{"a": 1}\n说明：仅供参考') == {"a": 1}
+
+    def test_a_clean_payload_is_unaffected(self):
+        assert loads('[{"id":"a","score":7}]') == [{"id": "a", "score": 7}]
+
+    def test_trailing_prose_and_inner_quotes_together(self):
+        out = loads(
+            '[{"id":"a","score":7,"reason":"他说"随便"就行"}]\n完毕')
+        assert out[0]["score"] == 7
+
+    def test_a_truncated_payload_still_raises(self):
+        """Truncation is not recoverable and must keep the caller's fallback."""
+        with pytest.raises(json.JSONDecodeError):
+            loads('[{"id":"a","score":7,"reason":"没写完')
+
+    def test_prose_before_the_payload_still_raises(self):
+        with pytest.raises(json.JSONDecodeError):
+            loads('这是我的打分：\n[{"id":"a","score":7}]')
