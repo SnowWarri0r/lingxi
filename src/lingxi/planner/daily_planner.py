@@ -98,11 +98,20 @@ class DailyPlanner:
             FactQuery(subject="aria", type=FactType.PATTERN,
                       since=yesterday_start, limit=5)
         )
+        # The two blocks are shown as different horizons but draw on one pool
+        # ranked 0.5*recency + 0.3*importance, so yesterday's insights win the
+        # week slots too: measured on the live store, all 5 reflection lines
+        # reappeared among the 10 pattern lines — 15 lines carrying 10
+        # insights, one day's theme at double weight in the prompt that sets
+        # the whole next day. Over-fetch by what the first block took, drop
+        # those, and the week block reaches a day further back instead.
         week_ago = now - timedelta(days=7)
-        patterns = await self._retriever.fetch(
+        seen = {f.id for f in reflections}
+        wider = await self._retriever.fetch(
             FactQuery(subject="aria", type=FactType.PATTERN,
-                      since=week_ago, limit=10)
+                      since=week_ago, limit=10 + len(seen))
         )
+        patterns = [f for f in wider if f.id not in seen][:10]
 
         if now.hour < 9:
             scope_phrase = ""
