@@ -929,9 +929,23 @@ class ProactiveScheduler:
         # from up there it lost to her own earlier claims). Every path that
         # speaks has to place it itself now — without this the proactive path
         # would have nothing at all on whether a show has happened.
-        from lingxi.persona.prompt_builder import build_upcoming_shows_block
+        from lingxi.persona.prompt_builder import (
+            build_upcoming_shows_block, build_world_block)
         shows_block = build_upcoming_shows_block(self.engine.persona)
         shows_block = f"{shows_block}\n\n" if shows_block else ""
+
+        # One thing from outside the practice room. This path needs it most:
+        # measured over her sent openers, the material is almost entirely her
+        # own day, and her reflections on it collapse into a handful of ideas
+        # written many ways.
+        world_block = ""
+        try:
+            world_block = build_world_block(
+                await self.engine._todays_world_facts()) or ""
+            if world_block:
+                world_block += "\n\n"
+        except Exception as e:
+            print(f"[proactive] world block failed (non-fatal): {e}", flush=True)
 
         style = random.choice(_MESSAGE_STYLES)
         style_block = (
@@ -950,6 +964,7 @@ class ProactiveScheduler:
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
+                f"{world_block}"
                 f"{shows_block}"
                 f"{opener_shape}\n"
                 f"{style_block}"
@@ -967,6 +982,7 @@ class ProactiveScheduler:
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
+                f"{world_block}"
                 f"{shows_block}"
                 f"{opener_shape}\n"
                 f"{style_block}"
