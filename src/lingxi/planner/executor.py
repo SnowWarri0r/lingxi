@@ -24,7 +24,7 @@ _MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_wind
 我刚才这 2 小时经历过：
 {recent_events}
 
-现在是 {now_hhmm}——时间往前走了一点，我记一下此刻在做什么。接着刚才往下走就行，事情走到哪儿就写哪儿。
+现在是 {now_hhmm}，{position}。我记一下此刻在做什么。接着刚才往下走就行，事情走到哪儿就写哪儿。
 
 写一条**现在这一刻**，1-2 句，第一人称当下时态，符合你自己的口吻，直接以动作或观察开头（如『趴窗台晒太阳』）。
 - **取景放在正常生活的尺度上**：眼前在做的那件事、周围的动静、身边的人和刚说的一句话、脑子里冒出来的念头、外面的天气声音——像跟人讲"我刚在干嘛"那样的粒度。
@@ -52,6 +52,30 @@ def _parse_time_window(tag_value: str) -> tuple[int, int] | None:
         return None
     start_h, start_m, end_h, end_m = map(int, m.groups())
     return start_h * 60 + start_m, end_h * 60 + end_m
+
+
+def describe_position(now_minute: int, start: int, end: int) -> str:
+    """Where in this plan step we are, in the words the moment needs.
+
+    Steps run 30 to 210 minutes while this ticks every 30, so a long one has
+    to yield six or seven distinct moments. Handed only a clock reading, the
+    model restated the start of the block for two hours. Saying which part of
+    the step this is turns the same window into a beginning, a middle and an
+    end — and keeps the restatement guard from having to throw those ticks
+    away, which on a 3.5-hour step would empty most of a morning.
+    """
+    span = (end - start) % 1440 or 1440
+    elapsed = (now_minute - start) % 1440
+    left = span - elapsed
+    if span <= 45:
+        return "这一段就这么点时间"
+    if elapsed <= 30:
+        return "这一段刚开始"
+    if left <= 30:
+        return "这一段快结束了，手上的事该收尾了"
+    if elapsed >= span / 2:
+        return f"这一段过半了，还剩 {left} 分钟"
+    return f"这一段走了 {elapsed} 分钟，还有 {left} 分钟"
 
 
 def _in_window(now_minute: int, start: int, end: int) -> bool:
@@ -105,11 +129,17 @@ class PlanExecutor:
             since=now - timedelta(hours=2), limit=3,
         ))
         tw = self._tag_value(current_plan, "time_window") or "?"
+        window = _parse_time_window(tw)
+        position = (
+            describe_position(now.hour * 60 + now.minute, *window)
+            if window else "时间往前走了一点"
+        )
         prompt = _MOMENT_PROMPT.format(
             plan_content=current_plan.content,
             time_window=tw,
             recent_events=self._bullets(recent_events) or "（没什么特别的）",
             now_hhmm=now.strftime("%H:%M"),
+            position=position,
         )
         previous = recent_events[0].content if recent_events else ""
         content = await self._generate(prompt)
