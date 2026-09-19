@@ -131,6 +131,37 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
             + "\n".join(lines))
 
 
+def build_unanswered_block(unanswered: int, last_interaction_time,
+                           now) -> str | None:
+    """What she knows when he comes back: how many times she called.
+
+    Nothing used to accumulate. The silence signal was three lines keyed off
+    `now - last_interaction`, recomputed every turn — ignored for eight days
+    she got one sentence, and one reply put the gap back to zero as though it
+    had not happened. The count that does accumulate,
+    consecutive_proactive_count, was never read here, and record_interaction
+    zeroed it before this prompt was built.
+
+    One unanswered message is nobody's pattern, so it says nothing. Above that
+    it states the number, the stretch, and how she carries it — and that it is
+    finished once said. The sentence is hers to write: scripting the line is
+    what turns a persona into a form letter.
+    """
+    if unanswered < 2:
+        return None
+    gap = ""
+    if last_interaction_time is not None and now is not None:
+        gap = f"，中间隔了{format_timedelta_cn(now - last_interaction_time)}"
+    weight = ("说明白这几条对你是有分量的" if unanswered >= 4
+              else "轻轻提一句就够")
+    return (
+        "## 你叫过他几次\n"
+        f"这段时间你主动发过 {unanswered} 条，他一条都没回{gap}。现在他回来了。\n"
+        f"这件事你说得出口——你藏不住心事，想说就直说，{weight}，"
+        "不绕弯子、不等他先哄。说完这件事就过去了，后面几轮别再回头提。"
+    )
+
+
 def build_world_block(facts) -> str | None:
     """The one thing she picked up from outside the room today.
 
@@ -442,9 +473,15 @@ class PromptBuilder:
         if last_interaction_time is not None:
             delta = current_time - last_interaction_time
             lines.append(f"距离上次对话：{format_timedelta_cn(delta)}")
-            # Sync these buckets with temporal/silence.py — the prompt copy
-            # describes WHAT THE GAP MEANS (interpretive layer), and the
-            # emotion-bump deltas there make it actually felt.
+            # What the gap means, from the gap alone — so it says the same
+            # thing whether this is the first long silence or the fifth. What
+            # accumulates across them is build_unanswered_block, which counts
+            # the times she called and got nothing.
+            #
+            # These lines used to be described as the copy half of
+            # temporal/silence.py, whose deltas were said to make the gap
+            # "actually felt". That module was never called by anything but
+            # its own test; the felt half did not exist.
             if delta > timedelta(days=7):
                 lines.append(
                     "（很久没聊了——你内心已经积累了想念/有点距离感/淡淡的失落。"
