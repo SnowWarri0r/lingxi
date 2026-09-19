@@ -29,6 +29,7 @@ from lingxi.memory.manager import MemoryManager
 from lingxi.persona.models import PersonaConfig
 from lingxi.persona.prompt_builder import (
     PromptBuilder,
+    build_unanswered_block,
     build_upcoming_shows_block,
     build_world_block,
 )
@@ -501,11 +502,18 @@ class ConversationEngine:
         # she had nothing to check a claim against: told "都五年了" she accepted
         # it and invented a five-year shared history on the spot.
         self._acquaintance: tuple[datetime, int] | None = None
+        # How many times she reached out with no reply, captured for the same
+        # reason as last_interaction_time and one line earlier than it used to
+        # be lost: record_interaction resets this to zero, so by the time the
+        # prompt was built the fact that she had called seven times and heard
+        # nothing no longer existed anywhere she could see it.
+        self._unanswered = 0
         if self.interaction_tracker and channel and recipient_id:
             rec = self.interaction_tracker.get_record(channel, recipient_id)
             if rec:
                 self._relationship_level = rec.relationship_level
                 last_interaction_time = rec.last_interaction
+                self._unanswered = rec.consecutive_proactive_count
                 if rec.first_interaction:
                     self._acquaintance = (rec.first_interaction, rec.total_turns)
             self.interaction_tracker.record_interaction(channel, recipient_id)
@@ -674,6 +682,13 @@ class ConversationEngine:
         world_block = build_world_block(await self._todays_world_facts())
         if world_block:
             state_blocks.append(world_block)
+        # Only on the turn he comes back: the counter is already reset, so this
+        # says its piece once and is gone next turn, which is the behaviour
+        # asked for — say it, then let it go.
+        unanswered_block = build_unanswered_block(
+            getattr(self, "_unanswered", 0), last_interaction_time, now)
+        if unanswered_block:
+            state_blocks.append(unanswered_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
 
