@@ -75,6 +75,12 @@ proactive:
   cooldown_hours: 5             # 两次主动消息之间的最小间隔
   max_consecutive_proactive: 2  # 对方不回复时最多连发几条（收回到 2，别太黏）
   reengage_after_hours: 6       # 被晾这么久后即使到连发上限也允许再轻戳一次（防永久哑火）
+  # 不做指数退避：等待时间固定 6 小时，不随未回复条数翻倍。
+  # 原来是每多一条未回就翻倍（6h→12h→24h→48h→96h→192h，14 天封顶），结果
+  # 7 条未回就意味着整整 8 天听不到她——而防刷屏靠的本来就是曲线前段和
+  # max_consecutive_proactive，后段只是让她消失。真正该限制她的是「有没有话说」，
+  # 那由开场白的去重/相似度守卫和 should_send 负责，不由计时器负责。
+  reengage_backoff: 1.0
   quiet_hours_start: 23         # 静默时段开始（23点）
   quiet_hours_end: 8            # 静默时段结束（8点）
 
