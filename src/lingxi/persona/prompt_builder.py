@@ -48,6 +48,25 @@ def _gap_cn(target, today) -> str:
     return f"还有 {days // 30} 个多月（{days} 天）"
 
 
+# The one ladder of day-part labels. The orchestrator needs the same words the
+# chat prompt uses: it is asked what he is doing 此刻 and, with no clock of its
+# own, once answered 「周日下午」 at 19:32 — a string then rendered under the
+# real time as 对方此刻 and marked as the authority over it.
+_TOD_RANGES: list[tuple[int, str]] = [
+    (5, "深夜"), (7, "凌晨"), (9, "早上"), (11, "上午工作时段"),
+    (13, "中午"), (17, "下午工作时段"), (19, "傍晚"), (22, "晚上"),
+    (24, "夜晚"),
+]
+
+
+def time_of_day_label(hour: int) -> str:
+    """What to call this hour: 早上 / 下午工作时段 / 晚上 …"""
+    for upper, label in _TOD_RANGES:
+        if hour < upper:
+            return label
+    return "深夜"
+
+
 def _upcoming_shows_block(shows, today=None) -> str | None:
     """Her booked dates, each with the distance computed.
 
@@ -361,40 +380,31 @@ class PromptBuilder:
         # and what he just typed — a flat assertion here overrode a user who
         # had said 想下班了 ninety seconds earlier, and she asked whether he
         # was stuck in traffic or already home. Whose day it is decides.
+        tod_label = time_of_day_label(hour)
         if 0 <= hour < 5:
-            tod_label = "深夜"
             tod_hint = "对方如果还醒着，应该是熬夜/失眠/工作"
         elif 5 <= hour < 7:
-            tod_label = "凌晨"
             tod_hint = "多数人还在睡"
         elif 7 <= hour < 9:
-            tod_label = "早上"
             tod_hint = "多数人正在准备上班或刚到公司"
         elif 9 <= hour < 11:
-            tod_label = "上午工作时段"
             tod_hint = "对方大概率在上班。'累/困/想睡'是**上班疲劳**，还要再撑几小时下班。"
         elif 11 <= hour < 13:
-            tod_label = "中午"
             tod_hint = (
                 "午饭时间——对方多数在吃饭，或趴桌午休（短暂、随时会醒）。"
             )
         elif 13 <= hour < 17:
-            tod_label = "下午工作时段"
             tod_hint = "对方大概率在上班。'累/困'是**上班疲劳**，离下班还有几小时。"
         elif 17 <= hour < 19:
-            tod_label = "傍晚"
             tod_hint = "下班时段，对方可能刚下班或还在收尾"
         elif 19 <= hour < 22:
-            tod_label = "晚上"
             tod_hint = "下班后的个人时间"
         elif 22 <= hour < 24:
-            tod_label = "夜晚"
             tod_hint = (
                 "工作日多数人 23:00-24:30 之间才睡，**这个时段对方大概率还醒着**。"
                 "默认他还在，正常往下聊；他主动说要睡了再道晚安。"
             )
         else:  # 24+ (technically unreachable, time wraps at 0)
-            tod_label = "深夜"
             tod_hint = "对方还在聊天属于熬夜"
 
         # self_scene states YOUR OWN ambient light as a plain fact, derived
