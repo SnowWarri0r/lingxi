@@ -603,6 +603,7 @@ class ConversationEngine:
             prev_thread_summary=prev_summary,
             agent_name=self.persona.name,
             known_facts=known_facts,
+            now=now,
         )
         print(
             f"[brain] orch decision: register={decision.register} "

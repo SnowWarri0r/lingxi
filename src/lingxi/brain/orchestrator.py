@@ -20,6 +20,7 @@ OrchestrationDecision.default() — never raises into chat path.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from lingxi.brain.models import OrchestrationDecision
 from lingxi.providers.base import LLMProvider
@@ -72,8 +73,15 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    依据只有一个：他自己在这几轮里说过的话。他说"想下班了"，他就在公司；他说"刚到家"，他就在家。
    说过之后没有新消息表明情况变了，那就还是那个状态——**又聊了几轮 ≠ 又过了几小时**，看
    【最近12轮】里他上一次交代处境是哪句，那句依然算数。
+   **只写地点和在做的事，不写时段**（"下午""晚上""半夜"这类一个都别写）——现在几点看
+   上面【现在】那行，它是准的，这一条会被排在它下面当作"对方此刻"来读。
+   隔了几小时才说的话，要按【现在】重新掂量：几小时前说"困了"，现在只说明他那会儿困，
+   不等于他这几小时在睡。
    例：`还在公司，想下班但没到点`、`在回家的地铁上`、`到家了，在吃饭`、`周末在外面逛`。
    写不出一个确定的状态就留空 ""，{agent} 会自己按钟点推。
+
+【现在】
+{now_line}
 
 【上一轮的 thread_summary】（如果有 — 当作可信的"前情提要"基础）
 {prev_thread_summary}
@@ -139,6 +147,16 @@ def _render_dialog_thread(history: list[dict] | None, limit: int = 12,
     return "\n".join(lines)
 
 
+def _now_line(now: datetime | None) -> str:
+    """The clock, in the same words the chat prompt uses for the hour."""
+    if now is None:
+        return "（未提供——这一轮别对时段下判断）"
+    from lingxi.persona.prompt_builder import time_of_day_label
+    from lingxi.temporal.formatter import format_datetime_cn
+    return (f"{format_datetime_cn(now)}，现在是{time_of_day_label(now.hour)}。"
+            f"对方上一次说自己在干嘛是几点、离现在多久，按这个算。")
+
+
 def build_orchestrator_prompt(
     user_input: str,
     digest: StateDigest,
@@ -148,6 +166,7 @@ def build_orchestrator_prompt(
     prev_thread_summary: str = "",
     agent_name: str = "Aria",
     known_facts: list[str] | None = None,
+    now: datetime | None = None,
 ) -> str:
     last_lived = "；".join(digest.last_lived) if digest.last_lived else "（暂无）"
     catalog_str = "\n".join(f"  {k}: {v}" for k, v in sorted(catalog.items())) or "（空）"
@@ -166,6 +185,13 @@ def build_orchestrator_prompt(
         # to see the first. Showing the contents is what makes the rule real.
         known_facts="\n".join(f"  - {c}" for c in (known_facts or []))
                     or "  （还没记过什么）",
+        # Item 9 asks what he is doing 此刻 and nothing here said when 此刻 was.
+        # On 2026-09-13 the user said he was tired at 15:19 and still up at 19:32; this
+        # answered 「周日下午，在家」 — written at half past seven,
+        # because it could not know. That string renders under the real clock
+        # as 对方此刻 and is marked as the authority over it, and the turn it
+        # produced treated half past seven as the middle of the night.
+        now_line=_now_line(now),
     )
 
 
@@ -180,11 +206,12 @@ async def decide(
     model: str | None = None,
     agent_name: str = "Aria",
     known_facts: list[str] | None = None,
+    now: datetime | None = None,
 ) -> OrchestrationDecision:
     prompt = build_orchestrator_prompt(
         user_input, digest, catalog,
         history=history, prev_thread_summary=prev_thread_summary,
-        agent_name=agent_name, known_facts=known_facts,
+        agent_name=agent_name, known_facts=known_facts, now=now,
     )
     try:
         kwargs = {"model": model} if model else {}
