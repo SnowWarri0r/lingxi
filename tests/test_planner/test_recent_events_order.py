@@ -12,7 +12,7 @@ The damage is visible: 千砂那段还在耳朵边转/懒得动 landed three tic
 while the guard was comparing each one against an older entry.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 
