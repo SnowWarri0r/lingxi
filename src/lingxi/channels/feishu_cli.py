@@ -6,6 +6,26 @@ import asyncio
 import sys
 
 
+def load_proactive_config(cfg: dict):
+    """Build ProactiveConfig from the `proactive:` block of the YAML.
+
+    Driven by the model's own fields rather than a hand-written list of keys.
+    The list had gone stale: reengage_backoff and reengage_max_hours were
+    never on it, so setting either in config/default.yaml did nothing and said
+    nothing — the code default applied while the file claimed otherwise.
+    """
+    from lingxi.temporal.proactive import ProactiveConfig
+
+    block = (cfg or {}).get("proactive") or {}
+    kwargs = {k: v for k, v in block.items()
+              if k in ProactiveConfig.model_fields}
+    thresholds = kwargs.get("silence_thresholds")
+    if isinstance(thresholds, dict):
+        kwargs["silence_thresholds"] = {
+            int(k): int(v) for k, v in thresholds.items()}
+    return ProactiveConfig(**kwargs)
+
+
 def main() -> None:
     """Start the Feishu bot with WebSocket long connection."""
     import os
@@ -47,21 +67,8 @@ def main() -> None:
 
     # Load proactive config
     cfg = load_config(config_path)
-    from lingxi.temporal.proactive import ProactiveConfig
 
-    proactive_cfg = ProactiveConfig(
-        enabled=get_nested(cfg, "proactive", "enabled", default=True),
-        check_interval_minutes=get_nested(cfg, "proactive", "check_interval_minutes", default=5),
-        silence_thresholds={
-            int(k): int(v)
-            for k, v in get_nested(cfg, "proactive", "silence_thresholds", default={1: 72, 2: 24, 3: 6, 4: 3}).items()
-        },
-        cooldown_hours=get_nested(cfg, "proactive", "cooldown_hours", default=12.0),
-        max_consecutive_proactive=get_nested(cfg, "proactive", "max_consecutive_proactive", default=2),
-        reengage_after_hours=get_nested(cfg, "proactive", "reengage_after_hours", default=14.0),
-        quiet_hours_start=get_nested(cfg, "proactive", "quiet_hours_start", default=23),
-        quiet_hours_end=get_nested(cfg, "proactive", "quiet_hours_end", default=8),
-    )
+    proactive_cfg = load_proactive_config(cfg)
 
     # Optional: desktop pet state endpoint. Runs in daemon thread on
     # localhost so the pet process can poll Aria's current state.

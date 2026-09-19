@@ -572,6 +572,16 @@ def _looks_like_self_report_opener(message: str) -> bool:
 class ProactiveScheduler:
     """Background loop that decides and sends proactive messages."""
 
+    # How many past openers the prompt shows her. Context, not an archive.
+    _max_recent_proactive = 10
+    # How far back the anti-repeat guard compares. Larger than the block on
+    # purpose: with the exponential re-engage wait removed, being ignored
+    # costs a flat six hours, so at most four openers a day — and one shared
+    # cap of 10 would leave the guard remembering two and a half days at
+    # exactly the point where it, not a timer, is the only thing limiting her.
+    # Forty covers ten days at that rate.
+    _max_dedup_history = 40
+
     def __init__(
         self,
         config: ProactiveConfig,
@@ -595,7 +605,6 @@ class ProactiveScheduler:
         # 08:04 and again at 11:05 to same recipient because in-memory
         # dict was cleared by intervening service restart.
         self._recent_proactive: dict[str, list[str]] = {}
-        self._max_recent_proactive = 10
         self._history_path: Path | None = None
         if data_dir:
             self._history_path = Path(data_dir) / "proactive_history.json"
@@ -608,12 +617,24 @@ class ProactiveScheduler:
             raw = json.loads(self._history_path.read_text(encoding="utf-8"))
             if isinstance(raw, dict):
                 self._recent_proactive = {
-                    k: [_as_entry(m) for m in v][-self._max_recent_proactive:]
+                    k: [_as_entry(m) for m in v][-self._max_dedup_history:]
                     for k, v in raw.items()
                     if isinstance(v, list)
                 }
         except (json.JSONDecodeError, OSError) as e:
             print(f"[proactive] history load failed (non-fatal): {e}")
+
+    def _remember_proactive(self, key: str, message: str) -> None:
+        """Keep this opener for anti-repetition.
+
+        In memory and on disk: a restart used to wipe the list, and she
+        re-sent 「昨晚又看了一遍那个电影」 three hours later.
+        """
+        recent = self._recent_proactive.setdefault(key, [])
+        recent.append({"text": message, "ts": datetime.now().isoformat()})
+        if len(recent) > self._max_dedup_history:
+            del recent[: len(recent) - self._max_dedup_history]
+        self._save_history()
 
     def _save_history(self) -> None:
         if self._history_path is None:
@@ -841,13 +862,7 @@ class ProactiveScheduler:
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
-        # Remember for anti-repetition (in-memory + persisted to disk so
-        # process restart doesn't wipe; see _load_history docstring)
-        recent = self._recent_proactive.setdefault(key, [])
-        recent.append({"text": message, "ts": datetime.now().isoformat()})
-        if len(recent) > self._max_recent_proactive:
-            del recent[: len(recent) - self._max_recent_proactive]
-        self._save_history()
+        self._remember_proactive(key, message)
 
         return {"key": key, "status": "sent", "message": message}
 
