@@ -39,7 +39,7 @@ async def test_core_memory_block_rendered(tmp_path):
                        ts=datetime(2026, 5, 1, 9, 0)))
     r = FactRetriever(s)
     decision = OrchestrationDecision(
-        engage_level=0.6, register="warm", fact_queries=[], skip=[],
+        engage_level=0.6, register="warm", fact_queries=[],
         topic_anchor="",
     )
     out = await render_dynamic_blocks(r, decision, recipient_key="feishu:x")

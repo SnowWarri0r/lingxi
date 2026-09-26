@@ -136,7 +136,7 @@ async def test_prepare_turn_v2_attaches_images_main_path(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(register="warm", engage_level=0.5,
-                                     fact_queries=[], skip=[], topic_anchor="")
+                                     fact_queries=[], topic_anchor="")
 
     async def _fake_render(*a, **k):
         return ""
@@ -289,7 +289,7 @@ async def test_prepare_turn_v2_injects_current_time(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(register="warm", engage_level=0.5,
-                                     fact_queries=[], skip=[], topic_anchor="")
+                                     fact_queries=[], topic_anchor="")
 
     async def _fake_render(*a, **k):
         return ""
@@ -320,7 +320,7 @@ async def test_prepare_turn_v2_injects_fewshot_voice_anchors(tmp_path, monkeypat
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(register="warm", engage_level=0.5,
-                                     fact_queries=[], skip=[], topic_anchor="")
+                                     fact_queries=[], topic_anchor="")
 
     async def _fake_render(*a, **k):
         return ""
@@ -362,7 +362,7 @@ async def test_system_prompt_carries_no_per_turn_material(tmp_path, monkeypatch)
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(register="warm", engage_level=0.5,
-                                     fact_queries=[], skip=[], topic_anchor="")
+                                     fact_queries=[], topic_anchor="")
 
     calls = {"n": 0}
 

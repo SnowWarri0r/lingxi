@@ -39,7 +39,6 @@ class OrchestrationDecision:
     register: str                       # one of VALID_REGISTERS (clamped)
     fact_queries: list[OrchestratorFactQuery]
     topic_anchor: str
-    skip: list[str]                     # category names to skip rendering
     thread_summary: str = ""            # rolling thread summary for next turn
     plan_conflict: bool = False         # user input implies current plan needs adjustment
     # A concise web-search query when the turn needs an external fact the
@@ -70,7 +69,6 @@ class OrchestrationDecision:
                 OrchestratorFactQuery(category="aria.event", limit=3),
             ],
             topic_anchor="",
-            skip=[],
             thread_summary="",
             plan_conflict=False,
             lookup_query="",
@@ -105,7 +103,6 @@ class OrchestrationDecision:
             register=register,
             fact_queries=queries,
             topic_anchor=str(raw.get("topic_anchor", "")),
-            skip=[str(s) for s in raw.get("skip", [])],
             thread_summary=str(raw.get("thread_summary", "")),
             plan_conflict=bool(raw.get("plan_conflict", False)),
             lookup_query=str(raw.get("lookup_query") or "").strip(),
