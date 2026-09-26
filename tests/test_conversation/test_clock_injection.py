@@ -42,7 +42,7 @@ async def test_frozen_clock_makes_assembly_byte_identical(tmp_path, monkeypatch)
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="light", engage_level=0.5, fact_queries=[], skip=[],
+            register="light", engage_level=0.5, fact_queries=[],
             topic_anchor="anchor", user_state="还在公司")
 
     async def _fake_render(*a, **k):
@@ -73,7 +73,7 @@ async def test_frozen_clock_reaches_the_time_block(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="light", engage_level=0.5, fact_queries=[], skip=[],
+            register="light", engage_level=0.5, fact_queries=[],
             topic_anchor="")
 
     async def _fake_render(*a, **k):

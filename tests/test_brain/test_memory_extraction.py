@@ -15,7 +15,7 @@ from lingxi.conversation.engine import ConversationEngine
 def test_decision_parses_and_cleans_memory_writes():
     d = OrchestrationDecision.from_dict({
         "engage_level": 0.6, "register": "warm", "fact_queries": [],
-        "topic_anchor": "", "skip": [],
+        "topic_anchor": "",
         "memory_writes": ["  对方一般七点半下班  ", "", "   ", "对方养了只猫"],
     })
     assert d.memory_writes == ["对方一般七点半下班", "对方养了只猫"]
@@ -25,7 +25,7 @@ def test_memory_writes_defaults_empty():
     assert OrchestrationDecision.default().memory_writes == []
     d = OrchestrationDecision.from_dict({
         "engage_level": 0.6, "register": "warm", "fact_queries": [],
-        "topic_anchor": "", "skip": [],
+        "topic_anchor": "",
     })
     assert d.memory_writes == []
 

@@ -18,20 +18,18 @@ def test_decision_from_json_basic():
             {"category": "aria.event", "limit": 3}
         ],
         "topic_anchor": "聊到了工作时间",
-        "skip": ["world.event"],
     }
     d = OrchestrationDecision.from_dict(raw)
     assert d.engage_level == 0.7
     assert d.register == "warm"
     assert len(d.fact_queries) == 1
     assert d.fact_queries[0].category == "aria.event"
-    assert "world.event" in d.skip
 
 
 def test_decision_handles_unknown_register_gracefully():
     raw = {
         "engage_level": 0.5, "register": "weirdo",
-        "fact_queries": [], "topic_anchor": "", "skip": [],
+        "fact_queries": [], "topic_anchor": "",
     }
     d = OrchestrationDecision.from_dict(raw)
     assert d.register == "warm"  # fallback
@@ -48,7 +46,7 @@ def test_light_register_is_accepted():
 def test_decision_clamps_engage_level():
     raw = {
         "engage_level": 1.5, "register": "warm",
-        "fact_queries": [], "topic_anchor": "", "skip": [],
+        "fact_queries": [], "topic_anchor": "",
     }
     d = OrchestrationDecision.from_dict(raw)
     assert d.engage_level == 1.0
@@ -77,20 +75,20 @@ def test_lookup_query_parsed_and_defaults_empty():
     assert OrchestrationDecision.default().lookup_query == ""
     d = OrchestrationDecision.from_dict({
         "engage_level": 0.5, "register": "warm", "fact_queries": [],
-        "topic_anchor": "", "skip": [],
+        "topic_anchor": "",
     })
     assert d.lookup_query == ""
     # present → parsed & stripped
     d2 = OrchestrationDecision.from_dict({
         "engage_level": 0.6, "register": "curious", "fact_queries": [],
-        "topic_anchor": "", "skip": [],
+        "topic_anchor": "",
         "lookup_query": "  Love Live Superstar 第一季 东京预选 结果  ",
     })
     assert d2.lookup_query == "Love Live Superstar 第一季 东京预选 结果"
     # null → empty, not the string "None"
     d3 = OrchestrationDecision.from_dict({
         "engage_level": 0.6, "register": "warm", "fact_queries": [],
-        "topic_anchor": "", "skip": [], "lookup_query": None,
+        "topic_anchor": "", "lookup_query": None,
     })
     assert d3.lookup_query == ""
 

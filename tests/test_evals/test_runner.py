@@ -77,7 +77,7 @@ async def test_build_turn_puts_case_facts_in_reach(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -93,7 +93,7 @@ async def test_two_builds_are_identical(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -110,7 +110,7 @@ async def test_pass_verdict_when_under_budget(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -128,7 +128,7 @@ async def test_fail_verdict_when_over_budget(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -146,7 +146,7 @@ async def test_broken_when_premise_fails(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -166,7 +166,7 @@ async def test_pass_rate_does_not_affect_verdict(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -197,7 +197,7 @@ async def test_build_turn_stubs_out_weather(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)
@@ -231,7 +231,7 @@ async def test_build_turn_keeps_sunrise_sunset_live(tmp_path, monkeypatch):
 
     async def _fake_decide(*a, **k):
         return OrchestrationDecision(
-            register="warm", engage_level=0.6, fact_queries=[], skip=[],
+            register="warm", engage_level=0.6, fact_queries=[],
             topic_anchor="")
 
     monkeypatch.setattr(orch_mod, "decide", _fake_decide)

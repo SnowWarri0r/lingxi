@@ -10,8 +10,7 @@ Subject isolation is a structural invariant: facts go into the block
 that matches their subject prefix. There is no rendering path that
 could place a user:* fact into 【你此刻】.
 
-`skip` removes entire categories from rendering (overrides any matching
-fact_query). Empty blocks are dropped.
+Empty blocks are dropped.
 
 Token budget: caller composes [persona_block, dynamic_blocks]; this
 function returns just the dynamic_blocks string. Caller can check
@@ -90,8 +89,6 @@ async def render_dynamic_blocks(
     blocks: dict[str, list[str]] = {"self": [], "them": [], "world": []}
 
     for q in decision.fact_queries:
-        if q.category in decision.skip:
-            continue
         subject, ftype = _parse_category(q.category)
         facts = await retriever.fetch(FactQuery(
             subject=subject, type=ftype, semantic=q.semantic, limit=q.limit,

@@ -42,7 +42,7 @@ def stub_brain(monkeypatch):
 
     async def _decide(*a, **k):
         return OrchestrationDecision(
-            register="light", engage_level=0.5, fact_queries=[], skip=[],
+            register="light", engage_level=0.5, fact_queries=[],
             topic_anchor="anchor")
 
     async def _render(*a, **k):
