@@ -5,7 +5,7 @@ first-person, in the morning.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from lingxi.facts.models import Fact, FactType, Source
 from lingxi.facts.retriever import FactQuery, FactRetriever
@@ -33,13 +33,19 @@ _WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日
 # 食堂 at 4-8% of events and plans for six weeks after. A/B on the real 09-24
 # prompt, eight plans each: 8 school items in 77 lines with the example, 1 in
 # 75 without. Where she spends her day comes from the persona, not from here.
+#
+# Her own reflections are not in here. Classified by the main model, 57-84%
+# of them since early August taught one lesson — 别想太多、信身体和当下、直接
+# 去做、留白、放手 — because every answer was asked for 「往后想怎么做」 and
+# a performer's days generalise to that. Fed back as the two blocks that led
+# this prompt, they made every plan an enactment of it, and the plans made
+# the events the next reflections were drawn from. On the real 09-24 prompt:
+# 37 of 37 plan items enacted the lesson with the blocks (and still 37 of 37
+# with the week block cut to three lines); 11 of 26 with no reflections at
+# all, and those plans filled with the morning scan, shows, family and the
+# group. Reflections are still written and still retrievable in chat as
+# aria.pattern; they no longer steer the day.
 _PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我想一下今天{scope_phrase}怎么过。
-
-【昨天我反思到的】
-{reflections}
-
-【最近一周我注意到的模式】
-{patterns}
 
 【我生活里的人】
 {people}
@@ -123,28 +129,6 @@ class DailyPlanner:
 
     async def plan_aria(self) -> list[Fact]:
         now = datetime.now()
-        yesterday_start = (now - timedelta(days=1)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        reflections = await self._retriever.fetch(
-            FactQuery(subject="aria", type=FactType.PATTERN,
-                      since=yesterday_start, limit=5)
-        )
-        # The two blocks are shown as different horizons but draw on one pool
-        # ranked 0.5*recency + 0.3*importance, so yesterday's insights win the
-        # week slots too: measured on the live store, all 5 reflection lines
-        # reappeared among the 10 pattern lines — 15 lines carrying 10
-        # insights, one day's theme at double weight in the prompt that sets
-        # the whole next day. Over-fetch by what the first block took, drop
-        # those, and the week block reaches a day further back instead.
-        week_ago = now - timedelta(days=7)
-        seen = {f.id for f in reflections}
-        wider = await self._retriever.fetch(
-            FactQuery(subject="aria", type=FactType.PATTERN,
-                      since=week_ago, limit=10 + len(seen))
-        )
-        patterns = [f for f in wider if f.id not in seen][:10]
-
         if now.hour < 9:
             scope_phrase = ""
             coverage_line = "6-10 条今天的安排，覆盖一天不同时段（早、白天、晚上）+ 你的日常习惯"
@@ -157,8 +141,6 @@ class DailyPlanner:
             now_hhmm=now.strftime("%H:%M"),
             scope_phrase=scope_phrase,
             coverage_line=coverage_line,
-            reflections=self._bullets(reflections) or "（昨天没特别的反思）",
-            patterns=self._bullets(patterns) or "（最近没新模式）",
             people=self._people_block,
             outside=build_outside_block(await self._todays_world(now),
                                         await self._todays_weather(now)),
@@ -245,9 +227,6 @@ class DailyPlanner:
             written.append(fact)
         return written
 
-    @staticmethod
-    def _bullets(facts: list[Fact]) -> str:
-        return "\n".join(f"  - {f.content}" for f in facts)
 
 
 def build_outside_block(facts: list[Fact], weather_phrase: str = "") -> str:
