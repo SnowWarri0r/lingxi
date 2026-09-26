@@ -5,6 +5,18 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 
+class RecipientUnreachable(Exception):
+    """The channel says this recipient cannot receive anything, and will not
+    until something changes on their side — the bot was removed from the chat,
+    they left the organisation, the group was dissolved.
+
+    Distinct from an ordinary send failure because retrying cannot help: a
+    caller that retries on a timer spends a composed message every tick on a
+    recipient who will never see one. Whoever hears from them again is the
+    proof they are reachable.
+    """
+
+
 class OutboundChannel(ABC):
     """Abstract interface for pushing messages to a recipient."""
 
@@ -24,6 +36,11 @@ class OutboundChannel(ABC):
 
         If `turn_id` is provided, the channel may attach annotation UI
         (👍/👎/✏️) so the user can rate the proactive message.
+
+        Returning means it was delivered. A failure must raise — the caller
+        counts a return as a message she sent, remembers having said it, and
+        will later tell him how many of them he left unanswered. Raise
+        RecipientUnreachable when retrying cannot succeed.
         """
 
     async def send_sticker(self, recipient_id: str, file_path: str) -> None:
