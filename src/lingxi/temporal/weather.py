@@ -61,8 +61,38 @@ class Weather:
         return "，".join(parts)
 
 
+@dataclass(frozen=True)
+class DayOutlook:
+    """Today as a whole, for deciding a day rather than describing a moment.
+
+    A plan is written at 07:00, when the current reading is the day's low and
+    says nothing about the afternoon it is scheduling. Rain is the part that
+    actually decides indoor or outdoor, and it is the part a current-conditions
+    reading cannot see at all.
+    """
+
+    high_c: float
+    low_c: float
+    precip_mm: float
+    description: str
+    fetched_at: datetime
+
+    def phrase(self) -> str:
+        parts = [f"{self.description}",
+                 f"最高 {round(self.high_c)}°C",
+                 f"最低 {round(self.low_c)}°C"]
+        if self.precip_mm >= 5:
+            parts.append(f"一天下来有 {self.precip_mm:.0f}mm 的雨")
+        elif self.precip_mm >= 0.5:
+            parts.append("零星有点雨")
+        else:
+            parts.append("没雨")
+        return "，".join(parts)
+
+
 # Cache keyed by rounded (lat, lon) so nearby coords share an entry.
 _cache: dict[tuple[float, float], Weather] = {}
+_outlook_cache: dict[tuple[float, float], DayOutlook] = {}
 
 
 def _key(loc: Location) -> tuple[float, float]:
@@ -78,6 +108,33 @@ def cached(loc: Location, *, now: datetime | None = None) -> Weather | None:
     if now - w.fetched_at > _TTL:
         return None
     return w
+
+
+def cached_outlook(loc: Location, *, now: datetime | None = None) -> DayOutlook | None:
+    """Today's outlook, if one was fetched today. Sync, non-blocking."""
+    o = _outlook_cache.get(_key(loc))
+    if o is None:
+        return None
+    now = now or datetime.now()
+    if o.fetched_at.date() != now.date():
+        return None
+    return o
+
+
+def _parse_outlook(payload: dict, now: datetime) -> DayOutlook | None:
+    daily = payload.get("daily")
+    if not isinstance(daily, dict):
+        return None
+    try:
+        return DayOutlook(
+            high_c=float(daily["temperature_2m_max"][0]),
+            low_c=float(daily["temperature_2m_min"][0]),
+            precip_mm=float(daily.get("precipitation_sum", [0.0])[0] or 0.0),
+            description=_WMO_ZH.get(int(daily["weather_code"][0]), "天气未知"),
+            fetched_at=now,
+        )
+    except (KeyError, IndexError, TypeError, ValueError):
+        return None
 
 
 def _parse(payload: dict, now: datetime) -> Weather | None:
@@ -104,17 +161,26 @@ async def refresh(loc: Location, *, now: datetime | None = None) -> Weather | No
         "longitude": loc.longitude,
         "current": ("temperature_2m,apparent_temperature,weather_code,"
                     "wind_speed_10m,is_day"),
+        # Same request, same cost — the day's own figures ride along with the
+        # moment's, so anything planning a whole day has them to read.
+        "daily": ("temperature_2m_max,temperature_2m_min,"
+                  "precipitation_sum,weather_code"),
+        "forecast_days": 1,
         "timezone": "auto",
     }
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             resp = await client.get(_ENDPOINT, params=params)
             resp.raise_for_status()
-            weather = _parse(resp.json(), now)
+            payload = resp.json()
+            weather = _parse(payload, now)
+            outlook = _parse_outlook(payload, now)
     except Exception as e:
         print(f"[weather] refresh failed for {loc.name or _key(loc)}: {e}",
               flush=True)
         return None
     if weather is not None:
         _cache[_key(loc)] = weather
+    if outlook is not None:
+        _outlook_cache[_key(loc)] = outlook
     return weather
