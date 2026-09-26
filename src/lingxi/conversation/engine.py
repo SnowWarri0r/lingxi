@@ -513,7 +513,14 @@ class ConversationEngine:
             if rec:
                 self._relationship_level = rec.relationship_level
                 last_interaction_time = rec.last_interaction
-                self._unanswered = rec.consecutive_proactive_count
+                # A chat the channel had marked unreachable counted messages
+                # that never arrived — before the send path could tell, all of
+                # them. How many of those reached him is unknowable, so none
+                # is claimed: saying "you left 62 unanswered" to someone who
+                # received two is the one version of this that is worse than
+                # saying nothing.
+                self._unanswered = (0 if rec.unreachable_since is not None
+                                    else rec.consecutive_proactive_count)
                 if rec.first_interaction:
                     self._acquaintance = (rec.first_interaction, rec.total_turns)
             self.interaction_tracker.record_interaction(channel, recipient_id)

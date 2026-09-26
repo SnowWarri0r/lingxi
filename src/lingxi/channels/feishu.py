@@ -24,11 +24,35 @@ import httpx
 import lark_oapi as lark
 from lark_oapi.api.im.v1 import P2ImMessageReceiveV1
 
-from lingxi.channels.outbound import ChannelRegistry, OutboundChannel
+from lingxi.channels.outbound import (
+    ChannelRegistry,
+    OutboundChannel,
+    RecipientUnreachable,
+)
 from lingxi.conversation.engine import ConversationEngine
 from lingxi.temporal.proactive import ProactiveConfig, ProactiveScheduler
 
 FEISHU_BASE = "https://open.feishu.cn/open-apis"
+
+# Send errors that mean the recipient is gone rather than the request unlucky,
+# per the im/v1/messages error table: bot not in the chat (230002, observed
+# live 2026-09-22 on a chat silent since 08-18), user outside the bot's
+# availability or disabled (230013), user resigned (230029), group dissolved
+# (232009), sending refused — blocked, or the group muted (230035).
+# 230006, bot ability not enabled, is left out deliberately: it is true of
+# every recipient at once, and marking all of them unreachable over a
+# configuration mistake would silence her to everyone.
+_RECIPIENT_GONE_CODES = frozenset({230002, 230013, 230029, 232009, 230035})
+
+
+def _raise_for_send(data: dict, what: str) -> None:
+    """Feishu answers HTTP 200 with the failure in the body's `code`."""
+    code = data.get("code")
+    if code == 0:
+        return
+    if code in _RECIPIENT_GONE_CODES:
+        raise RecipientUnreachable(f"{what}: {code} {data.get('msg')}")
+    raise RuntimeError(f"{what} failed: {data}")
 
 
 def build_annotation_footer_elements(turn_id: str) -> list[dict]:
@@ -208,8 +232,7 @@ class StreamingCardSender:
             },
         )
         data = resp.json()
-        if data.get("code") != 0:
-            raise RuntimeError(f"Send card failed: {data}")
+        _raise_for_send(data, "send card")
         return data["data"]["message_id"]
 
     async def update_content(self, text: str) -> None:
@@ -334,8 +357,15 @@ class FeishuBot(OutboundChannel):
         """
         try:
             await self._send_proactive_card(recipient_id, text, turn_id=turn_id)
-        except Exception:
-            # Fallback to plain text if card fails
+        except RecipientUnreachable:
+            # Plain text goes to the same chat and meets the same answer.
+            raise
+        except Exception as e:
+            # Worth knowing about: a card that fails and a text that then
+            # succeeds is a working channel with a broken card, and nothing
+            # said so before.
+            print(f"[feishu] proactive card failed, sending as text: {e}",
+                  flush=True)
             await self._send_text_async(recipient_id, text)
 
     async def send_sticker(self, recipient_id: str, file_path: str) -> None:
@@ -909,9 +939,17 @@ class FeishuBot(OutboundChannel):
         return {"media_type": media_type, "data": data_b64}
 
     async def _send_text_async(self, chat_id: str, text: str) -> None:
+        """Plain-text send, and the last resort behind every card.
+
+        The response went unread, so a failure here returned exactly like a
+        success. Being the fallback made that the worst place for it: when
+        the card failed first, this was what decided whether anything was
+        delivered, and it always said yes. A chat the bot had been removed
+        from took 62 proactive messages this way, each counted as sent.
+        """
         headers = self.token_mgr.headers()
         async with httpx.AsyncClient() as client:
-            await client.post(
+            resp = await client.post(
                 f"{FEISHU_BASE}/im/v1/messages?receive_id_type=chat_id",
                 headers=headers,
                 json={
@@ -920,6 +958,7 @@ class FeishuBot(OutboundChannel):
                     "content": json.dumps({"text": text}),
                 },
             )
+        _raise_for_send(resp.json(), "send text")
 
     async def _send_image(self, chat_id: str, file_path: str) -> None:
         """Upload a local image to Feishu and send it as an image message.

@@ -29,6 +29,11 @@ class InteractionRecord(BaseModel):
     emotion_dimensions: dict[str, float] = Field(default_factory=dict)
     emotion_last_decay: datetime | None = None
     emotion_narrative: str = ""
+    # When the channel last said this recipient cannot receive anything — the
+    # bot removed from the chat, the user gone from the organisation. Proactive
+    # stays off while it is set, and the next message from them clears it,
+    # which is the only evidence that settles it.
+    unreachable_since: datetime | None = None
 
 
 class InteractionTracker:
@@ -97,6 +102,8 @@ class InteractionTracker:
             # User responded → reset the consecutive proactive counter
             # so Aria can reach out again in the next silence cycle.
             rec.consecutive_proactive_count = 0
+            # They wrote, so they can be written to.
+            rec.unreachable_since = None
         else:
             rec = InteractionRecord(
                 recipient_id=recipient_id,
@@ -114,6 +121,11 @@ class InteractionTracker:
         key = self._key(channel, recipient_id)
         if key in self._records:
             self._records[key].session_count += 1
+
+    def mark_unreachable(self, channel: str, recipient_id: str) -> None:
+        key = self._key(channel, recipient_id)
+        if key in self._records and self._records[key].unreachable_since is None:
+            self._records[key].unreachable_since = datetime.now()
 
     def record_proactive_sent(self, channel: str, recipient_id: str) -> None:
         key = self._key(channel, recipient_id)
