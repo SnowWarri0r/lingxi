@@ -27,6 +27,47 @@ class ConversationTurn(BaseModel):
     summary: str | None = None
 
 
+# How many of her messages in an unanswered run survive eviction: the last,
+# which is what he replies to when he comes back, and the one before it.
+_KEEP_OF_RUN = 2
+
+
+def trim_to_cap(turns: list["ConversationTurn"], cap: int) -> list["ConversationTurn"]:
+    """Bring `turns` down to `cap`, spending her unanswered openers first.
+
+    Evicting by age alone let her own monologue decide what she forgot about
+    him. Proactive openers arrive about three a day whether he answers or not,
+    so on 2026-09-23 his buffer held 30 turns across six days — 24 hers, 6
+    his — and everything he had said before 09-17 was gone. Nothing else held
+    it: episode summaries were retired, thread_summary lives in memory and
+    dies on restart, and no fact about him had been written since 08-28.
+
+    So a run of consecutive assistant turns — messages she sent with no reply
+    in between — gives up its older members before anything else goes. The
+    last few of each run stay, so the message he eventually answers is still
+    there to be answered. With no such turn left, the oldest turn goes, which
+    is the old behaviour. Below the cap nothing is dropped at all.
+    """
+    turns = list(turns)
+    if cap <= 0 or len(turns) <= cap:
+        return turns
+    while len(turns) > cap:
+        victim = None
+        i = 0
+        while i < len(turns) and victim is None:
+            if turns[i].role != "assistant":
+                i += 1
+                continue
+            j = i
+            while j < len(turns) and turns[j].role == "assistant":
+                j += 1
+            if j - i > _KEEP_OF_RUN:
+                victim = i
+            i = j
+        turns.pop(0 if victim is None else victim)
+    return turns
+
+
 class ShortTermMemory:
     """Bounded sliding-window buffer of recent conversation turns.
 
@@ -41,10 +82,15 @@ class ShortTermMemory:
         data_dir: Path | str | None = None,
     ):
         self.max_turns = max_turns
-        self._buffer: deque[ConversationTurn] = deque(maxlen=max_turns)
+        # No maxlen: a deque drops from the left, which is by age alone.
+        self._buffer: deque[ConversationTurn] = deque()
         self._data_dir = Path(data_dir) if data_dir else None
         self._current_recipient: str | None = None
         self._lock = asyncio.Lock()
+
+    def _enforce_cap(self) -> None:
+        if self.max_turns and len(self._buffer) > self.max_turns:
+            self._buffer = deque(trim_to_cap(list(self._buffer), self.max_turns))
 
     def _path_for(self, recipient_key: str) -> Path | None:
         if self._data_dir is None:
@@ -103,6 +149,7 @@ class ShortTermMemory:
                     self._buffer.append(ConversationTurn.model_validate(t))
                 except Exception:
                     continue
+            self._enforce_cap()
         except (json.JSONDecodeError, OSError):
             pass
 
@@ -116,6 +163,7 @@ class ShortTermMemory:
         """Add a conversation turn to the buffer."""
         turn = ConversationTurn(role=role, content=content, metadata=metadata)
         self._buffer.append(turn)
+        self._enforce_cap()
         return turn
 
     def get_history(self, last_n: int | None = None) -> list[ConversationTurn]:
@@ -193,6 +241,7 @@ class ShortTermMemory:
             # If this IS the active recipient, mutate the buffer and save
             if self._current_recipient == recipient_key:
                 self._buffer.append(new_turn)
+                self._enforce_cap()
                 await self._save_to_disk(recipient_key)
                 return
 
@@ -214,8 +263,8 @@ class ShortTermMemory:
                 except (json.JSONDecodeError, OSError):
                     pass
             existing.append(new_turn)
-            if self.max_turns and len(existing) > self.max_turns:
-                existing = existing[-self.max_turns:]
+            if self.max_turns:
+                existing = trim_to_cap(existing, self.max_turns)
             data = {
                 "recipient": recipient_key,
                 "turns": [t.model_dump(mode="json") for t in existing],
@@ -228,36 +277,6 @@ class ShortTermMemory:
                     json.dump(data, f, ensure_ascii=False, indent=2, default=str)
                 tmp.rename(path)
 
-            await asyncio.to_thread(_write)
-
-    async def write_for_recipient(
-        self, recipient_key: str, turns: list[ConversationTurn]
-    ) -> None:
-        """Persist `turns` for `recipient_key` WITHOUT changing active state.
-
-        Used by mid-term compaction for a non-active recipient. Goes through
-        the same atomic temp-rename write as the normal save path, but does
-        NOT touch `_buffer` or `_current_recipient`.
-        """
-        path = self._path_for(recipient_key)
-        if path is None:
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data = {
-            "recipient": recipient_key,
-            "turns": [t.model_dump(mode="json") for t in turns],
-        }
-        tmp = path.with_suffix(".tmp")
-
-        def _write():
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
-            tmp.rename(path)
-
-        # Lock so a concurrent active-recipient save (matching key) doesn't
-        # race with this write. The lock is shared with all other I/O on
-        # the singleton instance — coarse but correct.
-        async with self._lock:
             await asyncio.to_thread(_write)
 
     def is_empty(self) -> bool:
