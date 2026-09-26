@@ -26,7 +26,7 @@ from lingxi.world.models import DailyBriefing, NewsItem
 
 _FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/昨天的新闻，从这些类目里挑：
 {topics_block}
-{already_block}
+{weather_block}{already_block}
 挑选标准：
 - 每个类目 0-1 条**真正值得读到的**事，不必凑数
 - 总数 **≤ 5 条**
@@ -78,9 +78,20 @@ _ALREADY_TMPL = """
 # archive that eats the prompt.
 _MAX_ALREADY = 24
 
+# 「她所在城市的身边事」 reliably produces a weather item, and searched weather
+# came back wrong on the days it mattered: checked against the Shanghai record,
+# 09-19 was scanned as 「放晴了…出门不用带伞」 on the wettest day of the
+# fortnight (9.5mm) and 09-08 as 「外面一直在下雨」 on a day with none. The
+# figures are already fetched every 20 minutes for the chat prompt, so the
+# scan is handed them rather than left to search for them.
+_WEATHER_TMPL = """
+今天当地的实测天气是：{phrase}。写到天气就照这个数写。
+"""
+
 
 def build_fetch_prompt(persona, target_date: date,
-                       recent: list[str] | None = None) -> str | None:
+                       recent: list[str] | None = None,
+                       weather: str = "") -> str | None:
     """The search prompt for this persona, or None when she follows nothing.
 
     Both halves used to be literal text describing the first character this
@@ -118,9 +129,32 @@ def build_fetch_prompt(persona, target_date: date,
         today=target_date.isoformat(),
         where=where,
         topics_block="\n".join(f"- {t}" for t in interests),
+        weather_block=(_WEATHER_TMPL.format(phrase=weather.strip())
+                       if weather.strip() else ""),
         already_block=already,
         self_context=build_self_context(persona),
     )
+
+
+async def todays_weather_phrase(persona) -> str:
+    """Today's measured high, low and rainfall where she lives, or "".
+
+    Fail-safe in both directions: no persona location, no network, or a
+    malformed response all yield an empty string, and the scan proceeds
+    exactly as it did before — searching for the weather itself.
+    """
+    try:
+        from lingxi.temporal.sun import persona_location
+        from lingxi.temporal.weather import cached_outlook, refresh
+        loc = persona_location(persona)
+        outlook = cached_outlook(loc)
+        if outlook is None:
+            await refresh(loc)
+            outlook = cached_outlook(loc)
+        return outlook.phrase() if outlook else ""
+    except Exception as e:
+        print(f"[world] weather lookup failed (non-fatal): {e}", flush=True)
+        return ""
 
 
 def _strip_json_fences(text: str) -> str:
@@ -179,7 +213,8 @@ async def fetch_daily_briefing(
     if target_date is None:
         target_date = date.today()
 
-    prompt = build_fetch_prompt(persona, target_date, recent=recent)
+    prompt = build_fetch_prompt(persona, target_date, recent=recent,
+                                weather=await todays_weather_phrase(persona))
     if prompt is None:
         # She follows nothing in particular; there is no morning to fetch.
         return DailyBriefing(date=target_date)
