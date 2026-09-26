@@ -147,3 +147,40 @@ class TestTheProactiveSend:
 
         with pytest.raises(RecipientUnreachable):
             await bot.send_message("oc_gone", "在吗")
+
+
+class TestACardThatArrivedIsNotSentAgain:
+    """finish() only turns off streaming mode; the text is already there."""
+
+    @pytest.mark.asyncio
+    async def test_a_failed_finish_does_not_trigger_the_text_fallback(self, monkeypatch):
+        class _Kit:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+            async def post(self, url, **kw):
+                if url.endswith("/cardkit/v1/cards"):
+                    return _Resp({"code": 0, "data": {"card_id": "card_1"}})
+                return _Resp(OK)
+
+            async def put(self, url, **kw):
+                return _Resp({"code": 0})
+
+            async def patch(self, url, **kw):
+                return _Resp({"code": 300309, "msg": "settings update failed"})
+
+        monkeypatch.setattr(feishu_mod.httpx, "AsyncClient", lambda *a, **k: _Kit())
+        bot = _bot()
+        texts = []
+
+        async def _text(chat_id, text):
+            texts.append(text)
+
+        bot._send_text_async = _text
+
+        await bot.send_message("oc_1", "练习室的空调又坏了")
+
+        assert texts == []
