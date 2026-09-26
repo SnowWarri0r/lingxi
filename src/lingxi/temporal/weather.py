@@ -90,6 +90,24 @@ class DayOutlook:
         return "，".join(parts)
 
 
+# Descriptions under which the sun is out, or out often enough to say so.
+# 多云 is partly cloudy — the sun comes and goes, so a sunny line still holds.
+_SUN_OUT = frozenset({"晴", "大致晴朗", "多云"})
+
+
+def sun_visible(weather: "Weather | None") -> bool | None:
+    """Whether the sky lets the sun through, or None when nothing is known.
+
+    Daylight is computed from sunrise and sunset alone, which says when the
+    sun is up, not whether it can be seen. On 2026-09-24 the prompt carried
+    「日头正好——晒太阳、趴窗台这类成立」 two lines above 「外面天气：阴」,
+    and the opener she wrote was about the sun failing to show up.
+    """
+    if weather is None or weather.description not in _WMO_ZH.values():
+        return None
+    return weather.description in _SUN_OUT
+
+
 # Cache keyed by rounded (lat, lon) so nearby coords share an entry.
 _cache: dict[tuple[float, float], Weather] = {}
 _outlook_cache: dict[tuple[float, float], DayOutlook] = {}
