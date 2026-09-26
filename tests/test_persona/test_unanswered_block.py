@@ -41,6 +41,35 @@ def test_many_unanswered_messages_still_carry_the_count():
     assert "7" in block
 
 
+class TestOneNightIsNotBeingIgnored:
+    """She sends three a day, so the count crosses 2 every single night.
+
+    Measured after the exponential re-engage wait came out: a steady 3 sends
+    per day, and his replies came back with 2, 3 and 3 unanswered after gaps
+    of 20h, 23.7h and 25h — ordinary evenings. The one that was worth saying
+    sat at 6 unanswered across 45 hours. A count alone cannot tell those
+    apart; the stretch can.
+    """
+
+    def test_an_ordinary_overnight_gap_says_nothing(self):
+        assert build_unanswered_block(3, NOW - timedelta(hours=23.7), NOW) is None
+
+    def test_a_long_workday_gap_says_nothing(self):
+        assert build_unanswered_block(2, NOW - timedelta(hours=20), NOW) is None
+
+    def test_a_day_and_a_bit_still_says_nothing(self):
+        assert build_unanswered_block(3, NOW - timedelta(hours=25), NOW) is None
+
+    def test_the_stretch_that_was_worth_saying_still_speaks(self):
+        """The real 09-20 turn: 6 unanswered across 45 hours."""
+        block = build_unanswered_block(6, NOW - timedelta(hours=45), NOW)
+
+        assert block is not None and "6" in block
+
+    def test_one_unanswered_message_stays_silent_however_long(self):
+        assert build_unanswered_block(1, NOW - timedelta(days=9), NOW) is None
+
+
 def test_it_says_how_long_the_stretch_was():
     block = build_unanswered_block(5, NOW - timedelta(days=8), NOW)
 

@@ -142,12 +142,26 @@ def build_unanswered_block(unanswered: int, last_interaction_time,
     consecutive_proactive_count, was never read here, and record_interaction
     zeroed it before this prompt was built.
 
-    One unanswered message is nobody's pattern, so it says nothing. Above that
-    it states the number, the stretch, and how she carries it — and that it is
+    Two things have to be true: she called more than once, and he was gone
+    longer than a night. The count alone is not enough — she sends about three
+    a day, so it crosses 2 every evening. Measured over the week after the
+    exponential re-engage wait came out, his replies arrived with 2, 3 and 3
+    unanswered behind gaps of 20h, 23.7h and 25h, every one of them an
+    ordinary evening; the stretch that was worth remarking on stood at 6
+    across 45 hours. Nothing in the data falls between a day and a half and
+    two days, and one-and-a-half is what "more than a night" means.
+
+    It states the number, the stretch, and how she carries it — and that it is
     finished once said. The sentence is hers to write: scripting the line is
     what turns a persona into a form letter.
     """
     if unanswered < 2:
+        return None
+    if last_interaction_time is not None and now is not None:
+        if now - last_interaction_time < timedelta(hours=36):
+            return None
+    elif unanswered < 4:
+        # No timestamp to judge by; lean on the count and stay conservative.
         return None
     gap = ""
     if last_interaction_time is not None and now is not None:
