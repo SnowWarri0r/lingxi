@@ -236,15 +236,22 @@ class StreamingCardSender:
         return data["data"]["message_id"]
 
     async def update_content(self, text: str) -> None:
+        """Write the card's text. Raises when Feishu refuses the write.
+
+        The response went unread, so every caller's fallback for a failed
+        write — the reply path's static-card rescue among them — was
+        unreachable: nothing here ever failed as far as they could tell.
+        """
         if not self._card_id:
             return
         self._seq += 1
         headers = self._token_mgr.headers()
-        await self._http.put(
+        resp = await self._http.put(
             f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/elements/md_stream/content",
             headers=headers,
             json={"content": text, "sequence": self._seq},
         )
+        _raise_for_send(resp.json(), "update card")
 
     async def finish(self) -> None:
         if not self._card_id:
@@ -252,7 +259,7 @@ class StreamingCardSender:
 
         self._seq += 1
         headers = self._token_mgr.headers()
-        await self._http.patch(
+        resp = await self._http.patch(
             f"{FEISHU_BASE}/cardkit/v1/cards/{self._card_id}/settings",
             headers=headers,
             json={
@@ -260,6 +267,7 @@ class StreamingCardSender:
                 "sequence": self._seq,
             },
         )
+        _raise_for_send(resp.json(), "finish card")
 
     async def append_elements(self, elements: list[dict]) -> None:
         """Insert elements after the streaming element.
@@ -384,7 +392,14 @@ class FeishuBot(OutboundChannel):
             await card.create_card()
             await card.send_to_chat(chat_id)
             await card.update_content(text)
-            await card.finish()
+            # The message is in the card by now. finish() only switches off
+            # streaming mode, and letting its failure reach the text fallback
+            # would deliver the same opener twice.
+            try:
+                await card.finish()
+            except Exception as e:
+                print(f"[feishu] proactive finish() failed (message delivered): {e}",
+                      flush=True)
             if turn_id:
                 try:
                     await card.append_elements(
@@ -1299,6 +1314,20 @@ class FeishuBot(OutboundChannel):
         except Exception as e:
             return f"失败: {e}"
 
+    @staticmethod
+    async def _final_write(card: "StreamingCardSender", text: str) -> bool:
+        """Write the finished reply into the card; False if it never landed."""
+        for attempt in range(2):
+            try:
+                await card.update_content(text)
+                return True
+            except Exception as e:
+                print(f"[feishu] final card write failed (attempt {attempt + 1}): {e}",
+                      flush=True)
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+        return False
+
     async def _stream_reply(
         self,
         chat_id: str,
@@ -1408,10 +1437,13 @@ class FeishuBot(OutboundChannel):
                 extras = bubbles[1:] if len(bubbles) > 1 else []
                 if first_bubble:
                     if card_ok:
-                        try:
-                            await card.update_content(first_bubble)
-                        except Exception:
-                            pass
+                        # The write that puts the reply in the card. It lands
+                        # right behind the last streamed frame, which is where
+                        # a throttled write fails, so one retry — then send it
+                        # as its own message rather than leave him looking at a
+                        # half sentence or the 💭 placeholder.
+                        if not await self._final_write(card, first_bubble):
+                            extras = [first_bubble] + extras
                     else:
                         # The streaming card never got delivered — send the first
                         # bubble as a static card too so the reply isn't lost.
