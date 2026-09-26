@@ -1138,11 +1138,26 @@ class ProactiveScheduler:
             result = await llm.complete(
                 messages=msgs,
                 system=system_prompt,
-                max_tokens=600,
+                # The responder reasons before it writes (deepseek: thinking
+                # on, low effort), and the reasoning is billed against this
+                # budget. At 600, 24 of 119 composes spent all 600 thinking
+                # and returned no text; the ones that did write ran at p90
+                # 538. Replies from the same model stream with the provider
+                # default of 4096. Output is paid only as generated.
+                max_tokens=2000,
                 temperature=0.9,
             )
         except Exception as e:
             print(f"[proactive] LLM call failed: {e}")
+            return None
+
+        if not (result.content or "").strip():
+            # Nothing written is not a decision to stay quiet. Parsed, an
+            # empty reply reads as should_send=False and was logged as
+            # llm_declined — a truncated compose recorded as her choice.
+            used = (getattr(result, "usage", None) or {})
+            print(f"[proactive] responder returned no text "
+                  f"(output tokens: {used.get('output_tokens', '?')})", flush=True)
             return None
 
         return parse_proactive_output(result.content)
