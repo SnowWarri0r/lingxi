@@ -61,3 +61,11 @@ def test_it_still_builds_without_a_clock():
         "hi", StateDigest(activity="", mood="", last_lived=[]), {})
 
     assert "user_state" in prompt
+
+
+def test_the_prompt_names_the_persona_it_is_deciding_for():
+    """Three lines still said Aria — the first persona — for every persona."""
+    prompt = build_orchestrator_prompt(
+        "hi", StateDigest(activity="", mood="", last_lived=[]), {}, agent_name="唐可可")
+
+    assert "Aria" not in prompt
