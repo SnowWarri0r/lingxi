@@ -8,7 +8,6 @@ catalog of available facts (counts only), and outputs:
 - register (warm/curt/curious/withdrawn/flustered)
 - fact_queries (which buckets to pull from for rendering)
 - topic_anchor (one-line summary of what the user is really asking)
-- skip (categories to omit from rendering)
 
 Without this, the renderer would dump everything every turn (current
 state). With this, the renderer is focused and the prompt is leaner.
@@ -113,7 +112,6 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
   ],
   "topic_anchor": "...",
   "thread_summary": "...",
-  "skip": ["world.event"],
   "plan_conflict": false,
   "lookup_query": "",
   "memory_writes": [],

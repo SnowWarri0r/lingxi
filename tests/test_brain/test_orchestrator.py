@@ -29,7 +29,7 @@ async def test_decide_returns_parsed_decision():
     payload = json.dumps({
         "engage_level": 0.7, "register": "curious",
         "fact_queries": [{"category": "aria.event", "limit": 2}],
-        "topic_anchor": "x", "skip": [],
+        "topic_anchor": "x",
     })
     llm = FakeLLM(payload)
     digest = StateDigest(activity="刷手机", mood="平静", last_lived=["看了云"])

@@ -52,7 +52,7 @@ async def test_renders_only_queried_facts(retriever):
     decision = OrchestrationDecision(
         engage_level=0.6, register="warm",
         fact_queries=[OrchestratorFactQuery(category="aria.event", limit=5)],
-        topic_anchor="", skip=[],
+        topic_anchor="",
     )
     out = await render_dynamic_blocks(
         retriever, decision, recipient_key="u1",
@@ -75,7 +75,7 @@ async def test_subject_isolation_per_block(retriever):
             OrchestratorFactQuery(category="user:u1.pattern", limit=5),
             OrchestratorFactQuery(category="npc:xiaomin.event", limit=5),
         ],
-        topic_anchor="", skip=[],
+        topic_anchor="",
     )
     out = await render_dynamic_blocks(retriever, decision, recipient_key="u1")
     # Find positions of each block's header
@@ -97,7 +97,7 @@ async def test_register_renders_into_prompt(retriever):
     decision = OrchestrationDecision(
         engage_level=0.3, register="curt",
         fact_queries=[OrchestratorFactQuery(category="aria.event", limit=2)],
-        topic_anchor="", skip=[],
+        topic_anchor="",
     )
     out = await render_dynamic_blocks(retriever, decision, recipient_key="u1")
     # The register hint should be visible to the model
@@ -105,15 +105,17 @@ async def test_register_renders_into_prompt(retriever):
 
 
 @pytest.mark.asyncio
-async def test_skip_omits_category(retriever):
+async def test_a_category_it_did_not_ask_for_is_not_rendered(retriever):
+    """What replaced `skip`: not asking is how you skip.
+
+    The orchestrator wrote fact_queries and a skip list in one pass, so skip
+    could only ever cancel a query it had just written — and across every
+    logged decision it cancelled nothing, 0 of 13. Omission is the mechanism.
+    """
     decision = OrchestrationDecision(
         engage_level=0.6, register="warm",
-        fact_queries=[
-            OrchestratorFactQuery(category="aria.event", limit=5),
-            OrchestratorFactQuery(category="npc:xiaomin.event", limit=5),
-        ],
+        fact_queries=[OrchestratorFactQuery(category="aria.event", limit=5)],
         topic_anchor="",
-        skip=["npc:xiaomin.event"],  # explicitly skipped
     )
     out = await render_dynamic_blocks(retriever, decision, recipient_key="u1")
     assert "小敏" not in out
@@ -125,7 +127,7 @@ async def test_topic_anchor_surfaced(retriever):
         engage_level=0.6, register="warm",
         fact_queries=[OrchestratorFactQuery(category="aria.event", limit=2)],
         topic_anchor="对方在 push back 我对他工作时间的判断",
-        skip=[],
+       
     )
     out = await render_dynamic_blocks(retriever, decision, recipient_key="u1")
     assert "push back" in out or "工作时间" in out
