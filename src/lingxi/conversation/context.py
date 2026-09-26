@@ -48,15 +48,18 @@ class TokenBudget:
     # spent. So a callback to something said two days and eight turns ago found
     # 「[省略了 6 轮较早的对话]」 where the referent should have been, and she
     # answered it with enthusiasm and no content.
-    recent_turns_min: int = 24
-    recent_turns_budget: int = 6000
+    #
+    # Now the whole short-term buffer (memory.short_term.max_turns, 30). The
+    # buffer decides what is worth keeping — it spends her unanswered openers
+    # before his words — and at 24 the prompt then showed only the newest 24
+    # of those 30: on the 09-23 replay, 7 of the 9 things he had said that
+    # month, with the other two kept and never rendered. Six more turns is a
+    # few hundred tokens against a history budget that is nowhere near spent.
+    recent_turns_min: int = 30
     history_budget: int = 8000
     memory_budget: int = 4000  # used by prompt builder, not here
-    # === Layered memory windows (progressive forgetting) ===
-    # L1 verbatim window: turns younger than this stay full-text.
-    verbatim_window_minutes: int = 30
-    # L2 mid-term window: turns 30min-X get compressed to one-line summaries.
-    # Beyond this, drop entirely from messages (rely on L3 episodes / L4 facts).
+    # Older turns beyond recent_turns_min are admitted only inside this window.
+    # Past it, what he said is covered by facts.db — there is no summary tier.
     session_window_minutes: int = 720  # 12 hours
 
 
@@ -112,8 +115,7 @@ class ContextAssembler:
         guaranteed_tokens = sum(estimate_tokens(t.content) for t in guaranteed)
 
         # Older candidates are anything before the guaranteed window AND
-        # within the session window — beyond session window we rely on
-        # episode summaries (rendered in the system prompt's memory block).
+        # within the session window — beyond it, facts.db.
         older_all = turns[:-guaranteed_count] if guaranteed_count < len(turns) else []
         in_session_older = [t for t in older_all if t.timestamp >= session_cutoff]
         dropped_by_session = len(older_all) - len(in_session_older)
@@ -162,9 +164,7 @@ class ContextAssembler:
             # the chat history — model read its own past as third-person
             # action narration ("我询问 / 我追问") and copied that as a
             # behavioral pattern, generating MORE asking-about-X turns.
-            # Long-term coverage lives in episode summaries (rendered in
-            # the system prompt's memory block), not in chat history.
-            # Nothing writes turn.summary any more; the field stays only so
+            # Long-term coverage is facts.db, not chat history. Nothing writes turn.summary any more; the field stays only so
             # older buffer files still load.
             result_messages.append({"role": turn.role, "content": turn.content})
 
