@@ -966,10 +966,6 @@ class ProactiveScheduler:
         # snapshot/compress APIs instead.
         recent_history_msgs: list[dict] = []
         try:
-            await self.engine.memory.compress_aged_turns_for(
-                rec_key,
-                threshold_minutes=self.engine.context_assembler.budget.verbatim_window_minutes,
-            )
             _, recent_history_msgs = await self.engine.memory.assemble_history_messages_for(
                 rec_key, self.engine.context_assembler
             )

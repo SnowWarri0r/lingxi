@@ -293,9 +293,6 @@ class ConversationEngine:
         self._last_fewshots: list = []
         self._last_is_heavy_topic: bool = False
 
-        # Initialize
-        self.memory.set_llm_provider(llm_provider)
-
     async def _dispatch_memory_tool(self, name: str, args: dict, recipient_key: str) -> str:
         """Execute one MemGPT memory tool, scoped by recipient_key. Returns a
         string for the tool_result. Errors are returned (not raised) so the
