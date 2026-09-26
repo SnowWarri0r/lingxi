@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import uuid
 from dataclasses import dataclass
@@ -594,7 +595,7 @@ class ConversationEngine:
         # Persist the user turn AFTER assembling history (so it isn't
         # duplicated this turn, but is available next turn).
         self.memory.add_turn("user", memory_text)
-        prev_summary = self._thread_summaries.get(recipient_key, "") if hasattr(self, "_thread_summaries") else ""
+        prev_summary = self._thread_summary_for(recipient_key)
 
         # 3. Orchestrator decides
         # Hand it the facts it already holds about him. Without them item 8's
@@ -657,11 +658,8 @@ class ConversationEngine:
             print(f"[brain] web lookup: {decision.lookup_query!r}", flush=True)
             grounding = await web_lookup(self.llm, decision.lookup_query)
 
-        # Persist thread_summary for next turn
         if decision.thread_summary:
-            if not hasattr(self, "_thread_summaries"):
-                self._thread_summaries = {}
-            self._thread_summaries[recipient_key] = decision.thread_summary
+            self._remember_thread_summary(recipient_key, decision.thread_summary)
 
         # 4. Render
         persona_block = build_persona_block(self.persona)
@@ -812,6 +810,49 @@ class ConversationEngine:
         except Exception as e:
             print(f"[engine] world lookup failed (non-fatal): {e}", flush=True)
             return []
+
+    # The thread so far, carried to the next turn as 前情提要. It lived in a
+    # dict on this object, so every restart began the next turn with
+    # 「（无——这是话题开始或重启）」: 4 of the 12 logged turns that had a
+    # previous one, each right after a restart, and each a return after a
+    # gap of hours or days — the turn a recap exists for. Kept beside the
+    # short-term buffer it summarises.
+    def _thread_summary_path(self):
+        data_dir = getattr(self.memory, "data_dir", None)
+        return Path(data_dir) / "thread_summaries.json" if data_dir else None
+
+    def _thread_summaries_loaded(self) -> dict:
+        if not hasattr(self, "_thread_summaries"):
+            self._thread_summaries = {}
+            path = self._thread_summary_path()
+            if path is not None and path.exists():
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                    if isinstance(data, dict):
+                        self._thread_summaries = {str(k): str(v) for k, v in data.items()}
+                except Exception as e:
+                    print(f"[brain] thread summaries unreadable, starting empty: {e}",
+                          flush=True)
+        return self._thread_summaries
+
+    def _thread_summary_for(self, recipient_key: str) -> str:
+        return self._thread_summaries_loaded().get(recipient_key, "")
+
+    def _remember_thread_summary(self, recipient_key: str, summary: str) -> None:
+        summaries = self._thread_summaries_loaded()
+        summaries[recipient_key] = summary
+        path = self._thread_summary_path()
+        if path is None:
+            return
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(summaries, ensure_ascii=False, indent=1),
+                           encoding="utf-8")
+            tmp.rename(path)
+        except Exception as e:
+            print(f"[brain] thread summary not saved (kept for this run): {e}",
+                  flush=True)
 
     async def _known_facts_floor(self, recipient_key: str | None) -> str:
         """A few durable facts about him, spread across subjects.
