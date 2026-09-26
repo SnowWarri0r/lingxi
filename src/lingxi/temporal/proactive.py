@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from lingxi.conversation.engine import ConversationEngine
 
-from lingxi.channels.outbound import ChannelRegistry
+from lingxi.channels.outbound import ChannelRegistry, RecipientUnreachable
 from lingxi.facts.diversify import select_diverse
 from lingxi.facts.models import Fact, FactType
 from lingxi.facts.retriever import FactQuery, FactRetriever
@@ -705,6 +705,13 @@ class ProactiveScheduler:
         """
         key = f"{record.channel}:{record.recipient_id}"
 
+        # Checked first because everything after it can cost a composed
+        # message. Force still tries: a manual trigger is how you find out
+        # whether re-adding the bot worked.
+        if not force and record.unreachable_since is not None:
+            return {"key": key, "status": "skipped_unreachable",
+                    "since": record.unreachable_since.isoformat()}
+
         # Silence threshold
         silence = now - record.last_interaction
         threshold = self.config.silence_threshold_for(record.relationship_level)
@@ -826,9 +833,19 @@ class ProactiveScheduler:
 
         try:
             await channel.send_message(record.recipient_id, message, turn_id=turn_id)
+        except RecipientUnreachable as e:
+            # A failed send leaves last_proactive_sent where it was, so without
+            # this the same recipient is eligible again on the next five-minute
+            # tick — another message composed, another refusal, indefinitely.
+            print(f"[proactive] {key} unreachable, stopping until they write: {e}",
+                  flush=True)
+            self.tracker.mark_unreachable(record.channel, record.recipient_id)
+            await self.tracker.save()
+            return {"key": key, "status": "unreachable", "error": str(e)}
         except Exception as e:
             print(f"[proactive] send failed: {e}")
             return {"key": key, "status": "send_failed", "error": str(e)}
+        record.unreachable_since = None
 
         # The mood she tagged, as an image after the line. The reply path has
         # done this all along; this path parsed the tag off and dropped it, so
