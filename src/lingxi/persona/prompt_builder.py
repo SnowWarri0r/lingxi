@@ -309,7 +309,7 @@ class PromptBuilder:
             sections.append(
                 self._build_time_awareness_section(
                     current_time, last_interaction_time, user_schedule,
-                    user_state,
+                    user_state, proactive_mode=proactive_mode,
                 )
             )
 
@@ -417,6 +417,8 @@ class PromptBuilder:
         last_interaction_time: datetime | None,
         user_schedule: list[str] | None = None,
         user_state: str = "",
+        *,
+        proactive_mode: bool = False,
     ) -> str:
         hour = current_time.hour
 
@@ -474,10 +476,21 @@ class PromptBuilder:
             if user_schedule:
                 lines.append("对方的作息（他自己说过的，按这个算）：")
                 lines.extend(f"  - {s}" for s in user_schedule)
-            lines.append(
-                f"对方那边：按钟点推**大概**是「{tod_hint}」——"
-                "他刚发的消息说的是他此刻在哪、在干嘛，以那个为准。"
-            )
+            # In a reply his newest message is the one he just sent, and it
+            # outranks the clock. An opener only fires after a silence of a day
+            # or more, so there his newest message is that old by construction:
+            # telling her it says where he is now was false on every opener.
+            if proactive_mode:
+                lines.append(
+                    f"对方那边：按钟点推**大概**是「{tod_hint}」——"
+                    "他上一条消息是隔了一阵之前发的，那时他在哪、在干嘛，到现在多半已经变了，"
+                    "此刻按钟点推。"
+                )
+            else:
+                lines.append(
+                    f"对方那边：按钟点推**大概**是「{tod_hint}」——"
+                    "他刚发的消息说的是他此刻在哪、在干嘛，以那个为准。"
+                )
         lines.append(
             f"你自己此刻：{self_scene}。你说在做什么、看到什么，跟这个光线对得上。"
         )
