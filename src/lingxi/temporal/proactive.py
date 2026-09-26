@@ -342,19 +342,83 @@ async def _semantically_too_similar(
     Fail-safe by design: no embedder, or an embedding call that errors, means
     this check abstains. Repeating is a smaller harm than falling silent.
     """
-    if embedder is None or not candidate.strip() or not previous:
+    prev = [p for p in previous if p.strip()]
+    if embedder is None or not candidate.strip() or not prev:
         return None
     try:
-        cand_vec = await embedder.embed(candidate)
-        for prev in previous:
-            if not prev.strip():
-                continue
-            if _cosine(cand_vec, await embedder.embed(prev)) >= threshold:
-                return prev
+        batch = getattr(embedder, "embed_batch", None)
+        if batch is None:
+            # One text per call: stop at the first match rather than pay for
+            # the rest.
+            cand = await embedder.embed(candidate)
+            for p in prev:
+                if _cosine(cand, await embedder.embed(p)) >= threshold:
+                    return p
+            return None
+        # One burst: this compared against up to forty earlier openers one
+        # remote call at a time, ~9s ahead of every opener — and the common
+        # case, no match, has to embed all of them anyway.
+        vecs = await batch([candidate] + prev)
     except Exception as e:
         print(f"[proactive] semantic dup check unavailable: {e}", flush=True)
         return None
+    for p, v in zip(prev, vecs[1:]):
+        if _cosine(vecs[0], v) >= threshold:
+            return p
     return None
+
+
+async def _embed_all(embedder, texts: list[str]) -> list[list[float]]:
+    batch = getattr(embedder, "embed_batch", None)
+    if batch is not None:
+        return await batch(texts)
+    return [await embedder.embed(t) for t in texts]
+
+
+# Bubble against bubble. Her openers come in two or three bubbles, and the
+# re-ask rides in the second behind a fresh first: the one thing he had told
+# her in a week was asked about again
+# in six sent openers over six days, each passing the whole-message check at
+# 0.44-0.56 because the fresh bubble diluted it. Bubble to bubble, those
+# re-asks sit at 0.653-0.760 and the highest non-repeat at 0.645 (itself a
+# re-ask of whether he was at his desk). Calibrated on ~50 bubbles; the
+# margin is narrow, so a match drops the bubble rather than the opener.
+_BUBBLE_DUP_THRESHOLD = 0.65
+
+
+def _bubbles(text: str) -> list[str]:
+    return [b.strip() for b in re.split(r"\n\s*\n", text or "") if b.strip()]
+
+
+async def _drop_repeated_bubbles(
+    candidate: str, previous: list[str], embedder,
+    *, threshold: float = _BUBBLE_DUP_THRESHOLD,
+) -> tuple[str, list[str]]:
+    """The candidate without any bubble that repeats one already sent.
+
+    Returns (what is left, what was dropped). Everything left means send as
+    is; nothing left means the whole opener was a repeat. Abstains — returns
+    the candidate untouched — without an embedder or on any error.
+    """
+    parts = _bubbles(candidate)
+    prev_parts = [b for p in previous for b in _bubbles(p)]
+    if embedder is None or not parts or not prev_parts:
+        return candidate, []
+    try:
+        vecs = await _embed_all(embedder, parts + prev_parts)
+    except Exception as e:
+        print(f"[proactive] bubble dup check unavailable: {e}", flush=True)
+        return candidate, []
+    mine, theirs = vecs[:len(parts)], vecs[len(parts):]
+    kept, dropped = [], []
+    for part, v in zip(parts, mine):
+        if any(_cosine(v, w) >= threshold for w in theirs):
+            dropped.append(part)
+        else:
+            kept.append(part)
+    if not dropped:
+        return candidate, []
+    return "\n\n".join(kept), dropped
 
 
 # Her life-sim emits a moment every half hour, so the six most recent events
@@ -809,6 +873,16 @@ class ProactiveScheduler:
         # different thread rather than reinforcing this one.
         previous = [e.get("text", "")
                     for e in self._recent_proactive.get(key, [])]
+        message, repeated = await _drop_repeated_bubbles(
+            message, previous, self.engine.memory.embedding_provider)
+        if repeated:
+            print(f"[proactive] dropped {len(repeated)} repeated bubble(s): "
+                  f"{repeated[0][:40]!r}", flush=True)
+            if not message:
+                return {
+                    "key": key, "status": "validation_rejected",
+                    "reason": "repeated_bubbles", "message": repeated[0],
+                }
         dup = _too_similar(message, previous)
         reason = "near_duplicate"
         if dup is None:
