@@ -26,6 +26,13 @@ _WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日
 # The planner may run as a startup catch-up at any hour, not only at the 7am
 # tick — the prompt states the real date/weekday/clock so the plan follows the
 # actual day (weekend vs weekday) and covers only the hours still ahead.
+#
+# The outside-world example names no setting. It used to offer 学校里遇到的事,
+# a school written into the planner for every persona — and 唐可可 graduated
+# (config, 2026-08-13). Her simulated days kept 上课、课间、进教室、回宿舍、
+# 食堂 at 4-8% of events and plans for six weeks after. A/B on the real 09-24
+# prompt, eight plans each: 8 school items in 77 lines with the example, 1 in
+# 75 without. Where she spends her day comes from the persona, not from here.
 _PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我想一下今天{scope_phrase}怎么过。
 
 【昨天我反思到的】
@@ -42,7 +49,7 @@ _PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我�
 - hour 粒度，time_window 形如 "09:00-12:00"，全部排在 {now_hhmm} 之后
 - 写**具体**符合**你这个人/你这种日子**的事：落到你心里清楚在做的那件具体行为（如『趴窗台晒太阳』『等他下班』）；今天是{weekday}，按{weekday}该有的节奏排
 - 至少 2 条对应到你长期在惦记/在做的事
-- **一天里有别人也有外面的世界**：至少 2-3 条牵涉到上面这些人、或发生在门外（碰面、一起做点什么、路上/店里/学校里遇到的事、跟人说的一句话）。剩下的可以是你一个人的事。真实的一天是里外都有的。
+- **一天里有别人也有外面的世界**：至少 2-3 条牵涉到上面这些人、或发生在门外（碰面、一起做点什么、路上/店里遇到的事、跟人说的一句话）。剩下的可以是你一个人的事。真实的一天是里外都有的。
 
 输出 JSON：
 [{{"time_window": "09:00-12:00", "content": "...", "goal": "..."}}, ...]
