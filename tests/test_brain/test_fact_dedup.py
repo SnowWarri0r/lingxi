@@ -37,13 +37,35 @@ def test_it_asks_for_a_merged_fact_not_an_increment():
 
 
 class _Emb:
-    """Deterministic stand-in: identical text is identical, else orthogonal-ish."""
+    """Deterministic stand-in: identical text is identical, else orthogonal-ish.
+
+    Exposes embed() only, so these cases exercise the single-call fallback.
+    """
 
     def __init__(self, table):
         self._t = table
 
     async def embed(self, text):
         return self._t.get(text, [0.0, 0.0, 1.0])
+
+
+class _BatchEmb(_Emb):
+    """What production actually uses. The check compares one new fact against
+    up to sixty stored ones, and at ~220ms a call the serial loop it replaces
+    ran for thirteen seconds per fact remembered."""
+
+    def __init__(self, table):
+        super().__init__(table)
+        self.single_calls = 0
+        self.batch_calls = 0
+
+    async def embed(self, text):
+        self.single_calls += 1
+        return await super().embed(text)
+
+    async def embed_batch(self, texts):
+        self.batch_calls += 1
+        return [self._t.get(t, [0.0, 0.0, 1.0]) for t in texts]
 
 
 @pytest.mark.asyncio
@@ -149,3 +171,47 @@ async def test_without_an_embedder_the_write_still_happens(tmp_path):
     contents = [f.content for f in await store.query(
         subject="user:feishu:x", type=FactType.PATTERN, limit=10)]
     assert "对方养了一只猫" in contents
+
+
+@pytest.mark.asyncio
+async def test_the_duplicate_check_asks_for_vectors_once(tmp_path):
+    """Batched, and still finding the duplicate it found before."""
+    from datetime import datetime
+
+    from lingxi.conversation.engine import ConversationEngine
+    from lingxi.facts.models import Fact, FactType, Source
+    from lingxi.facts.retriever import FactRetriever
+    from lingxi.facts.store import FactStore
+    from lingxi.facts.writers.user_statement import UserStatementWriter
+    from lingxi.memory.manager import MemoryManager
+    from lingxi.persona.models import Identity, PersonaConfig
+
+    store = FactStore(tmp_path / "f.db")
+    await store.init()
+    SHORT = "对方说下个月会去邻市的漫展见阿澪"
+    LONG = "对方说下个月会去邻市的漫展见 Mio，还要递手写信"
+    for i in range(12):
+        await store.write(Fact(subject="user:feishu:x", content=f"别的事 {i}",
+                               source=Source.USER_STATED, type=FactType.PATTERN,
+                               ts=datetime.now(), importance=5))
+    await store.write(Fact(subject="user:feishu:x", content=SHORT,
+                           source=Source.USER_STATED, type=FactType.PATTERN,
+                           ts=datetime.now(), importance=5))
+
+    eng = ConversationEngine(
+        persona=PersonaConfig(name="A", identity=Identity(full_name="A")),
+        llm_provider=object(),
+        memory_manager=MemoryManager(data_dir=str(tmp_path / "m")),
+        fact_retriever=FactRetriever(store),
+        user_statement_writer=UserStatementWriter(store),
+    )
+    eng._current_recipient_key = "feishu:x"
+    emb = _BatchEmb({SHORT: [1.0, 0.0, 0.0], LONG: [1.0, 0.0, 0.0]})
+    eng.memory.embedding_provider = emb
+
+    await eng._write_one_user_fact("user:feishu:x", LONG)
+
+    assert emb.batch_calls == 1 and emb.single_calls == 0
+    contents = [f.content for f in await store.query(
+        subject="user:feishu:x", type=FactType.PATTERN, limit=30)]
+    assert LONG in contents and SHORT not in contents
