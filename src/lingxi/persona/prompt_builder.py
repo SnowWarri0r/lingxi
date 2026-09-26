@@ -552,9 +552,20 @@ class PromptBuilder:
             return "天还没亮，窗外一片暗，屋里靠灯光"
         if now < rise + golden:
             return "天刚亮，晨光淡淡的，凉丝丝的"
+        # Sun times say when the sun is up; the sky says whether it shows. The
+        # sunny phrasings below are claims about the sky, so they wait on it.
+        from lingxi.temporal.weather import cached, sun_visible
+        weather = cached(self._persona_location(), now=now)
+        overcast = sun_visible(weather) is False
         if now < set_ - golden:
+            if overcast:
+                return (f"大白天，天是亮的，外面{weather.description}，太阳没露面"
+                        f"（今天日落大约 {set_.strftime('%H:%M')}）")
             return f"大白天，日头正好（今天日落大约 {set_.strftime('%H:%M')}）——晒太阳、趴窗台这类成立"
         if now < set_:
+            if overcast:
+                return (f"临近日落（今天日落大约 {set_.strftime('%H:%M')}），"
+                        f"外面{weather.description}，天色在一点点暗下去")
             return f"临近日落（今天日落大约 {set_.strftime('%H:%M')}），夕阳是今天最后一点光——现在说晒落日/看晚霞成立"
         if now < set_ + dusk_tail:
             return "太阳刚落下，天边还留着一点余光，很快就黑"
