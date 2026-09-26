@@ -34,11 +34,15 @@ class TestValidatorRejectsResponseTokenOpener:
         assert "response_token" in result
         assert "嗯" in result
 
-    def test_rejects_欸_prefix(self):
-        assert _validate_proactive_opener("欸 你今天怎么样").startswith("opens_with_response_token")
+    # 欸/诶 and 对了 used to be rejected here. Replayed over every opener she
+    # composed, they accounted for 27 of the 32 the rule threw away, and none
+    # read as a reply — 诶 is how an IM message gets attention, 对了 is "by
+    # the way". See test_opener_token_rule.py.
+    def test_an_attention_getter_is_an_opener(self):
+        assert _validate_proactive_opener("欸 你上次说的那家店我去了") is None
 
-    def test_rejects_对了_prefix(self):
-        assert _validate_proactive_opener("对了 想问你").startswith("opens_with_response_token")
+    def test_by_the_way_is_an_opener(self):
+        assert _validate_proactive_opener("对了 想问你那个抽选中没中") is None
 
 
 class TestValidatorRejectsSelfReportOpener:
