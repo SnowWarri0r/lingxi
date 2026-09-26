@@ -164,7 +164,8 @@ class ContextAssembler:
             # behavioral pattern, generating MORE asking-about-X turns.
             # Long-term coverage lives in episode summaries (rendered in
             # the system prompt's memory block), not in chat history.
-            # turn.summary is kept on disk for analytics but never shown.
+            # Nothing writes turn.summary any more; the field stays only so
+            # older buffer files still load.
             result_messages.append({"role": turn.role, "content": turn.content})
 
         return result_messages
