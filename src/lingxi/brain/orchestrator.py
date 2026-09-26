@@ -216,7 +216,14 @@ async def decide(
         response = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             system=f"你是 {agent_name} 的对话调度器，专门做结构化决策，输出严格 JSON。",
-            max_tokens=700,
+            # 700 was cut on the turns with the most to remember. Across his
+            # 94 logged turns the median decision is ~290 tokens and p95 ~470;
+            # the only two over 600 both stopped at exactly 700, mid
+            # memory_writes — second-to-last in the schema, so truncation eats
+            # the memories first — and the unparseable JSON then dropped the
+            # whole decision to default. Output is paid for only as generated,
+            # so the headroom costs an ordinary turn nothing.
+            max_tokens=1400,
             temperature=0.3,
             _debug_purpose="orchestrator",
             **kwargs,
