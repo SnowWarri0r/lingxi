@@ -1068,8 +1068,8 @@ class ProactiveScheduler:
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
-                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，"
-                f"原话、可能被截断）\n"
+                f"## 对方最后发的几句（原话、可能被截断；是隔了一阵之前说的，"
+                f"每条前面有日期时间）\n"
                 f"{user_recent_block}\n\n"
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
@@ -1086,8 +1086,8 @@ class ProactiveScheduler:
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
-                f"## 对方最近发的话（**他此刻的状态/在干啥都在这里**，"
-                f"原话、可能被截断）\n"
+                f"## 对方最后发的几句（原话、可能被截断；是隔了一阵之前说的，"
+                f"每条前面有日期时间）\n"
                 f"{user_recent_block}\n\n"
                 f"{known_block}"
                 f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
