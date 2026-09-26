@@ -478,12 +478,26 @@ def _format_known_block(facts: list[Fact]) -> str:
     )
 
 
-# Tokens that signal "I'm continuing/responding to something just said".
-# Real openers don't start with these — only replies do.
+# Tokens that signal "I'm continuing/responding to something just said" —
+# but only as a word on their own. Matched as bare prefixes they threw away
+# 32 of the 230 openers she composed (14%), and none of the 32 read as a
+# reply: 诶 is how an IM message gets someone's attention (20 of them,
+# including a lottery deadline that same night), 对了 is "by the way" (7),
+# and 对/那 are the first character of 对着、那个、那段 (5). A bare 嗯/哦/好/
+# 行/是 answering nothing is the shape this was written for, and still goes.
 _RESPONSE_TOKEN_PREFIXES = (
-    "嗯", "对", "那", "啊", "哈", "欸", "诶", "哦", "唔", "嗯嗯", "对了",
-    "好", "行", "是", "嗯…", "嗯...",
+    "嗯嗯", "好的", "好吧", "是的", "对的", "行吧",
+    "嗯", "对", "那", "啊", "哈", "哦", "唔", "好", "行", "是",
 )
+# What ends a standalone token: whitespace, punctuation, or the message.
+_TOKEN_BOUNDARY = re.compile(r"^(?:$|[\s，,。.！!？?…~～、:：;；]|\.\.)")
+
+
+def _opening_response_token(stripped: str) -> str | None:
+    for tok in _RESPONSE_TOKEN_PREFIXES:
+        if stripped.startswith(tok) and _TOKEN_BOUNDARY.match(stripped[len(tok):]):
+            return tok
+    return None
 
 
 def _validate_proactive_opener(message: str) -> str | None:
@@ -502,9 +516,9 @@ def _validate_proactive_opener(message: str) -> str | None:
 
     stripped = message.strip()
 
-    for tok in _RESPONSE_TOKEN_PREFIXES:
-        if stripped.startswith(tok):
-            return f"opens_with_response_token:{tok}"
+    tok = _opening_response_token(stripped)
+    if tok:
+        return f"opens_with_response_token:{tok}"
 
     if _looks_like_self_report_opener(stripped):
         return "self_report_opener"
