@@ -596,12 +596,23 @@ class ConversationEngine:
         # Hand it the facts it already holds about him. Without them item 8's
         # "don't record the same thing twice" is unfollowable — it only ever
         # saw a count.
+        # Ranked by score alone, the fifteen slots held nine facts on 09-21:
+        # the handwritten letter three times, the autograph twice, the trip
+        # twice, 追了好几场没抽中 twice. Eleven of the fifteen were one
+        # afternoon a month past, and what got pushed out was everything
+        # still true of him — where he lives, when he finishes work, how he
+        # commutes, and a trip nine days away at the time. Write-side dedup does
+        # not reach this: those are all distinct sentences, stored before the
+        # dedup existed. Assembly is where it has to be fixed.
         known_facts: list[str] = []
         if self.fact_retriever is not None and recipient_key:
             try:
-                known_facts = [f.content for f in await self.fact_retriever.fetch(
+                pool = await self.fact_retriever.fetch(
                     FactQuery(subject=f"user:{recipient_key}",
-                              type=FactType.PATTERN, limit=15))]
+                              type=FactType.PATTERN, limit=30))
+                picked = await select_diverse(
+                    pool, 15, self.memory.embedding_provider)
+                known_facts = [f.content for f in picked]
             except Exception as e:
                 print(f"[brain] known-facts fetch failed (non-fatal): {e}", flush=True)
 
@@ -1725,10 +1736,19 @@ class ConversationEngine:
                 subject=subject, type=FactType.PATTERN, limit=60)
             if not existing:
                 return None
-            vec = await emb.embed(content)
+            # One burst rather than sixty round-trips: at ~220ms each this
+            # loop ran for thirteen seconds per remembered fact, and it runs
+            # once per fact the orchestrator decides to keep.
+            batch = getattr(emb, "embed_batch", None)
+            if batch is not None:
+                vecs = await batch([content] + [f.content for f in existing])
+                vec, others = vecs[0], vecs[1:]
+            else:
+                vec = await emb.embed(content)
+                others = [await emb.embed(f.content) for f in existing]
             best, best_sim = None, 0.0
-            for f in existing:
-                sim = _cosine(vec, await emb.embed(f.content))
+            for f, other in zip(existing, others):
+                sim = _cosine(vec, other)
                 if sim > best_sim:
                     best, best_sim = f, sim
             return best if best_sim >= self._FACT_DUP_THRESHOLD else None
