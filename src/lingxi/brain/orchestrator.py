@@ -59,16 +59,7 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    - {agent} 凭人设/记忆就能答的 → 留空 ""
    - 对方要 {agent} **复述某句具体台词/歌词、某个精确细节**（原话、歌词原文、某集具体情节）时，即便这件事 {agent} 大致记得，也填 query 去查确切的——记忆里多半只有大概、没有逐字原文，查了才不至于临场编。
    - 只在"答准需要外部确凿事实、或要精确原文/细节，而记忆里只有大概"时才填，平常宁可留空（每次查都有延迟）。
-8. **memory_writes**：用户这条里有没有**下次还用得上**的事实？有就写成一句一条存进长期记忆（往后每轮都翻得到）。
-   该记的：作息安排（`对方一般七点半下班，偶尔加班到九点`）、身边的人和事（`对方养了只叫团子的猫，很胖`）、
-   在做的事（`对方在赶一个新项目，月底 deadline`）、喜好和雷区（`对方不吃香菜`）、
-   约定（`说好下次演出对方来看`）、身份背景（`对方是后端工程师`）。
-   用 `对方` 指称，**只写用户自己说过的**——没明说的性别/年龄/职业不要补。
-   纯寒暄、当下天气心情这类过去就过去的，留空 []。
-   **下面【已经记住的】列的就是已有的，同一件事换个说法不用再写一遍**（同一个人的
-   不同叫法也算同一件事）；只有当这轮真的多出了新信息时才写，而且**把新旧合成完整的
-   一条**，不要只写增量。
-9. **user_state**：对方**此刻**人在哪、在干什么。**一个确定的状态**，一句话。
+8. **user_state**：对方**此刻**人在哪、在干什么。**一个确定的状态**，一句话。
    依据只有一个：他自己在这几轮里说过的话。他说"想下班了"，他就在公司；他说"刚到家"，他就在家。
    说过之后没有新消息表明情况变了，那就还是那个状态——**又聊了几轮 ≠ 又过了几小时**，看
    【最近12轮】里他上一次交代处境是哪句，那句依然算数。
@@ -96,9 +87,6 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
 - 心情：{mood}
 - 最近发生过：{last_lived}
 
-【已经记住的关于对方的事】（写 memory_writes 前先看这里——重复的别再写）
-{known_facts}
-
 【可用事实目录】（仅 count，不含内容）
 {catalog}
 
@@ -114,7 +102,6 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
   "thread_summary": "...",
   "plan_conflict": false,
   "lookup_query": "",
-  "memory_writes": [],
   "user_state": ""
 }}
 """
@@ -163,7 +150,6 @@ def build_orchestrator_prompt(
     history: list[dict] | None = None,
     prev_thread_summary: str = "",
     agent_name: str = "Aria",
-    known_facts: list[str] | None = None,
     now: datetime | None = None,
 ) -> str:
     last_lived = "；".join(digest.last_lived) if digest.last_lived else "（暂无）"
@@ -177,13 +163,7 @@ def build_orchestrator_prompt(
         catalog=catalog_str,
         dialog_thread=_render_dialog_thread(history, agent_name=agent_name),
         prev_thread_summary=prev_thread_summary.strip() or "（无——这是话题开始或重启）",
-        # The catalog is counts only, so item 8's "don't write the same thing
-        # twice" was an instruction it had no way to follow: it wrote
-        # 「去漫展见阿澪」 one turn and 「…见 Mio」 the next, unable
-        # to see the first. Showing the contents is what makes the rule real.
-        known_facts="\n".join(f"  - {c}" for c in (known_facts or []))
-                    or "  （还没记过什么）",
-        # Item 9 asks what he is doing 此刻 and nothing here said when 此刻 was.
+        # Item 8 asks what he is doing 此刻 and nothing here said when 此刻 was.
         # On 2026-09-13 the user said he was tired at 15:19 and still up at 19:32; this
         # answered 「周日下午，在家」 — written at half past seven,
         # because it could not know. That string renders under the real clock
@@ -203,26 +183,23 @@ async def decide(
     prev_thread_summary: str = "",
     model: str | None = None,
     agent_name: str = "Aria",
-    known_facts: list[str] | None = None,
     now: datetime | None = None,
 ) -> OrchestrationDecision:
     prompt = build_orchestrator_prompt(
         user_input, digest, catalog,
         history=history, prev_thread_summary=prev_thread_summary,
-        agent_name=agent_name, known_facts=known_facts, now=now,
+        agent_name=agent_name, now=now,
     )
     try:
         kwargs = {"model": model} if model else {}
         response = await llm.complete(
             messages=[{"role": "user", "content": prompt}],
             system=f"你是 {agent_name} 的对话调度器，专门做结构化决策，输出严格 JSON。",
-            # 700 was cut on the turns with the most to remember. Across his
-            # 94 logged turns the median decision is ~290 tokens and p95 ~470;
-            # the only two over 600 both stopped at exactly 700, mid
-            # memory_writes — second-to-last in the schema, so truncation eats
-            # the memories first — and the unparseable JSON then dropped the
-            # whole decision to default. Output is paid for only as generated,
-            # so the headroom costs an ordinary turn nothing.
+            # 700 was cut on the biggest turns: across 94 logged turns the
+            # median decision is ~290 tokens and p95 ~470, the only two over
+            # 600 both stopped at exactly 700, and the unparseable JSON then
+            # dropped the whole decision to default. Output is paid for only
+            # as generated, so the headroom costs an ordinary turn nothing.
             max_tokens=1400,
             temperature=0.3,
             _debug_purpose="orchestrator",

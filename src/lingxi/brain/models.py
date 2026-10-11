@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 
@@ -47,11 +47,6 @@ class OrchestrationDecision:
     # pre-turn and its result is injected as grounding — the responder stays
     # a single pass with no chat-time tools.
     lookup_query: str = ""
-    # Durable facts about the interlocutor worth keeping past this turn
-    # (schedule, people, projects, preferences, commitments). Extraction is an
-    # analysis job, so it belongs here rather than as a side-task for the
-    # responder, which is busy composing one line of speech and skips it.
-    memory_writes: list[str] = field(default_factory=list)
     # Where the interlocutor is and what he's doing right now, as evidenced by
     # this conversation. The prompt has always carried 【你此刻】 for her but
     # nothing for him, so his situation was left to a clock table keyed to a
@@ -72,7 +67,6 @@ class OrchestrationDecision:
             thread_summary="",
             plan_conflict=False,
             lookup_query="",
-            memory_writes=[],
         )
 
     @classmethod
@@ -106,10 +100,5 @@ class OrchestrationDecision:
             thread_summary=str(raw.get("thread_summary", "")),
             plan_conflict=bool(raw.get("plan_conflict", False)),
             lookup_query=str(raw.get("lookup_query") or "").strip(),
-            memory_writes=[
-                s for s in (
-                    str(m).strip() for m in (raw.get("memory_writes") or [])
-                ) if s
-            ],
             user_state=_decisive(str(raw.get("user_state") or "").strip()),
         )

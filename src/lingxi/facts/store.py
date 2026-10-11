@@ -316,6 +316,19 @@ class FactStore:
         async with self._lock:
             await asyncio.to_thread(_write)
 
+    async def expire(self, fact_id: str, at: datetime) -> None:
+        """Retire a fact from now on, keeping the row: queries already skip
+        what has expired, and clearing expires_at brings it back."""
+        def _write():
+            c = self._conn()
+            c.execute("UPDATE facts SET expires_at = ? WHERE id = ?",
+                      (at.isoformat(), fact_id))
+            c.commit()
+            c.close()
+
+        async with self._lock:
+            await asyncio.to_thread(_write)
+
     async def count_by_subject(self) -> dict[str, int]:
         def _read():
             c = self._conn()

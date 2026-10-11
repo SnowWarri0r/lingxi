@@ -448,6 +448,11 @@ class FeishuBot(OutboundChannel):
                 self._proactive_scheduler.start(), self._loop
             )
 
+        if getattr(self.engine, "memory_consolidator", None) is not None:
+            asyncio.run_coroutine_threadsafe(
+                self.engine.memory_consolidator.start(), self._loop
+            )
+
         # Reflection is handled by facts/Reflector + ReflectionTrigger (wired
         # in create_engine). Aria's life runs through DailyPlanner +
         # PlanExecutor (started below) writing aria.* facts — the old

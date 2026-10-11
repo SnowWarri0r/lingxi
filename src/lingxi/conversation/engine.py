@@ -263,11 +263,6 @@ class ConversationEngine:
         self._turn_locks: dict[str, _asyncio.Lock] = {}
         self._turn_locks_guard: _asyncio.Lock = _asyncio.Lock()
 
-        # In-flight memory_write tasks. fire-and-forget add_fact tasks land
-        # here so end_session() can await them before exit; otherwise quick
-        # shutdowns lose pending Chroma writes.
-        self._pending_memory_tasks: set[_asyncio.Task] = set()
-
         self.fewshot_store = fewshot_store
         self.annotation_store = annotation_store
         self.fewshot_retriever = fewshot_retriever
@@ -598,35 +593,11 @@ class ConversationEngine:
         prev_summary = self._thread_summary_for(recipient_key)
 
         # 3. Orchestrator decides
-        # Hand it the facts it already holds about him. Without them item 8's
-        # "don't record the same thing twice" is unfollowable — it only ever
-        # saw a count.
-        # Ranked by score alone, the fifteen slots held nine facts on 09-21:
-        # the handwritten letter three times, the autograph twice, the trip
-        # twice, 追了好几场没抽中 twice. Eleven of the fifteen were one
-        # afternoon a month past, and what got pushed out was everything
-        # still true of him — where he lives, when he finishes work, how he
-        # commutes, and a trip nine days away at the time. Write-side dedup does
-        # not reach this: those are all distinct sentences, stored before the
-        # dedup existed. Assembly is where it has to be fixed.
-        known_facts: list[str] = []
-        if self.fact_retriever is not None and recipient_key:
-            try:
-                pool = await self.fact_retriever.fetch(
-                    FactQuery(subject=f"user:{recipient_key}",
-                              type=FactType.PATTERN, limit=30))
-                picked = await select_diverse(
-                    pool, 15, self.memory.embedding_provider)
-                known_facts = [f.content for f in picked]
-            except Exception as e:
-                print(f"[brain] known-facts fetch failed (non-fatal): {e}", flush=True)
-
         decision = await decide(
             self.llm, user_input, digest, catalog,
             history=messages,
             prev_thread_summary=prev_summary,
             agent_name=self.persona.name,
-            known_facts=known_facts,
             now=now,
         )
         print(
@@ -639,14 +610,6 @@ class ConversationEngine:
 
         if decision.plan_conflict and self.plan_executor is not None:
             self.plan_executor.request_replan()
-
-        # Durable facts the orchestrator spotted in this user turn. Extraction
-        # rides here rather than only on the responder: the responder is busy
-        # composing speech and skips it (measured — it caught 1 of 4 plainly
-        # stated facts), while the orchestrator is already analysing the turn.
-        if decision.memory_writes:
-            print(f"[brain] memory writes: {decision.memory_writes}", flush=True)
-            self._write_user_facts(decision.memory_writes)
 
         # Pre-turn web lookup: when the orchestrator flags a fact the persona
         # doesn't carry in memory, fetch grounding NOW and inject it below.
@@ -1690,133 +1653,12 @@ class ConversationEngine:
         if self._current_recipient_key and output.inner_thought:
             self._recent_inner_thoughts[self._current_recipient_key] = output.inner_thought
 
-        # Apply memory writes → facts.db (subject=user:<recipient_key>).
-        # These are durable facts the persona chose to remember about the
-        # interlocutor; they surface back via the orchestrator/renderer's
-        # 【你和他】 block. Fire-and-forget, tracked so end_session() can flush.
-        # Extraction of durable user facts is the orchestrator's job (it reads
-        # the turn pre-response and is the stronger model). The responder isn't
-        # asked to fill memory_writes — when both did, the same fact landed
-        # twice in slightly different words. Anything it volunteers still gets
-        # written, so a persona prompt that opts back in keeps working.
-        self._write_user_facts(output.memory_writes)
+        # Facts about him are not written per turn; the memory consolidator
+        # reads the whole conversation once it goes quiet. A memory_writes
+        # field in the output is ignored.
 
         self._last_output = output
         return output
-
-    def _write_user_facts(self, contents: list[str]) -> None:
-        """Persist facts about the interlocutor to facts.db as
-        subject=user:<recipient_key>. They surface back through the
-        orchestrator/renderer's 【你和他】 block on later turns.
-
-        Fire-and-forget, tracked so end_session() can flush. Called from both
-        the orchestrator path (pre-turn analysis) and the responder's META.
-        """
-        import asyncio
-
-        if not contents:
-            return
-        if self.user_statement_writer is None or not self._current_recipient_key:
-            return
-        subject = f"user:{self._current_recipient_key}"
-
-        def _report(t: "asyncio.Task") -> None:
-            # Retrieve the result so a failed write is visible. Without this the
-            # exception dies with the task and memory silently stops persisting.
-            self._pending_memory_tasks.discard(t)
-            if not t.cancelled() and t.exception() is not None:
-                print(f"[memory] user-fact write failed: {t.exception()!r}",
-                      flush=True)
-
-        for content in contents:
-            try:
-                loop = asyncio.get_running_loop()
-                task = loop.create_task(self._write_one_user_fact(subject, content))
-                self._pending_memory_tasks.add(task)
-                task.add_done_callback(_report)
-            except RuntimeError as e:
-                print(f"[memory] user-fact write not scheduled: {e}", flush=True)
-
-    # Same fact, reworded, written again. Calibrated on the 666 pairs this
-    # persona had accumulated: median similarity 0.37, p90 0.57, and every
-    # genuine duplicate at or above 0.786 — including 「去漫展见 Mio」
-    # against 「…见阿澪」 at 0.790, which is the same sentence with the
-    # same person's two names. The nearest genuinely-different pair, a return
-    # date against a departure date, sits at 0.741. The gap is narrow, so a
-    # match does not drop anything: whichever wording carries more detail is
-    # kept and the other is superseded, and a misfire costs precision rather
-    # than a fact.
-    _FACT_DUP_THRESHOLD = 0.78
-
-    async def _write_one_user_fact(self, subject: str, content: str) -> None:
-        """Write a fact about him, folding it into a near-duplicate if one exists."""
-        from lingxi.facts.models import Source
-
-        existing = await self._near_duplicate_fact(subject, content)
-        if existing is not None:
-            if len(content) <= len(existing.content):
-                print(f"[memory] duplicate, kept the fuller one: {content[:34]}",
-                      flush=True)
-                return
-            print(f"[memory] supersedes a shorter duplicate: {content[:34]}",
-                  flush=True)
-        await self.user_statement_writer.write(
-            subject=subject, content=content, type=FactType.PATTERN,
-            source=Source.USER_STATED, ts=datetime.now(),
-            supersedes=existing.id if existing is not None else None,
-        )
-
-    async def _near_duplicate_fact(self, subject: str, content: str):
-        """The closest stored fact if it's a restatement, else None.
-
-        Best-effort: without an embedder or on any failure this returns None
-        and the write proceeds, because losing a fact is worse than keeping
-        a duplicate.
-        """
-        emb = getattr(self.memory, "embedding_provider", None)
-        if emb is None or self.fact_retriever is None:
-            return None
-        try:
-            existing = await self.fact_retriever._store.query(
-                subject=subject, type=FactType.PATTERN, limit=60)
-            if not existing:
-                return None
-            # One burst rather than sixty round-trips: at ~220ms each this
-            # loop ran for thirteen seconds per remembered fact, and it runs
-            # once per fact the orchestrator decides to keep.
-            batch = getattr(emb, "embed_batch", None)
-            if batch is not None:
-                vecs = await batch([content] + [f.content for f in existing])
-                vec, others = vecs[0], vecs[1:]
-            else:
-                vec = await emb.embed(content)
-                others = [await emb.embed(f.content) for f in existing]
-            best, best_sim = None, 0.0
-            for f, other in zip(existing, others):
-                sim = _cosine(vec, other)
-                if sim > best_sim:
-                    best, best_sim = f, sim
-            return best if best_sim >= self._FACT_DUP_THRESHOLD else None
-        except Exception as e:
-            print(f"[memory] dedup check failed (non-fatal): {e}", flush=True)
-            return None
-
-    async def flush_pending_memory_writes(self) -> int:
-        """Await all in-flight memory_write tasks. Call before consolidation
-        or shutdown so add_fact() embeddings + Chroma writes don't get
-        silently dropped on quick exit.
-        """
-        import asyncio as _asyncio
-        pending = list(self._pending_memory_tasks)
-        if not pending:
-            return 0
-        done, _unfinished = await _asyncio.wait(pending, timeout=10.0)
-        for t in done:
-            try:
-                t.result()
-            except Exception as e:
-                print(f"[engine] memory_write task failed: {e}")
-        return len(done)
 
     async def end_session(
         self,
@@ -1824,10 +1666,6 @@ class ConversationEngine:
         recipient_id: str | None = None,
     ) -> dict:
         """End the current conversation session and consolidate memory."""
-        # Flush in-flight memory writes BEFORE consolidating so the
-        # consolidator sees the latest facts.
-        await self.flush_pending_memory_writes()
-
         recipient_key = (
             f"{channel}:{recipient_id}" if channel and recipient_id else "_global"
         )

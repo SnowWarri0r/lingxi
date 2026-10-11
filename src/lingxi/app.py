@@ -228,11 +228,10 @@ async def create_engine(
     await sticker_store.init()
 
     fact_retriever = FactRetriever(facts_store)
-    # A chat turn yields 0-2 user facts, so the default batch of 5 never fills
-    # and every fact waits out the full flush window before it is scored and
-    # stored. At the 30s default that outlives flush_pending_memory_writes()'s
-    # 10s wait, so facts were dropped whenever a session ended. 5s lands them
-    # promptly and still batches bursts.
+    # A consolidation yields a handful of user facts, so the default batch of
+    # 5 rarely fills and every fact would wait out the full flush window
+    # before it is scored and stored. 5s lands them promptly and still
+    # batches bursts.
     importance_scorer = ImportanceScorer(llm_provider, flush_seconds=5.0)
 
     # _LazyTrigger breaks the init cycle: writers need a trigger ref, but the
@@ -305,6 +304,15 @@ async def create_engine(
     )
     # Expose daily_planner on engine so the channel's start() can schedule loops.
     engine.daily_planner = daily_planner
+    # Facts about the user are written once a conversation goes quiet, by
+    # reading all of it — see lingxi.memory.consolidator.
+    from lingxi.memory.consolidator import ConsolidationScheduler
+    engine.memory_consolidator = (
+        ConsolidationScheduler(
+            llm=llm_provider, tracker=interaction_tracker,
+            short_term=memory_manager.short_term, store=facts_store,
+            writer=user_statement_writer, persona=persona)
+        if interaction_tracker is not None else None)
 
     # Load persisted state
     await engine.load_state()

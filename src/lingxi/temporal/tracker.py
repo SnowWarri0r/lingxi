@@ -50,6 +50,9 @@ class InteractionRecord(BaseModel):
     # Each recent opener and whether he answered it, so the scheduler can tell
     # the hours he picks up from the hours he never does.
     proactive_outcomes: list[ProactiveOutcome] = Field(default_factory=list)
+    # The last turn the memory consolidator has read; later turns are
+    # waiting to be read once the conversation goes quiet.
+    last_consolidated_at: datetime | None = None
 
 
 class InteractionTracker:
