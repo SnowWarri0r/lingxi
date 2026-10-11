@@ -20,8 +20,9 @@ def test_style_block_is_built_before_the_force_branch():
     before_branch, _, after_branch = src.partition("if force:")
     # built before the branch (so both paths see it)
     assert "style_block = (" in before_branch
-    # and referenced at least twice after — once per path
-    assert after_branch.count("{style_block}") >= 2
+    # used by the manual-test path only; the scheduled opener takes its
+    # tone from the persona
+    assert after_branch.count("{style_block}") == 1
 
 
 def test_all_style_examples_are_ordinary_volume():
@@ -50,7 +51,7 @@ def test_own_life_block_allows_ordinary_material():
                   ts=datetime(2026, 7, 28, 15, 0))]
     block = _format_own_life_block(facts)
     # ordinary days are explicitly valid opener material
-    assert "平平常常" in block
+    assert "小事大事都算" in block
 
 
 def test_follow_up_styles_do_not_assume_the_topic_is_the_users():

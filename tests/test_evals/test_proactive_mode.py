@@ -109,11 +109,7 @@ async def test_the_schedule_reaches_the_opener(tmp_path):
 
 @pytest.mark.asyncio
 async def test_each_sample_gets_its_own_assembly(tmp_path):
-    """Production draws a message style at random per send.
-
-    Assembling once would measure a single style and report it as the path's
-    behaviour.
-    """
+    """Production assembles the opener prompt afresh for every send."""
     path = tmp_path / "c.yaml"
     path.write_text(yaml.safe_dump(
         _case(mode="proactive", samples=6), allow_unicode=True))
@@ -127,30 +123,6 @@ async def test_each_sample_gets_its_own_assembly(tmp_path):
     await score_case(load_case(path), sampler=_sampler, llm=_StubLLM())
 
     assert len(seen) == 6, "one assembly per sample"
-    styles = {s.split("## 这次试一种语气：")[1][:8] for s in seen
-              if "## 这次试一种语气：" in s}
-    assert len(styles) > 1, "the styles must actually vary across samples"
-
-
-@pytest.mark.asyncio
-async def test_two_runs_of_one_case_draw_the_same_styles(tmp_path):
-    """Seeded — otherwise run-to-run style churn is read as a real change."""
-    path = tmp_path / "c.yaml"
-    path.write_text(yaml.safe_dump(
-        _case(mode="proactive", samples=5), allow_unicode=True))
-
-    async def _run():
-        seen = []
-
-        async def _sampler(system, messages, n):
-            seen.append(messages[-1]["content"])
-            return ["回复"] * n
-
-        await score_case(load_case(path), sampler=_sampler, llm=_StubLLM())
-        return [s.split("## 这次试一种语气：")[1][:8] for s in seen
-                if "## 这次试一种语气：" in s]
-
-    assert await _run() == await _run()
 
 
 @pytest.mark.asyncio
