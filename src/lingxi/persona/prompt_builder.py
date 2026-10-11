@@ -131,6 +131,47 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
             + "\n".join(lines))
 
 
+def build_stage_block(persona, today=None, *, stance: bool = True) -> str | None:
+    """Her own shows and which side of the stage she is on, for the paths
+    that write her day rather than talk to him: the morning scan and the
+    planner.
+
+    Neither had it. The scan re-voiced a lottery for a show she performs in
+    as a fan's 「这票要是抽到了我直接飞过去」, the planner was told to act on
+    whatever in the scan caught her, and for days she entered the lottery,
+    studied seating charts and asked her juniors to apply with her.
+    """
+    from datetime import date, datetime
+    today = today or date.today()
+    lines = []
+    for sh in getattr(persona, "upcoming_shows", None) or []:
+        raw = (sh.date or "").strip()
+        d = precise = None
+        for fmt, p in (("%Y-%m-%d", True), ("%Y-%m", False)):
+            try:
+                d, precise = datetime.strptime(raw, fmt).date(), p
+                break
+            except ValueError:
+                continue
+        if d is None or d < today:
+            continue
+        when = f"{d.year}年{d.month}月" + (f"{d.day}日" if precise else "")
+        where = f"，{sh.venue}" if sh.venue else ""
+        lines.append(f"  - {sh.event}：{when}{where}——{_gap_cn(d, today)}")
+    stance_lines = [e.replace("【她的站位】", "").strip()
+                    for e in (getattr(persona, "lexicon", None) or [])
+                    if stance and isinstance(e, str)
+                    and e.startswith("【她的站位】")]
+    if not lines and not stance_lines:
+        return None
+    out = ["【我自己要上台的场】"]
+    out += lines
+    out += [f"  {s}" for s in stance_lines]
+    out.append("  这些场我是台上的人：票、抽选、座位是台下观众那边的事，"
+               "我这边是排练、彩排、服装和候场。")
+    return "\n".join(out) + "\n\n"
+
+
 def build_unanswered_block(unanswered: int, last_interaction_time,
                            now) -> str | None:
     """What she knows when he comes back: how many times she called.

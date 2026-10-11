@@ -50,7 +50,7 @@ _PLAN_PROMPT = """今天是 {date_str}（{weekday}），现在 {now_hhmm}。我�
 【我生活里的人】
 {people}
 
-{outside}【怎么安排】
+{stage}{outside}【怎么安排】
 - {coverage_line}
 - hour 粒度，time_window 形如 "09:00-12:00"，全部排在 {now_hhmm} 之后
 - 写**具体**符合**你这个人/你这种日子**的事：落到你心里清楚在做的那件具体行为（如『趴窗台晒太阳』『等他下班』）；今天是{weekday}，按{weekday}该有的节奏排
@@ -142,12 +142,21 @@ class DailyPlanner:
             scope_phrase=scope_phrase,
             coverage_line=coverage_line,
             people=self._people_block,
+            stage=self._stage_block(now),
             outside=build_outside_block(await self._todays_world(now),
                                         await self._todays_weather(now)),
         )
         items = await self._call_planner(
             prompt, _SYSTEM_TMPL.format(self=self._self_ctx))
         return await self._write_plan_facts("aria", items)
+
+    def _stage_block(self, now: datetime) -> str:
+        from lingxi.persona.prompt_builder import build_stage_block
+        try:
+            return build_stage_block(self._persona, now.date()) or ""
+        except Exception as e:
+            print(f"[planner] stage block failed (non-fatal): {e}", flush=True)
+            return ""
 
     async def _todays_weather(self, now: datetime) -> str:
         """Today's real high, low and rainfall for where she lives.
