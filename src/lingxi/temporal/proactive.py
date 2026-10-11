@@ -59,6 +59,17 @@ class ProactiveConfig(BaseModel):
     # Ceiling on the doubling. Two weeks apart is a friend who drifted off,
     # not a bot on a timer, and still leaves the door open if he comes back.
     reengage_max_hours: float = 336.0
+    # Hours of the day he never answers in are skipped. Two weeks of
+    # production openers went 0 of 14 answered at 08:00, 3 of 14 around
+    # 14:00 and 2 of 12 in the evening: a fixed clock was spending a third of
+    # her messages where nobody reads them. A slot is dropped once it has
+    # this many resolved openers on record and its answer rate, pulled
+    # toward his overall rate by `slot_prior_strength` openers' worth, is
+    # under `slot_dead_ratio` of the best slot's. Old outcomes age out of the
+    # record, so a dropped slot gets tried again later on its own.
+    slot_min_samples: int = 8
+    slot_prior_strength: float = 4.0
+    slot_dead_ratio: float = 0.5
 
     def reengage_wait_for(self, unanswered: int) -> timedelta:
         """How long to wait before poking again, given unanswered messages.
@@ -647,6 +658,37 @@ def _looks_like_self_report_opener(message: str) -> bool:
     return True
 
 
+_SLOTS = ("morning", "midday", "evening")
+
+
+def _slot(hour: int) -> str:
+    return "morning" if hour < 11 else "midday" if hour < 17 else "evening"
+
+
+def dead_slot(outcomes, now: datetime, cfg: ProactiveConfig) -> bool:
+    """Whether the slot `now` falls in is one he does not answer in.
+
+    Only resolved openers count: one sent inside the answer window may still
+    be answered.
+    """
+    from lingxi.temporal.tracker import ANSWER_WINDOW
+    tally = {s: [0, 0] for s in _SLOTS}  # slot -> [answered, sent]
+    for o in outcomes:
+        if not o.answered and now - o.sent_at < ANSWER_WINDOW:
+            continue
+        t = tally[_slot(o.sent_at.hour)]
+        t[0] += o.answered
+        t[1] += 1
+    answered = sum(t[0] for t in tally.values())
+    sent = sum(t[1] for t in tally.values())
+    here = tally[_slot(now.hour)]
+    if here[1] < cfg.slot_min_samples or sent == 0:
+        return False
+    prior, k = answered / sent, cfg.slot_prior_strength
+    rate = {s: (a + k * prior) / (n + k) for s, (a, n) in tally.items() if n}
+    return rate[_slot(now.hour)] < cfg.slot_dead_ratio * max(rate.values())
+
+
 class ProactiveScheduler:
     """Background loop that decides and sends proactive messages."""
 
@@ -811,6 +853,10 @@ class ProactiveScheduler:
                     ),
                 }
 
+        if not force and dead_slot(record.proactive_outcomes, now, self.config):
+            return {"key": key, "status": "skipped_dead_slot",
+                    "slot": _slot(now.hour)}
+
         # Consecutive cap: a real friend who notices silence reaches out
         # once, maybe twice — then waits. Spamming 4 proactives during a
         # long user silence reads as needy/AI.
@@ -824,9 +870,12 @@ class ProactiveScheduler:
             # forever. (last_proactive_sent is None on a fresh record.) The
             # wait doubles per unanswered message, so being ignored costs
             # progressively more silence rather than nothing at all.
+            # Past the cap, at most one a day. The flat 6h wait kept her at
+            # three a day through six days of silence: 18 unanswered in a row.
             and (
                 record.last_proactive_sent is None
                 or (now - record.last_proactive_sent) < reengage_wait
+                or record.last_proactive_sent.date() == now.date()
             )
         ):
             return {
