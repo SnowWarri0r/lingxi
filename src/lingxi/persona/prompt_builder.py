@@ -856,7 +856,7 @@ class PromptBuilder:
             lines.append(f"语感：{s.tone}。")
         if s.vocabulary_level and s.vocabulary_level != "normal":
             lines.append(f"用词：{s.vocabulary_level}。")
-        lines.append("写东西/深聊时是这个底色，IM 日常打字就是普通朋友的口语短句。")
+        lines.append("IM 里打字也是这个底色：口语短句，说出来是你自己的语气。")
         if s.verbal_habits:
             lines.append("偶尔的语言习惯：")
             for habit in s.verbal_habits:
@@ -880,6 +880,8 @@ class PromptBuilder:
             lines.append(f"- **长度**：{habits.avg_length}")
         if habits.punctuation_habit:
             lines.append(f"- **标点**：{habits.punctuation_habit}")
+        if habits.self_reference:
+            lines.append(f"- **自称**：{habits.self_reference}")
         if habits.multi_send_pattern:
             lines.append(f"- **多条**：{habits.multi_send_pattern}")
         if habits.signature_phrases:

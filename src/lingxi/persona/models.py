@@ -420,6 +420,10 @@ class MessageHabits(BaseModel):
     punctuation_habit: str = ""        # "句号常省，不用感叹号"
     multi_send_pattern: str = ""       # "偶尔拆 2 条短句"
     avg_length: str = ""               # "短—一两句"
+    # How she refers to herself when typing to someone ("常用自己的名字自称").
+    # Here rather than in speaking_style, which also voices her private
+    # diary: put there, the diary narrated her in the third person.
+    self_reference: str = ""
 
     # Behavioral signals — applied contextually
     coldness_markers: list[str] = Field(default_factory=list)
