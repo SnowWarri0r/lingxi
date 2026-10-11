@@ -43,6 +43,7 @@ _FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/
 **用上面那段自我描述所用的语言写**，那是她平时说话的语言。新闻原文是什么
 语言不影响这一点——查到外文的，理解完用她的语言讲出来。
 
+{stage_block}
 示例只示范**语气的分量**，别从里面取题材——题材看上面的类目：
 
 ❌ "某机构今日宣布相关项目将于下月正式启动"（新闻稿口吻）
@@ -133,7 +134,27 @@ def build_fetch_prompt(persona, target_date: date,
                        if weather.strip() else ""),
         already_block=already,
         self_context=build_self_context(persona),
+        stage_block=_stage_block(persona, target_date),
     )
+
+
+def _stage_block(persona, target_date: date) -> str:
+    """Her own shows, so news about them is read from the stage.
+
+    Re-voiced as a fan, a lottery for a show she performs in became
+    「这票要是抽到了我直接飞过去」, and the planner turned that into days of
+    her entering it.
+    """
+    from lingxi.persona.prompt_builder import build_stage_block
+    # Without her lexicon's stance line: its Japanese stage terms tipped half
+    # the re-voiced items into Japanese.
+    block = build_stage_block(persona, target_date, stance=False)
+    if not block:
+        return ""
+    return (block.replace("我自己", "她自己").replace("我是", "她是")
+            .replace("我这边", "她那边")
+            + "查到的消息说的是这些场的票务、抽选、入场时，她读到的是台下的人在为她们这场"
+              "忙；这一句是她扫完记给自己的，跟平时一样。\n\n")
 
 
 async def todays_weather_phrase(persona) -> str:
