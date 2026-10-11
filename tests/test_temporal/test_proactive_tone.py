@@ -32,9 +32,16 @@ def test_all_style_examples_are_ordinary_volume():
 
 
 def test_opener_shape_states_ordinary_volume_as_the_default():
+    """Her own everyday volume, not her peak.
+
+    「平常音量」 written as one generic register flattened a persona whose
+    everyday register is loud: 0 of 40 openers over two weeks carried a single
+    '!'. The default is now whatever the persona is like on an ordinary day,
+    with the peak still kept for what excites her.
+    """
     src = inspect.getsource(proactive.ProactiveScheduler)
-    assert "音量按事情本身来" in src
-    assert "平常音量" in src
+    assert "音量是你自己平常说话的音量" in src
+    assert "真碰上让你激动的事，那一条再放开来兴奋" in src
 
 
 def test_own_life_block_allows_ordinary_material():

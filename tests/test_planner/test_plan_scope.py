@@ -49,6 +49,6 @@ def test_executor_moment_uses_life_scale_and_ordinary_volume():
     volume anchors take its place."""
     p = executor._MOMENT_PROMPT
     assert "取景放在正常生活的尺度上" in p
-    assert "音量按事情本身来" in p
+    assert "音量是你自己平常的音量" in p  # her baseline, not peak and not flat
     assert "接着刚才往下走" in p        # continuity kept (anti-repetition)
     assert "让这一刻和刚才不一样" not in p  # the escalation driver is gone
