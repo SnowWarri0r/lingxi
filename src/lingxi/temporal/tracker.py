@@ -10,6 +10,19 @@ from pathlib import Path
 from pydantic import BaseModel, Field
 
 
+# A proactive message counts as answered when he writes within this long of
+# it. Past it, whatever he says next is about something else.
+ANSWER_WINDOW = timedelta(hours=4)
+# How many recent openers to remember the outcome of. Old outcomes falling off
+# the end is what lets a slot that was given up on get tried again.
+_OUTCOMES_KEPT = 60
+
+
+class ProactiveOutcome(BaseModel):
+    sent_at: datetime
+    answered: bool = False
+
+
 class InteractionRecord(BaseModel):
     recipient_id: str
     channel: str  # "feishu", "web", "cli"
@@ -34,6 +47,9 @@ class InteractionRecord(BaseModel):
     # stays off while it is set, and the next message from them clears it,
     # which is the only evidence that settles it.
     unreachable_since: datetime | None = None
+    # Each recent opener and whether he answered it, so the scheduler can tell
+    # the hours he picks up from the hours he never does.
+    proactive_outcomes: list[ProactiveOutcome] = Field(default_factory=list)
 
 
 class InteractionTracker:
@@ -102,6 +118,9 @@ class InteractionTracker:
             # User responded → reset the consecutive proactive counter
             # so Aria can reach out again in the next silence cycle.
             rec.consecutive_proactive_count = 0
+            for o in rec.proactive_outcomes:
+                if not o.answered and timedelta(0) <= now - o.sent_at <= ANSWER_WINDOW:
+                    o.answered = True
             # They wrote, so they can be written to.
             rec.unreachable_since = None
         else:
@@ -130,8 +149,12 @@ class InteractionTracker:
     def record_proactive_sent(self, channel: str, recipient_id: str) -> None:
         key = self._key(channel, recipient_id)
         if key in self._records:
-            self._records[key].last_proactive_sent = datetime.now()
-            self._records[key].consecutive_proactive_count += 1
+            rec = self._records[key]
+            rec.last_proactive_sent = datetime.now()
+            rec.consecutive_proactive_count += 1
+            rec.proactive_outcomes.append(
+                ProactiveOutcome(sent_at=rec.last_proactive_sent))
+            del rec.proactive_outcomes[:-_OUTCOMES_KEPT]
 
     def update_relationship_level(
         self, channel: str, recipient_id: str, new_level: int
