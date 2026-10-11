@@ -503,8 +503,7 @@ def _format_own_life_block(facts: list[Fact]) -> str:
         "## 你自己最近在忙/发生的事（**优先从这里挑一件起头**）\n"
         f"{lines}\n\n"
         "（这些是你自己的生活——你主动找对方，多半是想说**你这边**某件具体的事。"
-        "挑一件你真想说的就讲那一件——**平平常常的小事同样算**，"
-        "日子多数时候就是平的；**用你自己的大白话讲出来**。）\n"
+        "挑一件你真想说的就讲那一件，小事大事都算；**用你自己的话讲出来**。）\n"
     )
 
 
@@ -1200,8 +1199,8 @@ class ProactiveScheduler:
             f"{style['desc']}\n"
             f"参考语气（体会**分量和音量**，自己写）：「{style['example']}」\n\n"
         )
-        print(f"[proactive] style: {style['name']}", flush=True)
         if force:
+            print(f"[proactive] style: {style['name']}", flush=True)
             user_prompt = (
                 f"[这一刻没有对方的新消息——你一个人，在想要不要主动发一条]\n\n"
                 f"距离上次聊已经 {format_timedelta_cn(silence)}。\n\n"
@@ -1231,8 +1230,12 @@ class ProactiveScheduler:
                 f"{own_life_block}"
                 f"{world_block}"
                 f"{shows_block}"
+                # No assigned tone here. The six tones and their sample lines
+                # were written for another persona (a telescope, an IDE
+                # theme, 「烦。」) and pulled her toward that flat register:
+                # replayed on 14 real openers, a blind judge picked the
+                # untoned version as more like 唐可可 29 times to 12.
                 f"{opener_shape}\n"
-                f"{style_block}"
                 f"考虑：现在时间合不合适、你**真的**有话说吗（具体事不是闲扯）。"
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
