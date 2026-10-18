@@ -598,6 +598,10 @@ class PersonaConfig(BaseModel):
     # wrong on someone built around saying things out loud. Keys are register
     # names (light/warm/curt/curious/withdrawn/flustered).
     register_notes: dict[str, str] = Field(default_factory=dict)
+    # The band her typing is meant to sit in, read by voice_monitor. Empty
+    # means unchecked. Keys: exclaim_min, shouting_max, self_name,
+    # self_name_min, and the notes said to her when out of band.
+    voice_baseline: dict = Field(default_factory=dict)
     # Dated milestones whose elapsed time is computed at prompt time. Writing
     # "已经五年" into the background bakes in a number that silently goes stale;
     # anchoring to the date keeps it right every year.

@@ -1096,6 +1096,7 @@ class ProactiveScheduler:
         # 周末有事 / 感冒了…) which long-term facts can't capture because
         # they're persistent labels, not temporal states.
         user_recent_block = "（暂无最近发言）"
+        voice = ""
         try:
             recent_turns = await self.engine.memory.short_term.snapshot_for_recipient(rec_key)
             # Last ~8 user-side messages (skip assistant)
@@ -1103,6 +1104,11 @@ class ProactiveScheduler:
                 [t for t in recent_turns if t.role == "user"][-8:])
             if rendered:
                 user_recent_block = rendered
+            from lingxi.persona.voice_monitor import voice_block
+            voice = voice_block(self.engine.persona, [
+                t.content for t in recent_turns if t.role == "assistant"]) or ""
+            if voice:
+                voice += "\n\n"
         except Exception as e:
             print(f"[proactive] user_recent fetch failed: {e}")
 
@@ -1260,6 +1266,7 @@ class ProactiveScheduler:
                 f"{own_life_block}"
                 f"{world_block}"
                 f"{shows_block}"
+                f"{voice}"
                 f"{opener_shape}\n"
                 f"{style_block}"
                 f"按 system prompt 里的 `===META===` 格式输出。如果**真的**没什么想说，就让对白空、"
@@ -1279,6 +1286,7 @@ class ProactiveScheduler:
                 f"{own_life_block}"
                 f"{world_block}"
                 f"{shows_block}"
+                f"{voice}"
                 # No assigned tone here. The six tones and their sample lines
                 # were written for another persona (a telescope, an IDE
                 # theme, 「烦。」) and pulled her toward that flat register:

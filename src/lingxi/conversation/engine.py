@@ -667,6 +667,17 @@ class ConversationEngine:
             state_blocks.append(unanswered_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
+        # Her own recent messages are the strongest style cue in the prompt;
+        # when they have drifted out of the persona's band, say so this turn.
+        try:
+            from lingxi.persona.voice_monitor import voice_block
+            vb = voice_block(self.persona, [
+                t.content for t in self.memory.short_term.get_history()
+                if t.role == "assistant"])
+            if vb:
+                state_blocks.append(vb)
+        except Exception as e:
+            print(f"[voice] monitor failed (non-fatal): {e}", flush=True)
 
         # A floor of what she knows about him, for the turns the orchestrator
         # asks for nothing. The renderer is entirely query-driven, so on those
