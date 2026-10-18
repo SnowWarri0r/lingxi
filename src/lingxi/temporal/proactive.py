@@ -549,6 +549,12 @@ def _format_own_life_block(facts: list[Fact]) -> str:
         f"{lines}\n\n"
         "（这些是你自己的生活——你主动找对方，多半是想说**你这边**某件具体的事。"
         "挑一件你真想说的就讲那一件，小事大事都算；**用你自己的话讲出来**。）\n"
+        # Her own day reaches him only through what she types. On 2026-10-13
+        # a lyric line and a morning fog went out as 「就三个字，灯还亮着」.
+        # Replayed on 20 real opener prompts, three each: 24 of 58 judged
+        # unreadable to him, 18 of 58 with this line.
+        "发之前替他读一遍：他只看得到你们俩的聊天记录，你这边的日子他不在场——"
+        "这条他读得懂吗？读不懂就把事情说全，或者换一件。\n"
     )
 
 
@@ -972,11 +978,20 @@ class ProactiveScheduler:
         # different thread rather than reinforcing this one.
         previous = [e.get("text", "")
                     for e in self._recent_proactive.get(key, [])]
+        lead = (_bubbles(message) or [""])[0]
         message, repeated = await _drop_repeated_bubbles(
             message, previous, self.engine.memory.embedding_provider)
         if repeated:
             print(f"[proactive] dropped {len(repeated)} repeated bubble(s): "
                   f"{repeated[0][:40]!r}", flush=True)
+            # The first bubble is what the rest hangs off. Dropping it on
+            # 2026-10-13 sent 「副歌进那个拍 你听出来没有嘛」 with nothing to say
+            # which song: a follow-up bubble on its own reads as nonsense.
+            if lead in repeated:
+                return {
+                    "key": key, "status": "validation_rejected",
+                    "reason": "lead_bubble_repeated", "message": lead,
+                }
             if not message:
                 return {
                     "key": key, "status": "validation_rejected",

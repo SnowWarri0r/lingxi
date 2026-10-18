@@ -17,7 +17,14 @@ from lingxi.providers.base import LLMProvider
 
 # {self} = persona self-context (build_self_context). The persona drives the
 # flavor — a catgirl logs cat moments, a writer logs a writer's.
-_SYSTEM_TMPL = "{self} 你正在做今天计划里的某件事，现在记一条此刻给自己看。"
+# Written as if telling a friend what she was just doing, not as a note to
+# herself: openers retell these moments, and a private note retold to him was
+# allusion with nothing behind it (「就三个字，灯还亮着」 about a lyric he had
+# never heard of and a fog he never saw). Replayed on 16 real moments, two
+# each, a judge found 13 of 32 unreadable to someone not there; 8 of 32 with
+# this framing.
+_SYSTEM_TMPL = ("{self} 你正在做今天计划里的某件事，现在记一条此刻——像回头跟朋友讲"
+                "「我刚在干嘛」那样，说的是哪件事、在做什么都交代清楚。")
 
 
 _MOMENT_PROMPT = """我今天这个时段安排的：{plan_content}（{time_window}）
