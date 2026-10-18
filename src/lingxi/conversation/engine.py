@@ -599,6 +599,7 @@ class ConversationEngine:
             prev_thread_summary=prev_summary,
             agent_name=self.persona.name,
             now=now,
+            background=getattr(self.persona.identity, "background", "") or "",
         )
         print(
             f"[brain] orch decision: register={decision.register} "

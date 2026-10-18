@@ -46,8 +46,9 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    多数日常其实是 **light**：对方随口的累/困/周五/吐槽，配 light，不是 warm。warm 留给他真的在认真讲一件事的时候。
 3. fact_queries：让 renderer 拉哪些事实进 prompt
 4. **topic_anchor**：用户**真正**在追问什么——捕捉话题的**具体角度/潜台词**，不是复述表层问句。
-   例：用户连续几轮在追问"喜欢的事变工作后还剩几分喜欢"，再问"你自己呢"——落点是"你的热情是否被职业化稀释了"，**不是**"用户问 {agent} 对工作的感悟"。
+   例：用户连续几轮在聊"喜欢的事变成工作以后还喜不喜欢"，再问"你自己呢"——落点是"想听 {agent} 讲她自己练了这些年、现在对唱歌是什么感觉"，比"用户问 {agent} 对工作的感悟"更具体。
    越能捕捉到正在演化的潜台词越好。
+   落点写的是**对方**：他在说什么、想从 {agent} 这儿听到什么。他打趣或评论 {agent} 本人时（"不像你啊""你以前不是这样"），照他的原意写成他在打趣什么；{agent} 是怎样的人、有没有变，由她自己的人设来答。
 5. **thread_summary**：用 1-2 句话更新对话**当前脉络**——这条 summary 下次会作为"前情提要"喂给你。要包括话题怎么演化的、用户的具体角度、有什么未答到的潜台词。
 6. **plan_conflict** (bool)：用户输入是否暗示当前 plan 需要调整？
    - 用户邀约/请求 {agent} 改变行程（"晚上一起吃饭吧"、"明天有空吗"）→ true
@@ -69,6 +70,9 @@ _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，�
    不等于他这几小时在睡。
    例：`还在公司，想下班但没到点`、`在回家的地铁上`、`到家了，在吃饭`、`周末在外面逛`。
    写不出一个确定的状态就留空 ""，{agent} 会自己按钟点推。
+
+【{agent} 是谁】（对方提到她过去的事、她身边的人时，按这个认）
+{background}
 
 【现在】
 {now_line}
@@ -151,11 +155,18 @@ def build_orchestrator_prompt(
     prev_thread_summary: str = "",
     agent_name: str = "Aria",
     now: datetime | None = None,
+    background: str = "",
 ) -> str:
     last_lived = "；".join(digest.last_lived) if digest.last_lived else "（暂无）"
     catalog_str = "\n".join(f"  {k}: {v}" for k, v in sorted(catalog.items())) or "（空）"
     return _PROMPT.format(
         agent=agent_name,
+        # Without who she is, a remark about her past cannot be decoded:
+        # told 「不像你，之前都能冲上去说太好听了」 — the day she met her
+        # partner, in the persona's own background — it read the line as her
+        # once praising *him*, framed the turn as 「你变了」, and the reply
+        # conceded a change of character she never had.
+        background=background.strip() or "（未提供）",
         user_input=user_input.strip()[:300],
         activity=digest.activity or "（未指定）",
         mood=digest.mood or "（未指定）",
@@ -184,11 +195,12 @@ async def decide(
     model: str | None = None,
     agent_name: str = "Aria",
     now: datetime | None = None,
+    background: str = "",
 ) -> OrchestrationDecision:
     prompt = build_orchestrator_prompt(
         user_input, digest, catalog,
         history=history, prev_thread_summary=prev_thread_summary,
-        agent_name=agent_name, now=now,
+        agent_name=agent_name, now=now, background=background,
     )
     try:
         kwargs = {"model": model} if model else {}
