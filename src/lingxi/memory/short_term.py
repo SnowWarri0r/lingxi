@@ -115,6 +115,23 @@ class ShortTermMemory:
 
             self._current_recipient = recipient_key
 
+    async def archive_recipient(self, recipient_key: str, tag: str) -> Path | None:
+        """Set this recipient's buffer aside and start it empty.
+
+        The file is renamed, not deleted (`<name>.json.bak-<tag>`), and the
+        in-memory buffer is cleared if it is the one loaded, so the next turn
+        neither reads the old turns nor writes them back.
+        """
+        async with self._lock:
+            if self._current_recipient == recipient_key:
+                self._buffer.clear()
+            path = self._path_for(recipient_key)
+            if path is None or not path.exists():
+                return None
+            dest = path.with_name(f"{path.name}.bak-{tag}")
+            await asyncio.to_thread(path.rename, dest)
+            return dest
+
     async def _save_to_disk(self, recipient_key: str) -> None:
         path = self._path_for(recipient_key)
         if path is None:

@@ -50,6 +50,34 @@ def measure(messages: list[str], self_name: str = "") -> VoiceStats | None:
     )
 
 
+def out_of_band(stats: VoiceStats | None, baseline: dict | None) -> bool:
+    """Too flat or too loud — the drift that a context reset is for. Self-name
+    alone does not count: one line moves that well enough."""
+    if stats is None or not baseline:
+        return False
+    lo, hi = baseline.get("exclaim_min"), baseline.get("shouting_max")
+    return ((lo is not None and stats.exclaim < lo)
+            or (hi is not None and stats.shouting > hi))
+
+
+# A reset once she has read out of band on this many consecutive days, and
+# not again within this many days of the last one.
+DRIFT_DAYS = 3
+RESET_COOLDOWN_DAYS = 7
+
+
+def note_day(days: list[str], today: str, drifting: bool) -> list[str]:
+    """The run of consecutive drifting days ending today, updated."""
+    if not drifting:
+        return []
+    if days and days[-1] == today:
+        return days
+    from datetime import date, timedelta
+    if days and date.fromisoformat(days[-1]) != date.fromisoformat(today) - timedelta(days=1):
+        days = []
+    return (days + [today])[-DRIFT_DAYS:]
+
+
 def correction(stats: VoiceStats | None, baseline: dict | None) -> str | None:
     """The line to put in front of her, or None while she sounds like herself."""
     if stats is None or not baseline:

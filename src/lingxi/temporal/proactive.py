@@ -849,6 +849,10 @@ class ProactiveScheduler:
 
         for record in self.tracker.all_records():
             try:
+                await self._check_voice(record, now)
+            except Exception as e:
+                print(f"[voice] check failed (non-fatal): {e}", flush=True)
+            try:
                 result = await self._maybe_reach_out(record, now)
                 if result["status"] == "sent":
                     pass  # already logged
@@ -1065,6 +1069,70 @@ class ProactiveScheduler:
         self._remember_proactive(key, message, decision.get("aspect", ""))
 
         return {"key": key, "status": "sent", "message": message}
+
+    async def _check_voice(self, record: InteractionRecord, now: datetime) -> bool:
+        """Reset her context with this person once her typing has stayed out
+        of the persona's band for several days.
+
+        Measured on the September turns, a line in the prompt barely moves a
+        voice her own flat history is holding down ('!' 1 → 2 of 33); taking
+        her earlier turns out of the context is what works. So, as on
+        2026-10-10 by hand: the buffer and the opener history are set aside
+        (renamed, nothing deleted) and she starts from what she knows about
+        him, the thread recap and her persona. The user chose for this to
+        happen without asking.
+        """
+        from lingxi.persona import voice_monitor as vm
+        baseline = getattr(self.engine.persona, "voice_baseline", None) or {}
+        if not baseline or record.unreachable_since is not None:
+            return False
+        key = f"{record.channel}:{record.recipient_id}"
+        turns = await self.engine.memory.short_term.snapshot_for_recipient(key)
+        stats = vm.measure([t.content for t in turns if t.role == "assistant"],
+                           str(baseline.get("self_name") or ""))
+        if stats is None:
+            return False
+        today = now.date().isoformat()
+        days = vm.note_day(record.voice_drift_days, today,
+                           vm.out_of_band(stats, baseline))
+        changed = days != record.voice_drift_days
+        record.voice_drift_days = days
+        cooled = (record.last_voice_reset is None
+                  or now - record.last_voice_reset
+                  >= timedelta(days=vm.RESET_COOLDOWN_DAYS))
+        if len(days) >= vm.DRIFT_DAYS and cooled:
+            tag = f"{now:%Y%m%d}-voicereset"
+            await self.engine.memory.short_term.archive_recipient(key, tag)
+            self._archive_history(key, tag)
+            record.voice_drift_days = []
+            record.last_voice_reset = now
+            await self.tracker.save()
+            print(f"[voice] {key[-6:]} out of band {vm.DRIFT_DAYS} days "
+                  f"({stats.summary()}) → context reset", flush=True)
+            return True
+        if changed:
+            await self.tracker.save()
+        return False
+
+    def _archive_history(self, key: str, tag: str) -> None:
+        """Move this recipient's opener history to a side file and empty it."""
+        old = self._recent_proactive.get(key, [])
+        if old and self._history_path is not None:
+            side = self._history_path.with_name(
+                f"{self._history_path.stem}.{tag}.json")
+            try:
+                prev = (json.loads(side.read_text(encoding="utf-8"))
+                        if side.exists() else {})
+                prev[key] = old
+                side.write_text(json.dumps(prev, ensure_ascii=False, indent=2),
+                                encoding="utf-8")
+            except (OSError, ValueError) as e:
+                # Kept in place rather than lost: the buffer reset still
+                # removes the bulk of what was holding her voice down.
+                print(f"[voice] history archive failed, kept: {e}", flush=True)
+                return
+        self._recent_proactive.pop(key, None)
+        self._save_history()
 
     async def trigger_manually(self) -> list[dict]:
         """Manual trigger for all recipients (for testing). Bypasses silence + cooldown."""
