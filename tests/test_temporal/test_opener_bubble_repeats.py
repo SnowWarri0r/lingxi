@@ -149,3 +149,34 @@ def test_openers_are_read_as_him_before_they_go():
 def test_her_moments_are_written_to_be_retold():
     from lingxi.planner.executor import _SYSTEM_TMPL
     assert "跟朋友讲" in _SYSTEM_TMPL and "给自己看" not in _SYSTEM_TMPL
+
+
+@pytest.mark.asyncio
+async def test_a_sent_opener_marks_its_story_told(tmp_path):
+    tracker = InteractionTracker(tmp_path)
+    rec = tracker.record_interaction("feishu", "oc_x")
+    rec.last_interaction = datetime.now() - timedelta(days=2)
+    reg = ChannelRegistry()
+    reg.register(_Ch())
+
+    async def _append(*a):
+        pass
+
+    engine = SimpleNamespace(
+        annotation_store=None, _pending_stickers={},
+        memory=SimpleNamespace(embedding_provider=None,
+                               short_term=SimpleNamespace(append_for_recipient=_append)))
+    sched = ProactiveScheduler(config=ProactiveConfig(), tracker=tracker,
+                               channel_registry=reg, engine=engine)
+    told = []
+    sched._story_shelf = SimpleNamespace(mark_told=lambda k, sid: told.append((k, sid)))
+    sched._story_ids = {"feishu:oc_x": {"S1": "abc"}}
+
+    async def _ask_llm(record, silence, now, force=False):
+        return {"should_send": True, "message": FRESH, "sticker": "",
+                "reason": "", "story": "S1"}
+
+    sched._ask_llm = _ask_llm
+    result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    assert result["status"] == "sent"
+    assert told == [("feishu:oc_x", "abc")]

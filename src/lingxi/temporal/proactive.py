@@ -341,7 +341,8 @@ def parse_proactive_output(raw: str) -> dict:
     aspect = str(meta.get("aspect") or "").strip()
     return {"should_send": should_send, "message": message,
             "sticker": sticker, "reason": meta.get("inner", ""),
-            "aspect": aspect if aspect in OPENER_ASPECTS else ""}
+            "aspect": aspect if aspect in OPENER_ASPECTS else "",
+            "story": str(meta.get("story") or "").strip().upper()}
 
 
 def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -> str | None:
@@ -1082,6 +1083,9 @@ class ProactiveScheduler:
         await self.tracker.save()
 
         self._remember_proactive(key, message, decision.get("aspect", ""))
+        sid = getattr(self, "_story_ids", {}).get(key, {}).get(decision.get("story", ""))
+        if sid:
+            self._shelf().mark_told(key, sid)
 
         return {"key": key, "status": "sent", "message": message}
 
@@ -1148,6 +1152,31 @@ class ProactiveScheduler:
                 return
         self._recent_proactive.pop(key, None)
         self._save_history()
+
+    def _shelf(self):
+        if getattr(self, "_story_shelf", None) is None:
+            from lingxi.planner.stories import StoryShelf
+            base = getattr(self, "_history_path", None)
+            self._story_shelf = StoryShelf(
+                base.with_name("stories.json") if base else None,
+                self.engine.llm, self.engine.persona)
+        return self._story_shelf
+
+    async def _stories_block(self, key: str, events, now: datetime) -> str:
+        """Her untold stories for this person, or "" to fall back to the
+        raw diary. Any failure falls back."""
+        from lingxi.planner.stories import format_stories_block
+        try:
+            world = await self.engine._todays_world_facts()
+            shelf = self._shelf()
+            await shelf.refresh(events, world, now)
+            block, ids = format_stories_block(shelf.untold(key))
+            self._story_ids = getattr(self, "_story_ids", {})
+            self._story_ids[key] = ids
+            return block
+        except Exception as e:
+            print(f"[stories] failed, using the raw diary: {e!r}", flush=True)
+            return ""
 
     async def trigger_manually(self) -> list[dict]:
         """Manual trigger for all recipients (for testing). Bypasses silence + cooldown."""
@@ -1257,10 +1286,12 @@ class ProactiveScheduler:
             try:
                 # Fetch a day's worth, then spread — see select_spread_events.
                 # Fetching six gives six half-hourly ticks of the same hour.
-                own_facts = await self.fact_retriever.fetch(FactQuery(
+                own_all = await self.fact_retriever.fetch(FactQuery(
                     subject="aria", type=FactType.EVENT, limit=40))
-                own_facts = select_spread_events(own_facts)
-                own_life_block = _format_own_life_block(own_facts)
+                own_facts = select_spread_events(own_all)
+                own_life_block = await self._stories_block(rec_key, own_all, now)
+                if not own_life_block:
+                    own_life_block = _format_own_life_block(own_facts)
                 if own_facts:
                     print(f"[proactive] own-life seed: {own_facts[0].content[:40]}...",
                           flush=True)
@@ -1380,8 +1411,9 @@ class ProactiveScheduler:
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
                 f"<对外那一句，IM 短句>\n===META===\n"
-                f'{{"should_send": true, "inner": "为什么发", "aspect": "这条说的方面"}}\n```\n'
-                f"aspect 填这条说的是哪方面，从这几个里挑一个：{aspects}\n\n"
+                f'{{"should_send": true, "inner": "为什么发", "aspect": "这条说的方面", "story": "S几"}}\n```\n'
+                f"aspect 填这条说的是哪方面，从这几个里挑一个：{aspects}\n"
+                f"story 填你讲的是上面「可以跟他讲的事」里的哪一件（S1、S2……）；讲的不是那里面的就留空。\n\n"
                 f"不该发就：\n```\n\n===META===\n"
                 f'{{"should_send": false, "inner": "为什么不发"}}\n```'
             )
