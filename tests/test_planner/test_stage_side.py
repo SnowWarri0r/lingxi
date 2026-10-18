@@ -50,7 +50,7 @@ def test_the_stage_block_comes_after_the_language_rule(monkeypatch):
     import lingxi.persona.self_context as sc
     monkeypatch.setattr(sc, "build_self_context", lambda p: "你是可可。")
     prompt = build_fetch_prompt(PERSONA, TODAY)
-    assert prompt.index("所用的语言写") < prompt.index("她自己要上台的场")
+    assert prompt.index("那是她平时说话的语言") < prompt.index("她自己要上台的场")
 
 
 def test_the_scan_leaves_out_the_stance_line(monkeypatch):
@@ -62,3 +62,11 @@ def test_the_scan_leaves_out_the_stance_line(monkeypatch):
 def test_the_planner_prompt_carries_the_block():
     from lingxi.planner import daily_planner
     assert "{stage}{outside}" in daily_planner._PLAN_PROMPT
+
+
+def test_the_scan_names_the_language_outright(monkeypatch):
+    """Left to inference, 6 of 8 re-voiced ticketing notices came out in
+    Japanese, as an idol addressing her fans."""
+    import lingxi.persona.self_context as sc
+    monkeypatch.setattr(sc, "build_self_context", lambda p: "你是可可，从上海来的女孩。")
+    assert "**用中文写**" in build_fetch_prompt(PERSONA, TODAY)

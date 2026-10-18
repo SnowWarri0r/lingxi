@@ -40,8 +40,8 @@ _FETCH_PROMPT = """今天是 {today}。{where}请用 web_search 查一下今天/
 她**不**用新闻播报口吻——她是"今早扫到的"那种个人语气：简短、带一点自己的
 反应、IM 风格短句。
 
-**用上面那段自我描述所用的语言写**，那是她平时说话的语言。新闻原文是什么
-语言不影响这一点——查到外文的，理解完用她的语言讲出来。
+**用{language}写**，那是她平时说话的语言。新闻原文是什么
+语言不影响这一点——查到外文的，理解完用{language}讲出来。
 
 {stage_block}
 示例只示范**语气的分量**，别从里面取题材——题材看上面的类目：
@@ -134,8 +134,24 @@ def build_fetch_prompt(persona, target_date: date,
                        if weather.strip() else ""),
         already_block=already,
         self_context=build_self_context(persona),
+        language=_language_of(build_self_context(persona)),
         stage_block=_stage_block(persona, target_date),
     )
+
+
+def _language_of(text: str) -> str:
+    """Name the language her self-description is written in.
+
+    「上面那段自我描述所用的语言」 left it to inference, and the inference
+    slipped whenever the news was Japanese and about fans: 6 of 8 re-voiced
+    scans of a ticketing notice came out as an idol addressing her audience
+    in Japanese.
+    """
+    if re.search(r"[\u3040-\u30ff]", text) and not re.search(r"[的了是我你她]", text):
+        return "日语"
+    if re.search(r"[\u4e00-\u9fff]", text):
+        return "中文"
+    return "上面那段自我描述所用的语言"
 
 
 def _stage_block(persona, target_date: date) -> str:

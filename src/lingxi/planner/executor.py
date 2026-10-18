@@ -61,6 +61,24 @@ def _parse_time_window(tag_value: str) -> tuple[int, int] | None:
     return start_h * 60 + start_m, end_h * 60 + end_m
 
 
+def build_moment_prompt(plan_content: str, time_window: str,
+                        recent_events: list, now: datetime) -> str:
+    """The moment prompt, as tick() and the eval harness both build it."""
+    window = _parse_time_window(time_window)
+    position = (describe_position(now.hour * 60 + now.minute, *window)
+                if window else "时间往前走了一点")
+    bullets = "\n".join(f"  - {f.content}" for f in recent_events)
+    return _MOMENT_PROMPT.format(
+        plan_content=plan_content, time_window=time_window,
+        recent_events=bullets or "（没什么特别的）",
+        now_hhmm=now.strftime("%H:%M"), position=position)
+
+
+def moment_system(persona) -> str:
+    from lingxi.persona.self_context import build_self_context
+    return _SYSTEM_TMPL.format(self=build_self_context(persona))
+
+
 def describe_position(now_minute: int, start: int, end: int) -> str:
     """Where in this plan step we are, in the words the moment needs.
 
@@ -147,18 +165,7 @@ class PlanExecutor:
         ))
         recent_events = sorted(pool, key=lambda f: f.ts)[-3:]
         tw = self._tag_value(current_plan, "time_window") or "?"
-        window = _parse_time_window(tw)
-        position = (
-            describe_position(now.hour * 60 + now.minute, *window)
-            if window else "时间往前走了一点"
-        )
-        prompt = _MOMENT_PROMPT.format(
-            plan_content=current_plan.content,
-            time_window=tw,
-            recent_events=self._bullets(recent_events) or "（没什么特别的）",
-            now_hhmm=now.strftime("%H:%M"),
-            position=position,
-        )
+        prompt = build_moment_prompt(current_plan.content, tw, recent_events, now)
         previous = recent_events[-1].content if recent_events else ""
         content = await self._generate(prompt)
         if not content:

@@ -777,8 +777,13 @@ class ConversationEngine:
         if self.fact_retriever is None:
             return []
         try:
-            from datetime import date, time as _time
-            since = datetime.combine(date.today(), _time.min)
+            from datetime import time as _time
+            # The retriever's clock, not the wall clock: an eval replaying a
+            # frozen morning otherwise looked for that morning's scan under
+            # today's date, found nothing, and scored the news opener on a
+            # prompt with no news in it.
+            clock = getattr(self.fact_retriever, "_clock", None) or datetime.now
+            since = datetime.combine(clock().date(), _time.min)
             return await self.fact_retriever.fetch(FactQuery(
                 subject="world", type=FactType.EVENT, since=since, limit=5))
         except Exception as e:

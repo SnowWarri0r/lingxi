@@ -17,7 +17,7 @@ from pathlib import Path
 
 from lingxi.conversation.engine import RESPONDER_PRESETS, ConversationEngine
 from lingxi.evals.case import Case
-from lingxi.evals.detectors import evaluate
+from lingxi.evals.detectors import evaluate_async
 from lingxi.facts.retriever import FactRetriever
 from lingxi.facts.store import FactStore
 from lingxi.memory.manager import MemoryManager
@@ -241,9 +241,12 @@ async def _default_sampler(
             model=model, messages=payload,
             temperature=persona.sampling.temperature,
             top_p=persona.sampling.top_p,
-            # Generous rather than absent: production streams uncapped, and
-            # anything this long is already far past a real reply.
-            max_tokens=1500,
+            # Production streams uncapped. With thinking on, reasoning counts
+            # against this cap, and at 1500 a long think left no room for the
+            # reply: 6 of 20 samples of one case came back empty and were
+            # scored as her failing, a 10% → 30% "regression" that was the
+            # harness's own.
+            max_tokens=8000,
             extra_body=preset["extra_body"],
         )
         return _visible_prose(resp.choices[0].message.content or "")
@@ -251,10 +254,110 @@ async def _default_sampler(
     return list(await asyncio.gather(*[_one() for _ in range(n)]))
 
 
+_SCAN_SUFFIX = ("\n\n（这次已经替你查好了，不用再搜。下面是查到的原文，"
+                "按上面的要求改写成 items：）\n")
+
+
+def _held_facts(case: Case):
+    from lingxi.memory.consolidator import HeldFact
+    return [HeldFact(f"c{i}", f.content, f.ts)
+            for i, f in enumerate(case.resolved_facts())
+            if f.subject.startswith("user:")]
+
+
+async def _stage_replies(case: Case, persona: PersonaConfig, llm) -> tuple[str, list[str]]:
+    """Prompt and outputs for the paths that write her life and memory rather
+    than talk to him. Each goes through the module's own prompt builder."""
+    n = case.samples
+    if case.mode == "moment":
+        from lingxi.planner.executor import build_moment_prompt, moment_system
+        events = sorted(
+            (f for f in case.resolved_facts()
+             if f.subject == "aria" and f.type.value == "event"
+             and case.clock - f.ts <= __import__("datetime").timedelta(hours=2)),
+            key=lambda f: f.ts)[-3:]
+        prompt = build_moment_prompt(case.plan.content, case.plan.time_window,
+                                     events, case.clock)
+        system = moment_system(persona)
+
+        async def one():
+            r = await llm.complete(messages=[{"role": "user", "content": prompt}],
+                                   system=system, max_tokens=200, temperature=0.8)
+            return r.content.strip()
+    elif case.mode == "scan":
+        from lingxi.world.fetcher import build_fetch_prompt
+        from lingxi.utils import lenient_json
+        prompt = (build_fetch_prompt(persona, case.clock.date()) + _SCAN_SUFFIX
+                  + "\n".join(f"- {r}" for r in case.scan_raw))
+
+        async def one():
+            r = await llm.complete(messages=[{"role": "user", "content": prompt}],
+                                   max_tokens=2000, temperature=0.7)
+            text = r.content
+            try:
+                items = lenient_json.loads(text[text.find("{"):text.rfind("}") + 1])["items"]
+                return "\n".join(str(it.get("voice", "")) for it in items)
+            except Exception:
+                return ""
+    else:  # memory
+        from lingxi.memory.consolidator import Turn, consolidate, real_people
+        held = _held_facts(case)
+        turns = [Turn(r, c, ts) for r, c, ts in case.resolved_history()]
+        prompt = "\n".join(t.content for t in turns)
+
+        async def one():
+            ops = await consolidate(llm, turns, held, agent=persona.name,
+                                    people=real_people(persona))
+            live = {h.id: h.content for h in held}
+            for i, o in enumerate(ops):
+                if o.op in ("update", "retire"):
+                    live.pop(o.target, None)
+                if o.op in ("add", "update"):
+                    live[f"new{i}"] = o.content
+            return "\n".join(live.values())
+    sem = asyncio.Semaphore(4)
+
+    async def bounded():
+        async with sem:
+            return await one()
+    return prompt, list(await asyncio.gather(*[bounded() for _ in range(n)]))
+
+
+async def _judge_all(case: Case, replies: list[str], persona, judge):
+    async def both(r):
+        f = await evaluate_async(case.detect.fail, r, persona, judge)
+        p = (await evaluate_async(case.detect.passing, r, persona, judge)
+             if case.detect.passing else False)
+        return f, p
+    sem = asyncio.Semaphore(4)
+
+    async def bounded(r):
+        async with sem:
+            return await both(r)
+    return await asyncio.gather(*[bounded(r) for r in replies])
+
+
 async def score_case(
     case: Case, *, overrides: dict | None = None, sampler=None, llm=None,
+    judge=None,
 ) -> CaseScore:
     """Replay one case and score it. `sampler` is injectable for offline tests."""
+    if case.mode in ("moment", "scan", "memory"):
+        persona = _apply_overrides(load_persona(case.persona), overrides)
+        main = llm or await _main_llm()
+        prompt, replies = await _stage_replies(case, persona, main)
+        for needle in case.premise.prompt_contains:
+            if needle not in prompt:
+                return CaseScore(id=case.id, verdict="BROKEN", premise_ok=False,
+                                 premise_error=f"prompt_contains 未命中：{needle!r}")
+        judged = await _judge_all(case, replies, persona, judge or main)
+        n = len(replies) or 1
+        fail_rate = sum(f for f, _ in judged) / n
+        return CaseScore(
+            id=case.id,
+            verdict="PASS" if fail_rate <= case.budget.max_fail_rate else "FAIL",
+            fail_rate=fail_rate, pass_rate=sum(p for _, p in judged) / n,
+            samples=len(replies), replies=replies)
     # The opener path picks one of six message styles at random per send, so a
     # single assembly measures one style and reports it as the path's
     # behaviour. Reassemble per sample instead, seeded so two runs of the same
@@ -285,11 +388,13 @@ async def score_case(
             replies += list(await sample(sys_i, msgs_i, 1))
     else:
         replies = await sample(system, messages, case.samples)
-    fails = sum(1 for r in replies if evaluate(case.detect.fail, r, persona))
-    passes = (
-        sum(1 for r in replies if evaluate(case.detect.passing, r, persona))
-        if case.detect.passing else 0
-    )
+    needs_judge = "judge" in case.detect.fail or (
+        case.detect.passing is not None and "judge" in case.detect.passing)
+    if needs_judge and judge is None:
+        judge = llm or await _main_llm()
+    judged = await _judge_all(case, replies, persona, judge)
+    fails = sum(f for f, _ in judged)
+    passes = sum(p for _, p in judged)
     n = len(replies) or 1
     fail_rate = fails / n
     return CaseScore(

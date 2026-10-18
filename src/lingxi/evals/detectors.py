@@ -25,7 +25,15 @@ import re
 # The single source of truth for which detector keys exist. `evaluate` and
 # `Case`'s load-time validator both read this set, so a new detector only
 # needs to be added here once — a second hardcoded list would drift.
-KNOWN_DETECTORS = frozenset({"any_of", "regex", "regex_absent"})
+KNOWN_DETECTORS = frozenset({"any_of", "regex", "regex_absent", "judge"})
+
+# The LLM-judge phase the docstring above deferred. For failures no pattern
+# can name — a message he cannot follow, her standing in the audience for her
+# own show. A judge is noisier than a regex: on 2026-10-13 it marked plain
+# rehearsal anecdotes as unreadable. So a judged case should carry a budget
+# that leaves room for that, and should be read as a trend across runs.
+_JUDGE_TMPL = ("{question}\n\n下面是要判断的内容：\n{reply}\n\n"
+               "只输出 YES 或 NO。")
 
 
 def _any_of(needles: list[str], reply: str) -> bool:
@@ -52,6 +60,31 @@ def _regex_absent(pattern: str, reply: str) -> bool:
     return re.search(pattern, reply) is None
 
 
+async def evaluate_async(spec: dict, reply: str, persona=None, judge=None) -> bool:
+    """`evaluate`, plus the judge detector, which needs a model call."""
+    if "judge" not in spec:
+        return evaluate(spec, reply, persona)
+    if judge is None:
+        raise ValueError("judge detector needs a judge model")
+    for attempt in range(3):
+        try:
+            resp = await judge.complete(
+                messages=[{"role": "user", "content": _JUDGE_TMPL.format(
+                    question=spec["judge"], reply=reply)}],
+                max_tokens=5, temperature=0, _debug_purpose="eval_judge")
+            said_yes = resp.content.strip().upper().startswith("YES")
+            # A question about something that should be there reads more
+            # clearly asked the right way round; `fires_on: NO` lets a case do
+            # that instead of a double negative, which a judge misread on
+            # every sample of its first run.
+            return said_yes if spec.get("fires_on", "YES") == "YES" else not said_yes
+        except Exception:
+            if attempt == 2:
+                raise
+            import asyncio
+            await asyncio.sleep(3)
+
+
 def evaluate(spec: dict, reply: str, persona=None) -> bool:
     """True when this detector fires on `reply`.
 
@@ -65,4 +98,6 @@ def evaluate(spec: dict, reply: str, persona=None) -> bool:
         return _regex(spec["regex"], reply)
     if "regex_absent" in spec:
         return _regex_absent(spec["regex_absent"], reply)
+    if "judge" in spec:
+        raise ValueError("judge detector is async — use evaluate_async")
     raise ValueError(f"unknown detector: {sorted(spec)}")

@@ -67,7 +67,7 @@ def _check_detector_spec(spec: dict, field_name: str) -> dict:
             f"detect.{field_name} 是空的——如果这是刚 --capture 出来的骨架，"
             f"还需要手写 detect（例如 {{'any_of': ['命中的原句']}}）"
         )
-    unknown = sorted(set(spec) - KNOWN_DETECTORS)
+    unknown = sorted(set(spec) - KNOWN_DETECTORS - {"fires_on"})
     if unknown:
         raise ValueError(
             f"detect.{field_name} 用了未知判定器 {unknown}；"
@@ -82,6 +82,11 @@ def _check_detector_spec(spec: dict, field_name: str) -> dict:
         raise ValueError(
             f"detect.{field_name}.regex 是空字符串，永远不会命中，需要手写正则"
         )
+    if "fires_on" in spec and ("judge" not in spec
+                               or spec["fires_on"] not in ("YES", "NO")):
+        raise ValueError(f"detect.{field_name}.fires_on 只用于 judge，取 YES 或 NO")
+    if "judge" in spec and not str(spec["judge"]).strip():
+        raise ValueError(f"detect.{field_name}.judge 是空的，需要写清楚要判断哪种错")
     if "regex_absent" in spec and not spec["regex_absent"]:
         # The mirror image of the empty-regex trap: an empty pattern matches
         # everywhere, so "absent" is never true and the detector never fires.
@@ -131,6 +136,15 @@ class Acquaintance(_Strict):
     relationship_level: int = 1
 
 
+class PlanStep(_Strict):
+    """The plan step a life-sim moment is written under (mode: moment)."""
+    content: str
+    time_window: str
+
+
+_MODES = ("reactive", "proactive", "moment", "scan", "memory")
+
+
 class Case(_Strict):
     id: str
     symptom: str
@@ -153,16 +167,27 @@ class Case(_Strict):
     premise: Premise = Field(default_factory=Premise)
     budget: Budget = Field(default_factory=Budget)
     acquaintance: Acquaintance = Field(default_factory=Acquaintance)
+    # mode: moment — the plan step she is in; recent aria events come from facts.
+    plan: PlanStep | None = None
+    # mode: scan — what the search found, handed over instead of searching.
+    scan_raw: list[str] = Field(default_factory=list)
 
     @field_validator("mode")
     @classmethod
     def _known_mode(cls, v: str) -> str:
-        if v not in ("reactive", "proactive"):
-            raise ValueError(f"mode 只能是 reactive 或 proactive，收到 {v!r}")
+        if v not in _MODES:
+            raise ValueError(f"mode 只能是 {'/'.join(_MODES)}，收到 {v!r}")
         return v
 
     @model_validator(mode="after")
     def _input_matches_mode(self):
+        if self.mode == "moment" and self.plan is None:
+            raise ValueError("moment 案例要写 plan（她此刻在做的那一步计划）")
+        if self.mode == "scan" and not self.scan_raw:
+            raise ValueError("scan 案例要写 scan_raw（查到的原文）")
+        if self.mode == "memory" and not any(
+                t.role == "user" for t in self.history):
+            raise ValueError("memory 案例的 history 里要有对方说的话")
         if self.mode == "proactive" and self.input.strip():
             raise ValueError(
                 "proactive 案例不该有 input：这一轮没有对方的消息，"
