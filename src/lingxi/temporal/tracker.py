@@ -53,6 +53,8 @@ class InteractionRecord(BaseModel):
     # The last turn the memory consolidator has read; later turns are
     # waiting to be read once the conversation goes quiet.
     last_consolidated_at: datetime | None = None
+    # The day the nightly memory review last ran for this person.
+    last_review_date: str | None = None
     # Consecutive days her typing to this person read out of the persona's
     # voice band, and when her context with them was last reset for it.
     voice_drift_days: list[str] = Field(default_factory=list)

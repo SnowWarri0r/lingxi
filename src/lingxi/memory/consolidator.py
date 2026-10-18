@@ -201,6 +201,12 @@ def due(rec, turns, now: datetime):
     return None
 
 
+def review_due(rec, now: datetime) -> bool:
+    """Once a night, from REVIEW_HOUR on, for anyone she holds facts about."""
+    return (now.hour >= REVIEW_HOUR
+            and getattr(rec, "last_review_date", None) != now.date().isoformat())
+
+
 async def apply_ops(ops: list[Op], *, subject: str, store, writer,
                     now: datetime) -> None:
     """A rewrite supersedes the old row and a retirement expires it."""
@@ -255,6 +261,26 @@ class ConsolidationScheduler:
             fresh = due(rec, turns, now)
             if fresh:
                 await self.run(rec, key, fresh, now)
+            elif review_due(rec, now):
+                await self.nightly(rec, key, now)
+
+    async def nightly(self, rec, key: str, now: datetime) -> list[Op]:
+        """The once-a-night review of everything held about this person."""
+        from lingxi.facts.models import FactType
+        subject = f"user:{key}"
+        held = await self._store.query(subject=subject, type=FactType.PATTERN,
+                                       limit=200)
+        ops = await review(self._llm,
+                           [HeldFact(f.id, f.content, f.ts) for f in held],
+                           agent=self._agent, today=now, model=self._model)
+        await apply_ops(ops, subject=subject, store=self._store,
+                        writer=self._writer, now=now)
+        rec.last_review_date = now.date().isoformat()
+        await self._tracker.save()
+        counts = {k: sum(o.op == k for o in ops) for k in ("update", "retire")}
+        print(f"[memory] nightly review {key[-6:]}: {len(held)} facts → {counts}",
+              flush=True)
+        return ops
 
     async def run(self, rec, key: str, fresh, now: datetime) -> list[Op]:
         from lingxi.facts.models import FactType
@@ -274,3 +300,93 @@ class ConsolidationScheduler:
         print(f"[memory] consolidated {key[-6:]}: {len(fresh)} turns → {counts}",
               flush=True)
         return ops
+
+
+# --- the nightly review ------------------------------------------------------
+#
+# The quiet-time pass only edits what a conversation touches, so a fact no one
+# mentions again never changes: on 2026-10-13 she still held a National Day
+# trip as ahead of him a week after the holiday, a cold from August, and a
+# haircut 「昨天」. Once a night, with no conversation in front of it, the
+# review reads everything held against today's date.
+
+_REVIEW_PROMPT = """今天是 {today}。你在替{agent}复盘她记住的关于对方的事，这次没有新对话，只看时间过去之后哪些已经不成立。
+
+【已经记住的】（方括号里是记下的日期）
+{facts}
+
+【怎么复盘】
+- 一时的状态（哪几天生病、某段时间很忙、某天很累、睡眠欠账、某天的心情）过了这么久已经不算数：retire。
+- 写着要做、但日子已经过去的计划：改写成「之前说过要……，后来怎么样还不知道」这类说法——**结果他没说过，就写不知道**。
+- 用了「昨天」「这几天」「最近」这种相对说法的：按记下的日期换成具体几月几号，或者在日子过了很久时 retire。
+- 过一阵还成立的事（住哪、作息、喜好、身边的人、经历过的大事）原样留着，不动。
+- 改写只动时间相关的说法，原句里没有的事一件也不添。
+
+输出严格 JSON（直接 {{ 开头）；没有要改的就输出 {{"ops": []}}：
+{{"ops": [
+  {{"op": "update", "id": "F3", "content": "对方……"}},
+  {{"op": "retire", "id": "F5"}}
+]}}
+"""
+
+# What a time-only rewrite may add to the sentence it rewrites: dates and the
+# words for "planned / not known how it went". Anything else new would be an
+# invented outcome.
+_TIME_CHARS = set("0123456789０１２３４５６７８９年月日号前后之前当时那时候曾经已经原本来计划打算说过要还不知道怎么样去没有是否成行了的过这些天段间，。、；：（）「」 —…")
+REVIEW_HOUR = 4
+
+
+def review_prompt(facts: list[HeldFact], *, agent: str, today: datetime) -> tuple[str, dict[str, str]]:
+    ids = {f"F{i + 1}": f.id for i, f in enumerate(facts)}
+    held = "\n".join(
+        f"  {sid}. {f'[{f.ts:%Y年%-m月%-d日}记] ' if f.ts else ''}{f.content}"
+        for sid, f in zip(ids, facts)) or "  （还没有）"
+    day = f"{today:%Y年%-m月%-d日} {_WEEKDAYS[today.weekday()]}"
+    return _REVIEW_PROMPT.format(today=day, agent=agent, facts=held), ids
+
+
+def adds_only_time(old: str, new: str) -> bool:
+    """True when every character the rewrite adds is a date or a word for not
+    knowing how it went."""
+    have = set(old)
+    return all(c in have or c in _TIME_CHARS for c in new)
+
+
+def parse_review(text: str, ids: dict[str, str],
+                 held: dict[str, str]) -> list[Op]:
+    try:
+        data = lenient_json.loads(text)
+    except Exception:
+        return []
+    out, touched = [], set()
+    for o in (data.get("ops") if isinstance(data, dict) else None) or []:
+        if not isinstance(o, dict):
+            continue
+        target = ids.get(str(o.get("id") or "").strip())
+        if not target or target in touched:
+            continue
+        if o.get("op") == "retire":
+            out.append(Op("retire", target=target))
+        elif o.get("op") == "update":
+            content = str(o.get("content") or "").strip()
+            if not content or not adds_only_time(held[target], content):
+                continue
+            out.append(Op("update", content, target))
+        else:
+            continue
+        touched.add(target)
+    return out
+
+
+async def review(llm, facts: list[HeldFact], *, agent: str, today: datetime,
+                 model: str | None = None) -> list[Op]:
+    if not facts:
+        return []
+    prompt, ids = review_prompt(facts, agent=agent, today=today)
+    kwargs = {"model": model} if model else {}
+    resp = await llm.complete(
+        messages=[{"role": "user", "content": prompt}],
+        system="你负责复盘长期记忆，输出严格 JSON。",
+        max_tokens=3000, temperature=0.2,
+        _debug_purpose="memory_review", **kwargs)
+    return parse_review(resp.content, ids, {f.id: f.content for f in facts})

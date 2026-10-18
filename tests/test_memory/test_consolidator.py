@@ -220,7 +220,8 @@ async def test_a_quiet_conversation_rewrites_the_plan_it_carried_out(tmp_path):
              for t in _turns()]
     rec = SimpleNamespace(channel="feishu", recipient_id="oc_x",
                           last_interaction=turns[-1].timestamp,
-                          last_consolidated_at=None, unreachable_since=None)
+                          last_consolidated_at=None, unreachable_since=None,
+                          last_review_date=turns[-1].timestamp.date().isoformat())
     tracker = _Tracker(rec)
     sched = ConsolidationScheduler(
         llm=llm, tracker=tracker, short_term=_ShortTerm(turns), store=store,
@@ -261,3 +262,74 @@ def test_the_orchestrator_is_not_asked_to_write_memories():
     prompt = build_orchestrator_prompt(
         "我周六去了漫展", StateDigest(activity="", mood="", last_lived=[]), {})
     assert "memory_writes" not in prompt
+
+
+# --- the nightly review --------------------------------------------------------
+
+from lingxi.memory.consolidator import (  # noqa: E402
+    REVIEW_HOUR, adds_only_time, parse_review, review_due, review_prompt)
+
+
+def test_a_past_plan_may_become_not_known_how_it_went():
+    assert adds_only_time("对方说国庆会去漫展见阿澪",
+                          "对方说过国庆会去漫展见阿澪，后来去没去还不知道")
+
+
+def test_a_review_cannot_invent_how_it_went():
+    assert not adds_only_time("对方说国庆会去漫展见阿澪",
+                              "对方国庆去了漫展，见到了阿澪本人")
+
+
+def test_a_relative_day_may_become_a_date():
+    assert adds_only_time("对方昨天剪了头发", "对方8月15日剪了头发")
+
+
+def test_review_edits_parse_and_an_invented_outcome_is_dropped():
+    ids = {"F1": "a", "F2": "b", "F3": "c"}
+    held = {"a": "对方说国庆会去漫展", "b": "对方这几天感冒了", "c": "对方住在邻市"}
+    ops = parse_review('''{"ops": [
+        {"op": "update", "id": "F1", "content": "对方国庆去了漫展，玩得很开心"},
+        {"op": "retire", "id": "F2"},
+        {"op": "add", "content": "对方喜欢猫"}]}''', ids, held)
+    assert [(o.op, o.target) for o in ops] == [("retire", "b")]
+
+
+def test_the_review_is_told_the_date_and_when_each_fact_was_written():
+    prompt, ids = review_prompt(
+        [HeldFact("a", "对方昨天剪了头发", datetime(2026, 8, 16))],
+        agent="可可", today=datetime(2026, 10, 14, 4))
+    assert "2026年10月14日" in prompt and "[2026年8月16日记]" in prompt
+
+
+def test_once_a_night_after_the_review_hour():
+    rec = SimpleNamespace(last_review_date=None)
+    night = datetime(2026, 10, 14, REVIEW_HOUR)
+    assert not review_due(rec, night - timedelta(hours=1))
+    assert review_due(rec, night)
+    rec.last_review_date = "2026-10-14"
+    assert not review_due(rec, night + timedelta(hours=10))
+    assert review_due(rec, night + timedelta(days=1))
+
+
+@pytest.mark.asyncio
+async def test_the_nightly_pass_retires_a_passing_state(tmp_path):
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    writer = UserStatementWriter(store)
+    cold = await writer.write(subject=SUBJ, content="对方这几天感冒了",
+                              type=FactType.PATTERN, source=Source.USER_STATED,
+                              ts=T0)
+    rec = SimpleNamespace(channel="feishu", recipient_id="oc_x",
+                          last_interaction=T0, last_consolidated_at=T0,
+                          last_review_date=None, unreachable_since=None)
+    tracker = _Tracker(rec)
+    sched = ConsolidationScheduler(
+        llm=_LLM('{"ops": [{"op": "retire", "id": "F1"}]}'), tracker=tracker,
+        short_term=_ShortTerm([]), store=store, writer=writer,
+        persona=SimpleNamespace(name="可可", lexicon=[]))
+    night = datetime(2026, 10, 14, REVIEW_HOUR)
+    await sched.tick(night)
+    assert (await store.get(cold.id)).expires_at == night
+    assert rec.last_review_date == "2026-10-14"
+    await sched.tick(night + timedelta(hours=1))
+    assert len(sched._llm.prompts) == 1
