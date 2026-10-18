@@ -23,7 +23,7 @@ def test_ago_label_spells_out_the_gap():
 
 
 def test_entries_accept_both_storage_formats():
-    assert _as_entry("旧字符串") == {"text": "旧字符串", "ts": None}
+    assert _as_entry("旧字符串") == {"text": "旧字符串", "ts": None, "aspect": ""}
     e = _as_entry({"text": "新格式", "ts": "2026-08-16T10:00:00"})
     assert e["text"] == "新格式" and e["ts"] == "2026-08-16T10:00:00"
 

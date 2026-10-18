@@ -210,11 +210,50 @@ PROACTIVE_FORCE_PROMPT = """你是 {persona_name}。{current_time_cn}
 
 
 def _as_entry(m) -> dict:
-    """History rows are {text, ts}. Older files hold bare strings; those load
-    with no timestamp, which just renders without a 'how long ago' label."""
+    """History rows are {text, ts, aspect}. Older files hold bare strings;
+    those load with no timestamp, which just renders without a 'how long ago'
+    label, and rows from before aspects were kept load without one."""
     if isinstance(m, dict):
-        return {"text": str(m.get("text", "")), "ts": m.get("ts")}
-    return {"text": str(m), "ts": None}
+        return {"text": str(m.get("text", "")), "ts": m.get("ts"),
+                "aspect": str(m.get("aspect") or "")}
+    return {"text": str(m), "ts": None, "aspect": ""}
+
+
+# Which side of her life an opener came from. Labelled by her at compose time
+# and kept with the history, so the next opener can see what the last few
+# were about. Over 44 openers before this, 12 were practice and only 3 were
+# news from the scene he follows, and 6 restated something from one of the
+# three before — the raw texts were in front of her, the pattern across them
+# was not.
+OPENER_ASPECTS = ("练习排练", "演出", "圈里新鲜事", "队友", "家人", "吃喝",
+                  "天气", "他的事", "别的")
+
+
+def _aspect_line(recent: list[dict]) -> str:
+    """One line naming what the last few openers were about, or ""."""
+    tags = [e.get("aspect") for e in recent[-3:] if e.get("aspect")]
+    if not tags:
+        return ""
+    from collections import Counter
+    counts = Counter(tags)
+    said = "、".join(f"{a}×{n}" if n > 1 else a for a, n in counts.items())
+    return f"最近三条说的是：{said}。这次从另一个方面挑一件。\n"
+
+
+def build_opener_news_block(facts) -> str:
+    """Everything she scanned this morning, offered as something to open with.
+
+    The chat path pushes one item and says to mention it only if the talk
+    comes round to it, which is right mid-conversation. Here it told her not
+    to start with the one kind of opener he has said he likes: news from the
+    scene he follows.
+    """
+    lines = [f"- {f.content}" for f in (facts or [])[:5]
+             if (f.content or "").strip()]
+    if not lines:
+        return ""
+    return ("## 今天你扫到的（圈里和身边的新鲜事——有想跟他分享的，拿来起头正合适）\n"
+            + "\n".join(lines) + "\n\n")
 
 
 def _ago_label(ts: str | None, now: datetime | None = None) -> str:
@@ -250,6 +289,10 @@ def parse_proactive_output(raw: str) -> dict:
     from lingxi.conversation.response_cleaner import clean_speech
 
     text = (raw or "").strip()
+    # The prompt shows its output format inside a code fence, and the model
+    # now and then copies the fence (1 of 160 logged openers). Left in, the
+    # fence would go out as the first line of the message.
+    text = re.sub(r"^```[a-zA-Z]*\s*\n?|\n?```\s*$", "", text).strip()
     # Lift the sticker tag before anything else, exactly as the reply path
     # does — otherwise, now that these messages send, `#表情 开心` goes out as
     # a visible line.
@@ -295,8 +338,10 @@ def parse_proactive_output(raw: str) -> dict:
         message = clean_speech(str(meta.get("message", "") or "").strip())
         should_send = should_send and bool(message)
 
+    aspect = str(meta.get("aspect") or "").strip()
     return {"should_send": should_send, "message": message,
-            "sticker": sticker, "reason": meta.get("inner", "")}
+            "sticker": sticker, "reason": meta.get("inner", ""),
+            "aspect": aspect if aspect in OPENER_ASPECTS else ""}
 
 
 def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -> str | None:
@@ -743,14 +788,16 @@ class ProactiveScheduler:
         except (json.JSONDecodeError, OSError) as e:
             print(f"[proactive] history load failed (non-fatal): {e}")
 
-    def _remember_proactive(self, key: str, message: str) -> None:
+    def _remember_proactive(self, key: str, message: str,
+                            aspect: str = "") -> None:
         """Keep this opener for anti-repetition.
 
         In memory and on disk: a restart used to wipe the list, and she
         re-sent 「昨晚又看了一遍那个电影」 three hours later.
         """
         recent = self._recent_proactive.setdefault(key, [])
-        recent.append({"text": message, "ts": datetime.now().isoformat()})
+        recent.append({"text": message, "ts": datetime.now().isoformat(),
+                       "aspect": aspect})
         if len(recent) > self._max_dedup_history:
             del recent[: len(recent) - self._max_dedup_history]
         self._save_history()
@@ -1015,7 +1062,7 @@ class ProactiveScheduler:
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
-        self._remember_proactive(key, message)
+        self._remember_proactive(key, message, decision.get("aspect", ""))
 
         return {"key": key, "status": "sent", "message": message}
 
@@ -1062,9 +1109,12 @@ class ProactiveScheduler:
         # Recent proactive messages for this recipient (avoid repetition)
         recent_msgs = self._recent_proactive.get(rec_key, [])
         recent_proactive = "\n".join(
-            f"- [{_ago_label(e.get('ts'))}] {e.get('text', '')}"
+            f"- [{_ago_label(e.get('ts'))}"
+            f"{'｜' + e['aspect'] if e.get('aspect') else ''}] {e.get('text', '')}"
             for e in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
+        aspect_line = _aspect_line(recent_msgs)
+        aspects = "、".join(OPENER_ASPECTS)
 
         # relationship_level / goals were used by the legacy ad-hoc proactive
         # prompt; they're now rendered consistently inside build_system_prompt
@@ -1186,10 +1236,8 @@ class ProactiveScheduler:
         # written many ways.
         world_block = ""
         try:
-            world_block = build_world_block(
-                await self.engine._todays_world_facts()) or ""
-            if world_block:
-                world_block += "\n\n"
+            world_block = build_opener_news_block(
+                await self.engine._todays_world_facts())
         except Exception as e:
             print(f"[proactive] world block failed (non-fatal): {e}", flush=True)
 
@@ -1226,7 +1274,8 @@ class ProactiveScheduler:
                 f"每条前面有日期时间）\n"
                 f"{user_recent_block}\n\n"
                 f"{known_block}"
-                f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n\n"
+                f"## 你最近发过的主动消息（这次换一件事说）\n{recent_proactive}\n"
+                f"{aspect_line}\n"
                 f"{own_life_block}"
                 f"{world_block}"
                 f"{shows_block}"
@@ -1240,7 +1289,8 @@ class ProactiveScheduler:
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
                 f"<对外那一句，IM 短句>\n===META===\n"
-                f'{{"should_send": true, "inner": "为什么发"}}\n```\n\n'
+                f'{{"should_send": true, "inner": "为什么发", "aspect": "这条说的方面"}}\n```\n'
+                f"aspect 填这条说的是哪方面，从这几个里挑一个：{aspects}\n\n"
                 f"不该发就：\n```\n\n===META===\n"
                 f'{{"should_send": false, "inner": "为什么不发"}}\n```'
             )
