@@ -18,7 +18,8 @@ def test_a_november_show_is_not_tomorrow():
     block = _upcoming_shows_block(
         [UpcomingShow(event="Love Live Fes 15th", date="2026-11",
                       venue="バンテリンドーム ナゴヤ")], TODAY)
-    assert "还有 2 个多月" in block
+    # A month alone cannot say how many days; two to three months can.
+    assert "还有 2 到 3 个月" in block
     assert "就是明天" not in block
     assert "2026年11月" in block
 

@@ -48,6 +48,18 @@ def _gap_cn(target, today) -> str:
     return f"还有 {days // 30} 个多月（{days} 天）"
 
 
+def _month_gap_cn(month_start, today) -> str:
+    """How far off a month is, with no day count it cannot support."""
+    months = (month_start.year - today.year) * 12 + month_start.month - today.month
+    if months < 0:
+        return "已经过去了"
+    if months == 0:
+        return "就在这个月，具体哪天还没定"
+    if months == 1:
+        return "下个月，具体哪天还没定"
+    return f"还有 {months - 1} 到 {months} 个月，具体哪天还没定"
+
+
 # The one ladder of day-part labels. The orchestrator needs the same words the
 # chat prompt uses: it is asked what he is doing 此刻 and, with no clock of its
 # own, once answered 「周日下午」 at 19:32 — a string then rendered under the
@@ -93,7 +105,10 @@ def _upcoming_shows_block(shows, today=None) -> str | None:
             continue
         on_dates.append(d)
         when = f"{d.year}年{d.month}月" + (f"{d.day}日" if precise else "")
-        gap = _gap_cn(d, today)
+        # A month alone says when, not how far. Counted to the 1st, a show in
+        # 「2026-11」 read as 「还有 8 天」 on 10-24 when it was three weeks off,
+        # and talked her out of the right date when she remembered it.
+        gap = _gap_cn(d, today) if precise else _month_gap_cn(d, today)
         where = f"，{sh.venue}" if sh.venue else ""
         lines.append(f"- {sh.event}：{when}{where}——{gap}")
         if sh.note:
@@ -153,11 +168,16 @@ def build_stage_block(persona, today=None, *, stance: bool = True) -> str | None
                 break
             except ValueError:
                 continue
-        if d is None or d < today:
+        if d is None:
+            continue
+        if precise and d < today:
+            continue
+        if not precise and (d.year, d.month) < (today.year, today.month):
             continue
         when = f"{d.year}年{d.month}月" + (f"{d.day}日" if precise else "")
         where = f"，{sh.venue}" if sh.venue else ""
-        lines.append(f"  - {sh.event}：{when}{where}——{_gap_cn(d, today)}")
+        gap = _gap_cn(d, today) if precise else _month_gap_cn(d, today)
+        lines.append(f"  - {sh.event}：{when}{where}——{gap}")
     stance_lines = [e.replace("【她的站位】", "").strip()
                     for e in (getattr(persona, "lexicon", None) or [])
                     if stance and isinstance(e, str)
