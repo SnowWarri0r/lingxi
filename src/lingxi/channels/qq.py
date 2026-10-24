@@ -193,6 +193,9 @@ class QQBot(OutboundChannel):
                                 session = p["d"]["session_id"]
                                 delay = 1.0
                                 print("[qq] connected", flush=True)
+                            elif p.get("t") == "RESUMED":
+                                delay = 1.0
+                                print("[qq] resumed", flush=True)
                             elif p.get("t") == "C2C_MESSAGE_CREATE":
                                 asyncio.create_task(self._on_message(p["d"]))
                     finally:

@@ -40,8 +40,11 @@ def main() -> None:
         print("  FEISHU_APP_SECRET=xxxxx")
         sys.exit(1)
 
-    from lingxi.utils.logging import setup_logging
+    from lingxi.utils.logging import StampedStream, setup_logging
 
+    if not sys.stdout.isatty():          # under launchd, into a log file
+        sys.stdout = StampedStream(sys.stdout)
+        sys.stderr = StampedStream(sys.stderr)
     setup_logging()
 
     # Parse args

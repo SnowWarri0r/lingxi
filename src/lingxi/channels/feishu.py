@@ -535,7 +535,9 @@ class FeishuBot(OutboundChannel):
             app_id=self.app_id,
             app_secret=self.app_secret,
             event_handler=handler,
-            log_level=lark.LogLevel.DEBUG,
+            # DEBUG logged a ping and a pong every 90 seconds: 79% of the
+            # bot's log. INFO keeps connects and disconnects.
+            log_level=lark.LogLevel.INFO,
         )
 
         proactive_hint = "开启" if self._proactive_config.enabled else "关闭"
