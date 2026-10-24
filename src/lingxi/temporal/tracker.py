@@ -53,6 +53,17 @@ class InteractionRecord(BaseModel):
     # The last turn the memory consolidator has read; later turns are
     # waiting to be read once the conversation goes quiet.
     last_consolidated_at: datetime | None = None
+    # Where to reach him when that is not where this record lives: the same
+    # person on another channel (identities.json maps it here). Set by
+    # whichever channel he last wrote from, so an opener goes where he is.
+    route_channel: str | None = None
+    route_id: str | None = None
+
+    def delivery(self) -> tuple[str, str]:
+        """The (channel, recipient id) an outgoing message should use."""
+        if self.route_channel and self.route_id:
+            return self.route_channel, self.route_id
+        return self.channel, self.recipient_id
     # The day the nightly memory review last ran for this person.
     last_review_date: str | None = None
     # Consecutive days her typing to this person read out of the persona's
@@ -149,6 +160,17 @@ class InteractionTracker:
         key = self._key(channel, recipient_id)
         if key in self._records:
             self._records[key].session_count += 1
+
+    def set_route(self, channel: str, recipient_id: str,
+                  via_channel: str, via_id: str) -> None:
+        """He last wrote from `via_channel`; reach him there."""
+        rec = self._records.get(self._key(channel, recipient_id))
+        if rec is None:
+            return
+        if (via_channel, via_id) == (rec.channel, rec.recipient_id):
+            rec.route_channel = rec.route_id = None
+        else:
+            rec.route_channel, rec.route_id = via_channel, via_id
 
     def mark_unreachable(self, channel: str, recipient_id: str) -> None:
         key = self._key(channel, recipient_id)

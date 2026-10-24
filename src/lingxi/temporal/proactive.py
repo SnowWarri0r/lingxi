@@ -957,7 +957,8 @@ class ProactiveScheduler:
             }
 
         # Channel must be available
-        channel = self.channels.get(record.channel)
+        via, to = record.delivery()
+        channel = self.channels.get(via)
         if channel is None:
             return {"key": key, "status": "no_channel"}
 
@@ -1048,8 +1049,16 @@ class ProactiveScheduler:
                 turn_id = None
 
         try:
-            await channel.send_message(record.recipient_id, message, turn_id=turn_id)
+            await channel.send_message(to, message, turn_id=turn_id)
         except RecipientUnreachable as e:
+            if (via, to) != (record.channel, record.recipient_id):
+                # Unreachable there is not unreachable: he may have switched
+                # off openers on one app. Fall back to his home channel.
+                print(f"[proactive] {key} unreachable via {via}, back to "
+                      f"{record.channel}: {e}", flush=True)
+                record.route_channel = record.route_id = None
+                await self.tracker.save()
+                return {"key": key, "status": "route_dropped", "error": str(e)}
             # A failed send leaves last_proactive_sent where it was, so without
             # this the same recipient is eligible again on the next five-minute
             # tick — another message composed, another refusal, indefinitely.
@@ -1074,7 +1083,7 @@ class ProactiveScheduler:
                 await self.engine._resolve_sticker(sticker_intent, key)
                 path = self.engine._pending_stickers.pop(key, None)
                 if path:
-                    await channel.send_sticker(record.recipient_id, path)
+                    await channel.send_sticker(to, path)
             except Exception as e:
                 print(f"[proactive] sticker send failed (non-fatal): {e}",
                       flush=True)

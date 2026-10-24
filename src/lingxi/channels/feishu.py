@@ -432,6 +432,20 @@ class FeishuBot(OutboundChannel):
             or os.environ.get("MEMORY_DATA_DIR", "./data/memory")
         )
 
+        # QQ private chat, in this process and on this loop so it shares the
+        # engine, the tracker and every scheduler. Off unless configured.
+        if os.environ.get("QQ_BOT_APP_ID") and os.environ.get("QQ_BOT_APP_SECRET"):
+            from pathlib import Path
+            from lingxi.channels.identity import IdentityMap
+            from lingxi.channels.qq import QQBot
+            qq = QQBot(self.engine, os.environ["QQ_BOT_APP_ID"],
+                       os.environ["QQ_BOT_APP_SECRET"],
+                       identities=IdentityMap(Path(data_dir) / "identities.json"),
+                       link_home=os.environ.get("QQ_LINK_HOME", ""))
+            self._channel_registry.register(qq)
+            qq.start(self._loop)
+            print("[qq] channel starting", flush=True)
+
         # Start proactive scheduler on our dedicated loop
         if self._proactive_config.enabled and self.engine.interaction_tracker:
             # Pass the memory data_dir so anti-repetition history persists
@@ -875,8 +889,11 @@ class FeishuBot(OutboundChannel):
 
             await self._stream_reply(chat_id, text, images=images)
 
-            # Persist interaction tracker so proactive loop sees latest state
+            # Persist interaction tracker so proactive loop sees latest state.
+            # He wrote from Feishu, so that is where openers go again.
             if self.engine.interaction_tracker:
+                self.engine.interaction_tracker.set_route(
+                    "feishu", chat_id, "feishu", chat_id)
                 await self.engine.interaction_tracker.save()
 
             # Periodic end_session: every N turns trigger memory consolidation
