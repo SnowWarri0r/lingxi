@@ -74,3 +74,10 @@ def test_an_empty_regex_absent_is_rejected_at_load_time():
 
     with pytest.raises(ValueError, match="regex_absent"):
         Detect(fail={"regex_absent": ""})
+
+
+def test_the_judge_verdict_is_read_from_its_last_line():
+    from lingxi.evals.detectors import _verdict
+    assert _verdict("她本人想去抽票，是台下的事。\nYES") is True
+    assert _verdict("叫别人去抽，不算。\n**NO**") is False
+    assert _verdict("YES，但其实没有问题。\n结论：没问题") is None

@@ -32,8 +32,25 @@ KNOWN_DETECTORS = frozenset({"any_of", "regex", "regex_absent", "judge"})
 # own show. A judge is noisier than a regex: on 2026-10-13 it marked plain
 # rehearsal anecdotes as unreadable. So a judged case should carry a budget
 # that leaves room for that, and should be read as a trend across runs.
+#
+# The judge gives one sentence of reasoning before its verdict. Held to a
+# bare YES/NO in five tokens it missed failures it named correctly once it
+# could say why: the stage-side case read 「这票要是抽到了我直接飞过去」 —
+# her, as audience, for her own show — as fine every time, and as audience
+# once asked for a reason.
 _JUDGE_TMPL = ("{question}\n\n下面是要判断的内容：\n{reply}\n\n"
-               "只输出 YES 或 NO。")
+               "先用一句话说理由，最后单独一行只写 YES 或 NO。")
+
+
+def _verdict(text: str) -> bool | None:
+    """YES/NO from the judge's last line, or None if it gave neither."""
+    for line in reversed(text.strip().splitlines()):
+        word = line.strip().strip("*`。.").upper()
+        if word in ("YES", "NO"):
+            return word == "YES"
+        if line.strip():
+            break
+    return None
 
 
 def _any_of(needles: list[str], reply: str) -> bool:
@@ -71,8 +88,10 @@ async def evaluate_async(spec: dict, reply: str, persona=None, judge=None) -> bo
             resp = await judge.complete(
                 messages=[{"role": "user", "content": _JUDGE_TMPL.format(
                     question=spec["judge"], reply=reply)}],
-                max_tokens=5, temperature=0, _debug_purpose="eval_judge")
-            said_yes = resp.content.strip().upper().startswith("YES")
+                max_tokens=300, temperature=0, _debug_purpose="eval_judge")
+            said_yes = _verdict(resp.content)
+            if said_yes is None:
+                raise ValueError(f"judge gave no verdict: {resp.content[-60:]!r}")
             # A question about something that should be there reads more
             # clearly asked the right way round; `fires_on: NO` lets a case do
             # that instead of a double negative, which a judge misread on

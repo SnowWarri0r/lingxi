@@ -21,7 +21,7 @@ class _LLM:
     async def complete(self, **kw):
         self.calls.append(kw)
         text = kw["messages"][0]["content"]
-        return SimpleNamespace(content=self.judge if "只输出 YES 或 NO" in text
+        return SimpleNamespace(content=("理由一句。\n" + self.judge) if "最后单独一行只写 YES 或 NO" in text
                                else self.reply)
 
 
