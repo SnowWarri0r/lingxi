@@ -622,3 +622,17 @@ class TestAuthManager:
         config = AuthConfig(provider="anthropic", method=AuthMethod.API_KEY)
         result = await auth.resolve_credentials(config)
         assert result == "env-key"
+
+
+def test_the_token_that_expires_last_is_used():
+    """An expired token in ~/.claude/.credentials.json beside a live one in
+    the Keychain kept the bot from starting."""
+    from datetime import datetime, timedelta
+    from lingxi.auth.external_sync import freshest
+    from lingxi.auth.models import TokenInfo
+    stale = TokenInfo(access_token="old", expires_at=datetime.now() - timedelta(days=1))
+    live = TokenInfo(access_token="new", expires_at=datetime.now() + timedelta(hours=8))
+    assert freshest([stale, live]).access_token == "new"
+    assert freshest([live, stale]).access_token == "new"
+    assert freshest([None, stale]).access_token == "old"
+    assert freshest([None, None]) is None

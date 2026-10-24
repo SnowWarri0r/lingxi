@@ -48,13 +48,15 @@ class ExternalCredentialSync:
 
         profiles: list[AuthProfile] = []
 
-        # Try 1: Read ~/.claude/.credentials.json
+        # ~/.claude/.credentials.json and, on macOS, the Keychain. Both can
+        # exist at once, and the file can hold a token long expired while the
+        # Keychain has the live one: on 10-27 a restart read only the file and
+        # the bot did not come back up. The one that expires later wins.
         cred_path = Path.home() / ".claude" / ".credentials.json"
-        token = self._read_claude_credentials_file(cred_path)
-
-        # Try 2: macOS Keychain (if file not found)
-        if token is None and platform.system() == "Darwin":
-            token = self._read_claude_keychain()
+        found = [self._read_claude_credentials_file(cred_path)]
+        if platform.system() == "Darwin":
+            found.append(self._read_claude_keychain())
+        token = freshest(found)
 
         if token:
             profile = AuthProfile(
@@ -179,6 +181,15 @@ class ExternalCredentialSync:
 
     def invalidate_cache(self) -> None:
         self._cache.clear()
+
+
+def freshest(tokens: list[TokenInfo | None]) -> TokenInfo | None:
+    """The token that expires last; on a tie, the first one given."""
+    found = [t for t in tokens if t is not None]
+    if not found:
+        return None
+    return max(found, key=lambda t: (t.expires_at is not None,
+                                     t.expires_at.timestamp() if t.expires_at else 0))
 
 
 def _extract_token_from_dict(data: dict) -> TokenInfo | None:
