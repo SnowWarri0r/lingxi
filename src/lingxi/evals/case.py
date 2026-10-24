@@ -187,6 +187,12 @@ class Case(_Strict):
     # mode: scan — what the search found, handed over instead of searching.
     scan_raw: list[str] = Field(default_factory=list)
     controls: Controls | None = None
+    # Cases that measure one thing across several turns (her voice over a
+    # conversation) share a group; the table adds a pooled row for it. A
+    # single turn is nearly all-or-nothing on a voice marker — the three
+    # turns the user praised on 10-18 carry no '!' at all — so only the
+    # pooled rate against its own baseline means anything.
+    group: str = ""
 
     @field_validator("mode")
     @classmethod

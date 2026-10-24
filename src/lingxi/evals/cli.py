@@ -85,7 +85,30 @@ def _fraction(rate: float, samples: int) -> str:
     return f"{round(rate * samples)}/{samples}"
 
 
-def format_table(scores: list[CaseScore], baseline: dict) -> str:
+def _group_rows(scores: list[CaseScore], baseline: dict, groups: dict) -> list[str]:
+    rows = []
+    for g in sorted({v for v in groups.values() if v}):
+        mine = [s for s in scores if groups.get(s.id) == g and s.verdict != "BROKEN"]
+        if not mine:
+            continue
+        n = sum(s.samples for s in mine)
+        f = sum(round(s.fail_rate * s.samples) for s in mine)
+        p_ = sum(round(s.pass_rate * s.samples) for s in mine)
+        base = [baseline[s.id] for s in mine if s.id in baseline]
+        line = f"{'[' + g + ']':<22}{'pooled':<10}{f'{f}/{n}':<9}{f'{p_}/{n}':<9}"
+        if len(base) == len(mine):
+            bn = sum(int(b.get("samples") or 0) for b in base)
+            bf = sum(round(b["fail_rate"] * int(b.get("samples") or 0)) for b in base)
+            if bn:
+                pv = fisher_p(f, n, bf, bn)
+                line += (f"{bf / bn:<11.0%}{(f / n - bf / bn) * 100:+.0f}pp "
+                         f"(p={pv:.2f})")
+        rows.append(line)
+    return rows
+
+
+def format_table(scores: list[CaseScore], baseline: dict,
+                 groups: dict | None = None) -> str:
     lines = [f"{'case':<22}{'verdict':<10}{'fail':<9}{'pass':<9}"
              f"{'baseline':<11}{'Δ'}"]
     for s in scores:
@@ -107,6 +130,7 @@ def format_table(scores: list[CaseScore], baseline: dict) -> str:
             f"{s.id:<22}{s.verdict:<10}"
             f"{_fraction(s.fail_rate, s.samples):<9}"
             f"{_fraction(s.pass_rate, s.samples):<9}{base_col:<11}{delta}")
+    lines += _group_rows(scores, baseline, groups or {})
     return "\n".join(lines)
 
 
@@ -159,6 +183,9 @@ def main() -> int:
                         help="capture 时扒最近几轮对话")
     parser.add_argument("--facts", type=int, default=8,
                         help="capture 时每个 subject 最多抓几条 fact")
+    parser.add_argument("--at", metavar="ISO_TIME",
+                        help="capture 一个过去的轮次：缓冲区截到这一刻（含他这条），"
+                             "事实只取那时已经写下的")
     parser.add_argument("--dump", metavar="DIR",
                         help="把每个 case 采样到的回复写入 DIR/<case-id>.txt")
     args = parser.parse_args()
@@ -176,7 +203,8 @@ def main() -> int:
         skeleton = asyncio.run(capture_turn(
             args.capture, persona_path=persona_path,
             data_dir=Path("data/personas") / slug, turns=args.turns,
-            fact_limit=args.facts))
+            fact_limit=args.facts,
+            upto=datetime.fromisoformat(args.at) if args.at else None))
 
         # Same-day captures share the "{date}-rename-me" id; pick the next
         # free suffix instead of silently overwriting an earlier capture.
@@ -215,7 +243,8 @@ def main() -> int:
         print("没有找到任何案例（evals/cases/ 是空的）")
         return 1
 
-    print(format_table(scores, load_baseline()))
+    groups = {c.id: c.group for c in load_all_cases(CASES_DIR)}
+    print(format_table(scores, load_baseline(), groups))
 
     if args.dump:
         dump_replies(scores, args.dump)

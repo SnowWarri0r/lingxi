@@ -76,3 +76,12 @@ def test_recording_one_case_keeps_the_others(tmp_path):
 def test_fisher_separates_noise_from_change():
     assert fisher_p(2, 12, 3, 12) > 0.5          # 17% vs 25%: noise
     assert fisher_p(0, 20, 10, 20) < 0.01        # 0% vs 50%: real
+
+
+def test_a_group_gets_a_pooled_row_against_its_baseline():
+    from lingxi.evals.cli import format_table
+    scores = [CaseScore(id="v1", verdict="PASS", fail_rate=0.5, samples=4),
+              CaseScore(id="v2", verdict="PASS", fail_rate=1.0, samples=4)]
+    base = {"v1": {"fail_rate": 0.25, "samples": 4}, "v2": {"fail_rate": 0.5, "samples": 4}}
+    table = format_table(scores, base, {"v1": "voice", "v2": "voice"})
+    assert "[voice]" in table and "6/8" in table and "p=" in table

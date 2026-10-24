@@ -203,3 +203,30 @@ async def test_capture_default_fact_limit_is_eight(tmp_path):
         data_dir=tmp_path, turns=8, at=AT)
     aria_facts = [f for f in skeleton["facts"] if f["subject"] == "aria"]
     assert len(aria_facts) == 8
+
+
+@pytest.mark.asyncio
+async def test_a_past_turn_is_frozen_as_it_stood(tmp_path):
+    """`upto` cuts the buffer at that turn and leaves out facts written later."""
+    import json
+    from datetime import datetime
+    from lingxi.evals.capture import capture
+    from lingxi.facts.models import Fact, FactType, Source
+    from lingxi.facts.store import FactStore
+    (tmp_path / "short_term").mkdir()
+    rows = [{"role": "user", "content": "早", "timestamp": "2026-03-01T09:00:00"},
+            {"role": "assistant", "content": "早呀", "timestamp": "2026-03-01T09:00:10"},
+            {"role": "user", "content": "晚安", "timestamp": "2026-03-01T23:00:00"}]
+    (tmp_path / "short_term" / "feishu:oc_x.json").write_text(json.dumps({"turns": rows}))
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    for content, written in (("对方养猫", "2026-02-01T00:00:00"), ("对方搬家了", "2026-03-02T00:00:00")):
+        await store.write(Fact(subject="user:feishu:oc_x", content=content,
+                               source=Source.USER_STATED, type=FactType.PATTERN,
+                               ts=datetime.fromisoformat(written),
+                               written_at=datetime.fromisoformat(written)))
+    sk = await capture("feishu:oc_x", persona_path="p.yaml", data_dir=tmp_path,
+                       upto=datetime(2026, 3, 1, 12))
+    assert sk["input"] == "早"
+    assert [f["content"] for f in sk["facts"]] == ["对方养猫"]
+    assert all(h["content"] != "晚安" for h in sk["history"])

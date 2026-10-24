@@ -25,17 +25,23 @@ async def capture(
     turns: int = 8,
     at: datetime | None = None,
     fact_limit: int = 8,
+    upto: datetime | None = None,
 ) -> dict:
     """Snapshot live state into a dict ready for yaml.safe_dump."""
     data_dir = Path(data_dir)
-    raw_rows = _read_history(data_dir, recipient_key, turns)
+    raw_rows = _read_history(data_dir, recipient_key, turns, upto=upto)
     clock = at or (raw_rows[-1][2] if raw_rows else datetime.now())
 
     store = FactStore(data_dir / "facts.db", clock=lambda: clock)
     await store.init()
     facts: list[dict] = []
     for subject in ("aria", f"user:{recipient_key}"):
-        for fact in await store.query(subject=subject, limit=fact_limit):
+        for fact in await store.query(subject=subject, limit=fact_limit * 3):
+            # Frozen at a past turn, she knew only what had been written by then.
+            if upto is not None and fact.written_at > upto:
+                continue
+            if sum(1 for f in facts if f["subject"] == subject) >= fact_limit:
+                break
             age = clock - fact.ts
             seconds = age.total_seconds()
             fact_row = {
@@ -80,12 +86,18 @@ async def capture(
 
 def _read_history(
     data_dir: Path, recipient_key: str, turns: int,
+    upto: datetime | None = None,
 ) -> list[tuple[str, str, datetime]]:
+    """The last `turns` buffer rows, or the last ones up to and including the
+    user turn at `upto` (a past turn, frozen as it stood)."""
     path = data_dir / "short_term" / f"{recipient_key}.json"
     if not path.exists():
         return []
     raw = json.loads(path.read_text(encoding="utf-8"))
     rows = raw.get("turns", raw if isinstance(raw, list) else [])
+    if upto is not None:
+        rows = [r for r in rows if r.get("timestamp")
+                and datetime.fromisoformat(r["timestamp"]) <= upto]
     out: list[tuple[str, str, datetime]] = []
     for row in rows[-turns:]:
         ts = row.get("timestamp")
