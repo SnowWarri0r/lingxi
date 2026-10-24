@@ -227,6 +227,7 @@ def _as_entry(m) -> dict:
 # was not.
 OPENER_ASPECTS = ("练习排练", "演出", "圈里新鲜事", "队友", "家人", "吃喝",
                   "天气", "他的事", "别的")
+NEWS_ASPECT = "圈里新鲜事"
 
 
 def _aspect_line(recent: list[dict]) -> str:
@@ -241,14 +242,20 @@ def _aspect_line(recent: list[dict]) -> str:
 
 
 def rotate_stories(stories, recent: list[dict]):
-    """Her untold stories minus the aspects of her last two openers.
+    """Her untold stories minus the aspects of her last two openers, except
+    news from the scene he follows, which is never held back.
 
     Asked in the prompt to pick another aspect, she still picked practice: 9
     of 14 openers after 10-10 were rehearsal details, with news and teammate
     stories on the shelf beside them. Withholding the aspects just used is
     what makes the rotation real. With nothing left after that, all of them.
+
+    News stays: of the openers from 10-10 to 10-27 he answered news 4 of 7
+    and practice 2 of 12, so rotating away from news would trade the kind he
+    answers for the kind he doesn't.
     """
-    just_used = {e.get("aspect") for e in recent[-2:] if e.get("aspect")}
+    just_used = {e.get("aspect") for e in recent[-2:]
+                 if e.get("aspect")} - {NEWS_ASPECT}
     fresh = [s for s in stories if s.aspect not in just_used]
     return fresh or list(stories)
 
@@ -272,6 +279,16 @@ def _transient(e: Exception) -> bool:
 # on something else (a reminder about his medicine) 0.34.
 STORY_MATCH = 0.70
 
+# How far back an opener counts as already said when the shelf is checked.
+SAID_WINDOW = timedelta(days=4)
+
+
+def _within(ts: str | None, now: datetime, window: timedelta) -> bool:
+    try:
+        return ts is not None and now - datetime.fromisoformat(ts) <= window
+    except ValueError:
+        return False
+
 
 async def match_story(text: str, stories, embedder):
     """The offered story this opener tells, or None."""
@@ -293,6 +310,28 @@ async def match_story(text: str, stories, embedder):
     sims = [cos(vecs[0], v) for v in vecs[1:]]
     best = max(range(len(sims)), key=sims.__getitem__)
     return stories[best] if sims[best] >= STORY_MATCH else None
+
+
+async def already_said(stories, said: list[str], embedder) -> list:
+    """The stories that retell one of the openers in `said`.
+
+    The curator rewrites the shelf as her diary moves on, and a rewritten
+    story gets a new id, so being marked told did not keep it off the shelf:
+    the two hours of practice on 10-26 went out again on 10-27, and that
+    afternoon's shelf held it a third time (0.71 against the opener that had
+    told it; the shelf's other stories at most 0.62 against any opener).
+    """
+    said = [t for t in said if t.strip()]
+    if not stories or not said or embedder is None:
+        return []
+    try:
+        vecs = await _embed_all(embedder, said + [s.text for s in stories])
+    except Exception as e:
+        print(f"[stories] told check failed (non-fatal): {e!r}", flush=True)
+        return []
+    sent, mine = vecs[:len(said)], vecs[len(said):]
+    return [s for s, v in zip(stories, mine)
+            if max(_cosine(v, o) for o in sent) >= STORY_MATCH]
 
 
 def build_opener_news_block(facts) -> str:
@@ -1284,13 +1323,16 @@ class ProactiveScheduler:
             world = await self.engine._todays_world_facts()
             shelf = self._shelf()
             await shelf.refresh(events, world, now)
-            # Rotation by aspect (rotate_stories) is held back. His replies
-            # within 15 minutes since 10-09: news openers 3 of 8, stories of
-            # her own day 0 of 10. Rotating away from news after each news
-            # opener would trade the kind he answers for the kind he doesn't,
-            # so it waits for reply rates by kind, now that told stories and
-            # their aspects are recorded reliably.
             offered = shelf.untold(key)
+            recent = self._recent_proactive.get(key, [])
+            said = [e.get("text", "") for e in recent
+                    if _within(e.get("ts"), now, SAID_WINDOW)]
+            for story in await already_said(
+                    offered, said, self.engine.memory.embedding_provider):
+                print(f"[stories] {story.id} already said; off the shelf", flush=True)
+                shelf.mark_told(key, story.id)
+                offered.remove(story)
+            offered = rotate_stories(offered, recent)
             block, ids = format_stories_block(offered)
             self._offered_stories = getattr(self, "_offered_stories", {})
             self._offered_stories[key] = offered
