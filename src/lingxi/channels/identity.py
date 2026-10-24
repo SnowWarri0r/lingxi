@@ -35,6 +35,11 @@ class IdentityMap:
         c, _, i = home.partition(":")
         return c, i
 
+    def has_link(self, channel: str, home: str) -> bool:
+        """Whether some `channel` account is already linked to `home`."""
+        return any(k.startswith(f"{channel}:") and v == home
+                   for k, v in self._map.items())
+
     def link(self, channel: str, ext_id: str, home: str) -> None:
         self._map[f"{channel}:{ext_id}"] = home
         if self._path:

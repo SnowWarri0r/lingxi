@@ -202,3 +202,17 @@ async def test_refused_on_qq_falls_back_without_silencing_him(tmp_path):
     assert result["status"] == "route_dropped"
     assert rec.unreachable_since is None
     assert rec.delivery() == ("feishu", "oc_home")
+
+
+@pytest.mark.asyncio
+async def test_the_code_links_once_and_then_nothing_else(tmp_path):
+    """A code that leaks after he has paired cannot hand his memory over."""
+    tracker = InteractionTracker(tmp_path)
+    engine = _Engine(tracker)
+    bot, _ = _bot(tmp_path, engine)
+    await bot._on_message(_event(CODE, openid="HIM", msg_id="a"))
+    await bot._on_message(_event(CODE, openid="SOMEONE", msg_id="b"))
+
+    ids = IdentityMap(tmp_path / "identities.json")
+    assert ids.resolve("qq", "HIM") == ("feishu", "oc_home")
+    assert ids.resolve("qq", "SOMEONE") == ("qq", "SOMEONE")

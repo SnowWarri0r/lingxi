@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import json
 import os
 import time
@@ -209,7 +210,14 @@ class QQBot(OutboundChannel):
 
     def _try_link(self, openid: str, text: str) -> bool:
         """Link this account if the message is the pairing code."""
-        if not (self._link_code and self._link_home and text == self._link_code):
+        if not (self._link_code and self._link_home):
+            return False
+        if not hmac.compare_digest(text.encode(), self._link_code.encode()):
+            return False
+        # Single use: once his account is linked the code links nothing
+        # else, so a code that leaks later cannot hand his memory over.
+        if self._ids.has_link("qq", self._link_home):
+            print("[qq] pairing code reused after linking; ignored", flush=True)
             return False
         self._ids.link("qq", openid, self._link_home)
         print(f"[qq] linked {openid[:8]}… to {self._link_home}", flush=True)
