@@ -135,10 +135,13 @@ async def render_dynamic_blocks(
         days = max(0, ((now or datetime.now()).date() - first.date()).days)
         span = "今天刚认识" if days == 0 else (
             f"认识 {days} 天" if days < 60 else f"认识 {days // 30} 个多月")
+        # Worded as she would say it herself: she repeats this line back to
+        # him, and 「你是可可这个窗口认识的人」 was the prompt's own
+        # vocabulary coming out of her mouth.
         them_lines.append(
-            f"对方是你在这个聊天窗口认识的人，**{span}**"
+            f"他是你在网上聊着聊着熟起来的朋友，**{span}**"
             f"（{first.month}月{first.day}日第一次说上话，聊了 {turns} 轮）。"
-            "他不是你故事里的人，是现实里跟你聊天的那个人——"
+            "他不在团里，也不是你圈子里的人——"
             "问「我们认识多久」答的就是这个数；你出道多少年、跟队友认识多久是另一条线。"
         )
     if blocks["them"]:
