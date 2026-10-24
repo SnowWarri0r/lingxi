@@ -370,6 +370,28 @@ async def test_the_nightly_pass_retires_a_passing_state(tmp_path):
     assert len(sched._llm.prompts) == 1
 
 
+@pytest.mark.asyncio
+async def test_a_review_rewrite_keeps_the_day_he_said_it(tmp_path):
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    writer = UserStatementWriter(store)
+    plan = await writer.write(subject=SUBJ, content="对方说国庆会去漫展见阿澪",
+                              type=FactType.PATTERN, source=Source.USER_STATED,
+                              ts=T0)
+    rec = SimpleNamespace(channel="feishu", recipient_id="oc_x",
+                          last_interaction=T0, last_consolidated_at=T0,
+                          last_review_date=None, unreachable_since=None)
+    sched = ConsolidationScheduler(
+        llm=_LLM('{"ops": [{"op": "update", "id": "F1", '
+                 '"content": "对方说过国庆会去漫展见阿澪，后来去没去还不知道"}]}'),
+        tracker=_Tracker(rec), short_term=_ShortTerm([]), store=store,
+        writer=writer, persona=SimpleNamespace(name="可可", lexicon=[]))
+    await sched.tick(datetime(2026, 10, 14, REVIEW_HOUR))
+    held = await store.query(subject=SUBJ, type=FactType.PATTERN, limit=10)
+    [now] = [f for f in held if f.id != plan.id]
+    assert now.supersedes == plan.id and now.ts == T0
+
+
 def test_an_unchanged_review_rewrite_is_not_written():
     """Rewriting a fact word for word only re-dates it; four nights running the
     same holiday plan came back unchanged and stayed pinned near the top."""

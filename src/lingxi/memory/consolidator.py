@@ -276,8 +276,14 @@ def review_due(rec, now: datetime) -> bool:
 
 
 async def apply_ops(ops: list[Op], *, subject: str, store, writer,
-                    now: datetime) -> None:
-    """A rewrite supersedes the old row and a retirement expires it."""
+                    now: datetime, said_at: dict | None = None) -> None:
+    """A rewrite supersedes the old row and a retirement expires it.
+
+    `said_at` keeps a rewrite dated when he said it. The nightly review only
+    pins down a time 「明天」 left open; stamped with the review night, the
+    fact read as said that night, and a fact rewritten four nights running
+    walked forward a day each time.
+    """
     from lingxi.facts.models import FactType, Source
     for o in ops:
         if o.op == "retire":
@@ -285,7 +291,8 @@ async def apply_ops(ops: list[Op], *, subject: str, store, writer,
             continue
         await writer.write(
             subject=subject, content=o.content, type=FactType.PATTERN,
-            source=Source.USER_STATED, ts=now,
+            source=Source.USER_STATED,
+            ts=(said_at or {}).get(o.target) or now,
             supersedes=o.target if o.op == "update" else None,
         )
 
@@ -342,7 +349,8 @@ class ConsolidationScheduler:
                            [HeldFact(f.id, f.content, f.ts) for f in held],
                            agent=self._agent, today=now, model=self._model)
         await apply_ops(ops, subject=subject, store=self._store,
-                        writer=self._writer, now=now)
+                        writer=self._writer, now=now,
+                        said_at={f.id: f.ts for f in held})
         rec.last_review_date = now.date().isoformat()
         await self._tracker.save()
         counts = {k: sum(o.op == k for o in ops) for k in ("update", "retire")}
