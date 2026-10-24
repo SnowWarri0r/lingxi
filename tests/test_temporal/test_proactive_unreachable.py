@@ -289,4 +289,4 @@ class TestWhatSheSaysWhenTheyComeBack:
             self, tmp_path, monkeypatch):
         prompt = await self._prompt(tmp_path, monkeypatch, unreachable=False)
 
-        assert "你叫过他几次" in prompt and "62" in prompt
+        assert "他回来了" in prompt and "没回" in prompt

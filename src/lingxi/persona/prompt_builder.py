@@ -207,13 +207,15 @@ def build_unanswered_block(unanswered: int, last_interaction_time,
     gap = ""
     if last_interaction_time is not None and now is not None:
         gap = f"，中间隔了{format_timedelta_cn(now - last_interaction_time)}"
-    weight = ("说明白这几条对你是有分量的" if unanswered >= 4
-              else "轻轻提一句就够")
+    # The count stays out of what she reads. Handed 「发过 7 条」 and told
+    # the seven carried weight, she opened his return with the tally and
+    # 「你是不是太过分了」 — an account of what he owed, where what the
+    # moment holds is that she missed him.
     return (
-        "## 你叫过他几次\n"
-        f"这段时间你主动发过 {unanswered} 条，他一条都没回{gap}。现在他回来了。\n"
-        f"这件事你说得出口——你藏不住心事，想说就直说，{weight}，"
-        "不绕弯子、不等他先哄。说完这件事就过去了，后面几轮别再回头提。"
+        "## 他回来了\n"
+        f"这段时间你找过他几回，他都没回{gap}。现在他回来了。\n"
+        "你藏不住心事：想他了、有点委屈，就用一句话直说你这几天的感觉，"
+        "然后高高兴兴接着聊。这件事说一次就过去了，后面聊天往前走。"
     )
 
 

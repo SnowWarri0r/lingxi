@@ -240,6 +240,19 @@ def _aspect_line(recent: list[dict]) -> str:
     return f"最近三条说的是：{said}。这次从另一个方面挑一件。\n"
 
 
+def rotate_stories(stories, recent: list[dict]):
+    """Her untold stories minus the aspects of her last two openers.
+
+    Asked in the prompt to pick another aspect, she still picked practice: 9
+    of 14 openers after 10-10 were rehearsal details, with news and teammate
+    stories on the shelf beside them. Withholding the aspects just used is
+    what makes the rotation real. With nothing left after that, all of them.
+    """
+    just_used = {e.get("aspect") for e in recent[-2:] if e.get("aspect")}
+    fresh = [s for s in stories if s.aspect not in just_used]
+    return fresh or list(stories)
+
+
 def build_opener_news_block(facts) -> str:
     """Everything she scanned this morning, offered as something to open with.
 
@@ -1082,8 +1095,12 @@ class ProactiveScheduler:
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
-        self._remember_proactive(key, message, decision.get("aspect", ""))
         sid = getattr(self, "_story_ids", {}).get(key, {}).get(decision.get("story", ""))
+        # The curator's label for the story she told, when she told one: her
+        # own label at compose time filed a practice session under 队友 or
+        # 天气, and the rotation then counted it as a change of subject.
+        shelf_aspect = getattr(self, "_story_aspects", {}).get(key, {}).get(sid or "", "")
+        self._remember_proactive(key, message, shelf_aspect or decision.get("aspect", ""))
         if sid:
             self._shelf().mark_told(key, sid)
 
@@ -1170,7 +1187,10 @@ class ProactiveScheduler:
             world = await self.engine._todays_world_facts()
             shelf = self._shelf()
             await shelf.refresh(events, world, now)
-            block, ids = format_stories_block(shelf.untold(key))
+            block, ids = format_stories_block(
+                rotate_stories(shelf.untold(key), self._recent_proactive.get(key, [])))
+            self._story_aspects = getattr(self, "_story_aspects", {})
+            self._story_aspects[key] = {s.id: s.aspect for s in shelf.untold(key)}
             self._story_ids = getattr(self, "_story_ids", {})
             self._story_ids[key] = ids
             return block

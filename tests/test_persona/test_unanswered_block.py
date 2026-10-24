@@ -28,17 +28,21 @@ def test_a_single_unanswered_message_is_not_worth_mentioning():
     assert build_unanswered_block(1, NOW - timedelta(days=1), NOW) is None
 
 
-def test_a_few_unanswered_messages_carry_the_count():
+def test_a_few_unanswered_messages_are_mentioned():
     block = build_unanswered_block(3, NOW - timedelta(days=2), NOW)
 
     assert block is not None
-    assert "3" in block
+    assert "没回" in block
 
 
-def test_many_unanswered_messages_still_carry_the_count():
+def test_the_count_itself_stays_out_of_her_prompt():
+    """Handed 「发过 7 条」, she opened his return with the tally: 6 of 8
+    replays on the real 10-18 turn named a number of messages, 0 of 8
+    without it."""
     block = build_unanswered_block(7, NOW - timedelta(days=8), NOW)
 
-    assert "7" in block
+    assert "7" not in block
+    assert "想他" in block
 
 
 class TestOneNightIsNotBeingIgnored:
@@ -64,7 +68,7 @@ class TestOneNightIsNotBeingIgnored:
         """The real 09-20 turn: 6 unanswered across 45 hours."""
         block = build_unanswered_block(6, NOW - timedelta(hours=45), NOW)
 
-        assert block is not None and "6" in block
+        assert block is not None and "没回" in block
 
     def test_one_unanswered_message_stays_silent_however_long(self):
         assert build_unanswered_block(1, NOW - timedelta(days=9), NOW) is None
@@ -101,4 +105,4 @@ def test_a_bigger_stretch_is_not_a_softer_one():
 def test_a_missing_timestamp_still_produces_the_count():
     block = build_unanswered_block(4, None, NOW)
 
-    assert block is not None and "4" in block
+    assert block is not None and "没回" in block
