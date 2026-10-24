@@ -119,11 +119,46 @@ def test_an_edit_to_a_fact_that_was_not_shown_is_dropped():
     assert ops == []
 
 
-def test_one_fact_is_edited_once():
+def test_one_fact_is_edited_once_and_the_rewrite_wins():
+    """Asked both to rewrite and to retire one fact, keep what it says."""
     ops = parse_ops('{"ops": [{"op": "retire", "id": "F1"}, '
                     '{"op": "update", "id": "F1", "content": "对方去了漫展", '
                     '"evidence": "去了漫展"}]}', IDS, his_words=HIS)
-    assert [o.op for o in ops] == ["retire"]
+    assert [o.op for o in ops] == ["update"]
+
+
+def test_a_merge_whose_rewrite_fails_retires_nothing():
+    """On 10-22 a merge's update quoted her and was dropped; its retire went
+    through alone and the merged fact vanished with nothing holding it."""
+    ops = parse_ops('{"ops": ['
+                    '{"op": "update", "id": "F1", "content": "对方去了漫展还交了信", '
+                    '"evidence": "我今天去填了下个月漫展的抽选"},'
+                    '{"op": "retire", "id": "F2"}]}', IDS, his_words=HIS)
+    assert ops == []
+
+
+def test_a_clean_merge_still_retires():
+    ops = parse_ops('{"ops": ['
+                    '{"op": "update", "id": "F1", "content": "对方去了漫展还交了信", '
+                    '"evidence": "还把写好的信给她了"},'
+                    '{"op": "retire", "id": "F2"}]}', IDS, his_words=HIS)
+    assert [o.op for o in ops] == ["update", "retire"]
+
+
+def test_her_words_in_quotes_are_not_his():
+    """She said 「别再五天不见人」 in a second bubble; it was stored as his."""
+    ops = parse_ops('{"ops": [{"op": "add", '
+                    '"content": "对方说「别再五天不见人」，以后多陪可可", '
+                    '"evidence": "还把写好的信给她了"}]}', IDS,
+                    his_words=HIS, her_words=["记下了哦\n\n说好了啊 别再五天不见人"])
+    assert ops == []
+
+
+def test_every_bubble_is_labelled_with_its_speaker():
+    turns = [Turn("assistant", "记下了哦\n\n说好了啊 别再五天不见人", T0),
+             Turn("user", "好", T0 + timedelta(minutes=1))]
+    prompt, _ = build_prompt(turns, [], agent="可可")
+    assert "20:00 可可：说好了啊 别再五天不见人" in prompt
 
 
 def test_broken_json_edits_nothing():
@@ -333,3 +368,76 @@ async def test_the_nightly_pass_retires_a_passing_state(tmp_path):
     assert rec.last_review_date == "2026-10-14"
     await sched.tick(night + timedelta(hours=1))
     assert len(sched._llm.prompts) == 1
+
+
+def test_an_unchanged_review_rewrite_is_not_written():
+    """Rewriting a fact word for word only re-dates it; four nights running the
+    same holiday plan came back unchanged and stayed pinned near the top."""
+    held = {"id-1": "对方之前说过国庆要去漫展，后来怎么样还不知道"}
+    ops = parse_review('{"ops": [{"op": "update", "id": "F1", '
+                       '"content": "对方之前说过国庆要去漫展，后来怎么样还不知道"}]}',
+                       {"F1": "id-1"}, held)
+    assert ops == []
+
+
+
+def test_a_quote_already_in_a_held_fact_is_not_her_words():
+    """The cat's name came from an earlier conversation; she says it, he doesn't."""
+    ops = parse_ops('{"ops": [{"op": "update", "id": "F1", '
+                    '"content": "对方的猫叫「团子」，最近在换毛", "evidence": "最近在换毛"}]}',
+                    {"F1": "id-1"}, his_words=["还行，最近在换毛"],
+                    her_words=["团子今天乖不乖呀"], held_texts=["对方的猫叫「团子」"])
+    assert [o.op for o in ops] == ["update"]
+
+
+def test_a_merge_with_a_miscounted_id_retires_nothing():
+    ops = parse_ops('{"ops": [{"op": "update", "id": "F9", "content": "对方去了漫展还交了信", '
+                    '"evidence": "还把写好的信给她了"}, {"op": "retire", "id": "F2"}]}',
+                    IDS, his_words=HIS)
+    assert ops == []
+
+
+def test_quotes_in_other_brackets_are_checked_too():
+    ops = parse_ops('{"ops": [{"op": "add", "content": "对方说『别再五天不见人』", '
+                    '"evidence": "还把写好的信给她了"}]}', IDS,
+                    his_words=HIS, her_words=["说好了啊 别再五天不见人"])
+    assert ops == []
+
+
+class _RetireLLM:
+    def __init__(self, replies):
+        self.replies = list(replies)
+        self.calls = 0
+
+    async def complete(self, **kw):
+        self.calls += 1
+        return SimpleNamespace(content=self.replies.pop(0))
+
+
+@pytest.mark.asyncio
+async def test_held_back_retires_get_a_second_reading(tmp_path):
+    """Held back and then marked read, a retire was lost for good."""
+    store = FactStore(tmp_path / "facts.db")
+    await store.init()
+    writer = UserStatementWriter(store)
+    cat = await writer.write(subject=SUBJ, content="对方养了一只猫", type=FactType.PATTERN,
+                             source=Source.USER_STATED, ts=T0 - timedelta(days=9))
+    bad = '{"ops": [{"op": "retire", "id": "F1"}, {"op": "add", "content": "对方在学吉他", "evidence": "在学吉他"}]}'
+    good = '{"ops": [{"op": "retire", "id": "F1"}, {"op": "add", "content": "对方最近在练吉他", "evidence": "最近在练吉他"}]}'
+    llm = _RetireLLM([bad, good])
+    turns = [ConversationTurn(role="user", content="猫送人了，不养了", timestamp=T0),
+             ConversationTurn(role="user", content="最近在练吉他", timestamp=T0 + timedelta(minutes=1))]
+    rec = SimpleNamespace(channel="feishu", recipient_id="oc_x",
+                          last_interaction=turns[-1].timestamp,
+                          last_consolidated_at=None, unreachable_since=None)
+    sched = ConsolidationScheduler(
+        llm=llm, tracker=_Tracker(rec), short_term=_ShortTerm(turns), store=store,
+        writer=writer, persona=SimpleNamespace(name="可可", lexicon=[]))
+
+    await sched.tick(turns[-1].timestamp + QUIET_AFTER)
+    assert rec.last_consolidated_at is None
+    await sched.tick(turns[-1].timestamp + QUIET_AFTER * 2)
+
+    held = [f.content for f in await store.query(subject=SUBJ, type=FactType.PATTERN)]
+    assert held == ["对方最近在练吉他"]
+    assert llm.calls == 2

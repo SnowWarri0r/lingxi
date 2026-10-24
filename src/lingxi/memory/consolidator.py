@@ -103,9 +103,12 @@ def build_prompt(turns: list[Turn], facts: list[HeldFact], *, agent: str,
     date_line = f"{first:%Y年%-m月%-d日} {_WEEKDAYS[first.weekday()]}"
     if last.date() != first.date():
         date_line += f" 到 {last:%-m月%-d日}"
+    # Every line carries its speaker. A turn is often several bubbles, and with
+    # only the first labelled the rest read as whoever spoke last: on 10-18
+    # her 「别再五天不见人」, a second bubble, was stored as his request.
     dialog = "\n".join(
-        f"  {t.ts:%H:%M} {'对方' if t.role == 'user' else agent}：{t.content.strip()}"
-        for t in turns)
+        f"  {t.ts:%H:%M} {'对方' if t.role == 'user' else agent}：{line.strip()}"
+        for t in turns for line in t.content.splitlines() if line.strip())
     ids = {f"F{i + 1}": f.id for i, f in enumerate(facts)}
     held = "\n".join(
         f"  {sid}. {f'[{f.ts:%-m月%-d日}记] ' if f.ts else ''}{f.content}"
@@ -122,8 +125,25 @@ def _norm(t: str) -> str:
     return re.sub(r"[\s「」『』\"'“”‘’]", "", t)
 
 
+_QUOTE = re.compile(r"「([^」]+)」|『([^』]+)』|“([^”]+)”|\"([^\"]+)\"")
+
+
+def _quoted(content: str) -> list[str]:
+    spans = ("".join(g) for g in _QUOTE.findall(content))
+    return [q for q in (_norm(m) for m in spans) if len(q) >= 2]
+
+
 def parse_ops(text: str, ids: dict[str, str],
-              his_words: list[str] | None = None) -> list[Op]:
+              his_words: list[str] | None = None,
+              her_words: list[str] | None = None,
+              held_texts: list[str] | None = None) -> list[Op]:
+    return parse_ops_detail(text, ids, his_words, her_words, held_texts)[0]
+
+
+def parse_ops_detail(text: str, ids: dict[str, str],
+                     his_words: list[str] | None = None,
+                     her_words: list[str] | None = None,
+                     held_texts: list[str] | None = None) -> tuple[list[Op], int]:
     """Ops from the model's JSON. Anything malformed or pointing at a fact that
     was not shown is dropped, not guessed at.
 
@@ -131,40 +151,86 @@ def parse_ops(text: str, ids: dict[str, str],
     found in something he said in this conversation. Asked only to be careful,
     one replay in two still recorded her own news — a lottery she said she had
     entered — as something he did. The quote is checked here, not trusted.
+
+    With `her_words`, a fact that puts in quotes words only she said is not
+    his and is dropped — unless a held fact already carries that quote (a
+    name from an earlier conversation she says and he doesn't repeat).
+
+    Returns the ops and how many retires were held back.
+
+    A merge is an update and a retire that only make sense together. When any
+    add or update in the batch is dropped, its retires are held back too: on
+    10-22 a merge's update failed the quote check and its retire went through
+    alone, and the fact being merged vanished with nothing holding it.
     """
     said = [_norm(w) for w in his_words] if his_words is not None else None
+    hers = [_norm(w) for w in her_words] if her_words is not None else None
+    prior = [_norm(t) for t in held_texts or []]
     try:
         data = lenient_json.loads(text)
     except Exception:
-        return []
+        return [], 0
     raw = data.get("ops") if isinstance(data, dict) else None
+    raw = [o for o in (raw if isinstance(raw, list) else []) if isinstance(o, dict)]
     out: list[Op] = []
     touched: set[str] = set()
-    for o in raw if isinstance(raw, list) else []:
-        if not isinstance(o, dict):
-            continue
+    dropped = 0
+    for o in raw:
         kind = o.get("op")
+        if kind not in ("add", "update"):
+            continue
         content = str(o.get("content") or "").strip()
-        target = ids.get(str(o.get("id") or "").strip())
-        if kind in ("add", "update") and said is not None:
+        target = ids.get(str(o.get("id") or "").strip().upper())
+        # A rejected edit of any kind counts: a merge whose update named a
+        # miscounted id would otherwise let its retire through alone.
+        if not content or (kind == "update" and (not target or target in touched)):
+            dropped += 1
+            continue
+        if said is not None:
             quote = _norm(str(o.get("evidence") or ""))
             if len(quote) < 2 or not any(quote in w for w in said):
+                dropped += 1
                 continue
-        if kind == "add" and content:
+        if hers is not None and any(
+                any(q in w for w in hers) and not any(q in w for w in said or [])
+                and not any(q in p for p in prior)
+                for q in _quoted(content)):
+            print(f"[memory] dropped, quotes her words as his: {content[:40]}",
+                  flush=True)
+            dropped += 1
+            continue
+        if kind == "add":
             out.append(Op("add", content))
-        elif kind in ("update", "retire") and target and target not in touched:
-            if kind == "update" and not content:
-                continue
+        else:
             touched.add(target)
-            out.append(Op(kind, content, target))
-    return out
+            out.append(Op("update", content, target))
+    retires = []
+    for o in raw:
+        target = ids.get(str(o.get("id") or "").strip().upper())
+        if o.get("op") == "retire" and target and target not in touched:
+            touched.add(target)
+            retires.append(Op("retire", target=target))
+    if retires and dropped:
+        print(f"[memory] held back {len(retires)} retire(s): "
+              f"{dropped} edit(s) in the same batch were dropped "
+              f"({', '.join(r.target[:8] for r in retires)})", flush=True)
+        return out, len(retires)
+    return out + retires, 0
 
 
 async def consolidate(llm, turns: list[Turn], facts: list[HeldFact], *,
                       agent: str, people: list[str] | None = None,
                       model: str | None = None) -> list[Op]:
+    return (await consolidate_detail(llm, turns, facts, agent=agent,
+                                     people=people, model=model))[0]
+
+
+async def consolidate_detail(llm, turns: list[Turn], facts: list[HeldFact], *,
+                             agent: str, people: list[str] | None = None,
+                             model: str | None = None) -> tuple[list[Op], int]:
+    """The edits, and how many retires were held back."""
     if not any(t.role == "user" for t in turns):
-        return []
+        return [], 0
     prompt, ids = build_prompt(turns, facts, agent=agent, people=people)
     kwargs = {"model": model} if model else {}
     resp = await llm.complete(
@@ -175,8 +241,10 @@ async def consolidate(llm, turns: list[Turn], facts: list[HeldFact], *,
         _debug_purpose="memory_consolidation",
         **kwargs,
     )
-    return parse_ops(resp.content, ids,
-                     his_words=[t.content for t in turns if t.role == "user"])
+    return parse_ops_detail(resp.content, ids,
+                            his_words=[t.content for t in turns if t.role == "user"],
+                            her_words=[t.content for t in turns if t.role != "user"],
+                            held_texts=[f.content for f in facts])
 
 
 # A conversation counts as over once he has been quiet this long.
@@ -287,11 +355,23 @@ class ConsolidationScheduler:
         subject = f"user:{key}"
         held = await self._store.query(subject=subject, type=FactType.PATTERN,
                                        limit=200)
-        ops = await consolidate(
+        ops, held_back = await consolidate_detail(
             self._llm,
             [Turn(t.role, t.content, t.timestamp) for t in fresh],
             [HeldFact(f.id, f.content, f.ts) for f in held],
             agent=self._agent, people=self._people, model=self._model)
+        # Held-back retires would otherwise be gone for good: the turns are
+        # marked read, and no later run sees them. So a batch with held-back
+        # retires is not applied at all and the same turns are read once
+        # more on the next tick; the second reading is applied as it comes.
+        retried = getattr(self, "_retried", {})
+        self._retried = retried
+        if held_back and retried.get(key) != fresh[-1].timestamp:
+            retried[key] = fresh[-1].timestamp
+            print(f"[memory] {key[-6:]}: {held_back} retire(s) held back; "
+                  "reading these turns again next tick", flush=True)
+            return []
+        retried.pop(key, None)
         await apply_ops(ops, subject=subject, store=self._store,
                         writer=self._writer, now=now)
         rec.last_consolidated_at = fresh[-1].timestamp
@@ -369,7 +449,11 @@ def parse_review(text: str, ids: dict[str, str],
             out.append(Op("retire", target=target))
         elif o.get("op") == "update":
             content = str(o.get("content") or "").strip()
-            if not content or not adds_only_time(held[target], content):
+            # An unchanged rewrite would only re-date the fact, which keeps
+            # an old line near the top of every prompt: four nights running
+            # the same holiday plan came back word for word.
+            if (not content or content == held[target]
+                    or not adds_only_time(held[target], content)):
                 continue
             out.append(Op("update", content, target))
         else:
