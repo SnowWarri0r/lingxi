@@ -33,10 +33,13 @@ class _Engine:
         yield SimpleNamespace(type="done", content=self.speech)
 
 
+CODE = "pair-7f3a"
+
+
 def _bot(tmp_path, engine, link_home=HOME):
     bot = QQBot(engine, "app", "secret",
                 identities=IdentityMap(tmp_path / "identities.json"),
-                link_home=link_home)
+                link_home=link_home, link_code=CODE)
     sent = []
 
     async def _api(method, path, body=None):
@@ -58,6 +61,7 @@ async def test_he_is_the_person_she_already_knows(tmp_path):
     engine = _Engine(tracker)
     bot, _ = _bot(tmp_path, engine)
 
+    await bot._on_message(_event(CODE, msg_id="pair"))
     await bot._on_message(_event())
 
     assert engine.calls == [("在吗", "feishu", "oc_home")]
@@ -71,6 +75,8 @@ async def test_each_bubble_is_a_reply_to_his_message(tmp_path):
     tracker.record_interaction("feishu", "oc_home")
     bot, sent = _bot(tmp_path, _Engine(tracker))
 
+    await bot._on_message(_event(CODE, msg_id="pair"))
+    sent.clear()
     await bot._on_message(_event())
 
     bodies = [b for _, path, b in sent if path.endswith("/messages")]
@@ -97,6 +103,7 @@ async def test_after_he_writes_on_qq_her_openers_go_there(tmp_path):
     tracker.record_interaction("feishu", "oc_home")
     bot, _ = _bot(tmp_path, _Engine(tracker))
 
+    await bot._on_message(_event(CODE, msg_id="pair"))
     await bot._on_message(_event())
 
     assert tracker.get_record("feishu", "oc_home").delivery() == ("qq", "OPENID")
@@ -105,14 +112,26 @@ async def test_after_he_writes_on_qq_her_openers_go_there(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_a_second_qq_account_is_not_linked_to_him(tmp_path):
+async def test_an_account_that_writes_first_is_not_given_his_memory(tmp_path):
+    """Only the pairing code links; being first proves nothing."""
     tracker = InteractionTracker(tmp_path)
-    bot, _ = _bot(tmp_path, _Engine(tracker))
-    await bot._on_message(_event(openid="HIM", msg_id="a"))
-    await bot._on_message(_event(openid="SOMEONE", msg_id="b"))
+    engine = _Engine(tracker)
+    bot, _ = _bot(tmp_path, engine)
+    await bot._on_message(_event("你好", openid="SOMEONE", msg_id="a"))
+    await bot._on_message(_event("pair-wrong", openid="SOMEONE", msg_id="b"))
 
     ids = IdentityMap(tmp_path / "identities.json")
     assert ids.resolve("qq", "SOMEONE") == ("qq", "SOMEONE")
+    assert all(c[1:] == ("qq", "SOMEONE") for c in engine.calls)
+
+
+@pytest.mark.asyncio
+async def test_the_pairing_code_is_not_shown_to_her(tmp_path):
+    tracker = InteractionTracker(tmp_path)
+    engine = _Engine(tracker)
+    bot, _ = _bot(tmp_path, engine)
+    await bot._on_message(_event(CODE, msg_id="pair"))
+    assert engine.calls == []
 
 
 def test_switched_off_openers_is_unreachable_not_an_error():

@@ -35,9 +35,6 @@ class IdentityMap:
         c, _, i = home.partition(":")
         return c, i
 
-    def is_linked(self, channel: str) -> bool:
-        return any(k.startswith(f"{channel}:") for k in self._map)
-
     def link(self, channel: str, ext_id: str, home: str) -> None:
         self._map[f"{channel}:{ext_id}"] = home
         if self._path:

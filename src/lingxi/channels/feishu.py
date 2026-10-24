@@ -441,7 +441,8 @@ class FeishuBot(OutboundChannel):
             qq = QQBot(self.engine, os.environ["QQ_BOT_APP_ID"],
                        os.environ["QQ_BOT_APP_SECRET"],
                        identities=IdentityMap(Path(data_dir) / "identities.json"),
-                       link_home=os.environ.get("QQ_LINK_HOME", ""))
+                       link_home=os.environ.get("QQ_LINK_HOME", ""),
+                       link_code=os.environ.get("QQ_LINK_CODE", ""))
             self._channel_registry.register(qq)
             qq.start(self._loop)
             print("[qq] channel starting", flush=True)

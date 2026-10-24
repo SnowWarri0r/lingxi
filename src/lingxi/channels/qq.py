@@ -6,8 +6,9 @@ internet. Replies are passive messages bound to his message (msg_id, up to
 four per message within the reply window); openers are active messages.
 
 A personal bot reaches only the QQ accounts added as experience users in its
-console. The account that writes to it is linked to the person it already
-knows (see identity.py), so she talks to him as herself, not to a stranger.
+console. An account that sends the pairing code is linked to the person she
+already knows (see identity.py), so she talks to him as herself, not to a
+stranger; any other account is its own person.
 """
 
 from __future__ import annotations
@@ -79,14 +80,18 @@ def check(data: dict, what: str) -> dict:
 
 class QQBot(OutboundChannel):
     def __init__(self, engine, app_id: str, secret: str, *,
-                 identities: IdentityMap, link_home: str = ""):
+                 identities: IdentityMap, link_home: str = "",
+                 link_code: str = ""):
         self.engine = engine
         self._auth = QQAuth(app_id, secret)
         self._ids = identities
-        # The person a QQ account writing to the bot for the first time is
-        # linked to, e.g. "feishu:oc_xxx". Only experience users added in the
-        # console can reach a personal bot, so the first one is him.
+        # Linking hands an account everything she knows about a person, so it
+        # takes proof: the account must send `link_code`, a secret set in the
+        # environment, and is then linked to `link_home` ("feishu:oc_xxx").
+        # Binding whoever wrote first would give his memory to any other
+        # account that reached the bot before he did.
         self._link_home = link_home
+        self._link_code = link_code.strip()
         self._seen: dict[str, float] = {}
         self._http: httpx.AsyncClient | None = None
         self._task: asyncio.Task | None = None
@@ -202,11 +207,13 @@ class QQBot(OutboundChannel):
             await asyncio.sleep(interval)
             await ws.send(json.dumps({"op": 1, "d": last_seq()}))
 
-    def _home(self, openid: str) -> tuple[str, str]:
-        if not self._ids.is_linked("qq") and self._link_home:
-            self._ids.link("qq", openid, self._link_home)
-            print(f"[qq] linked {openid[:8]}… to {self._link_home}", flush=True)
-        return self._ids.resolve("qq", openid)
+    def _try_link(self, openid: str, text: str) -> bool:
+        """Link this account if the message is the pairing code."""
+        if not (self._link_code and self._link_home and text == self._link_code):
+            return False
+        self._ids.link("qq", openid, self._link_home)
+        print(f"[qq] linked {openid[:8]}… to {self._link_home}", flush=True)
+        return True
 
     async def _on_message(self, d: dict) -> None:
         msg_id = d.get("id", "")
@@ -222,7 +229,13 @@ class QQBot(OutboundChannel):
         images = await self._images(d.get("attachments") or [])
         if not text and not images:
             text = "（对方发来一个表情包）"
-        channel, recipient = self._home(openid)
+        if self._try_link(openid, text):
+            try:
+                await self._send_text(openid, "好啦 认出你了！", msg_id=msg_id)
+            except Exception as e:
+                print(f"[qq] link ack failed: {e!r}", flush=True)
+            return
+        channel, recipient = self._ids.resolve("qq", openid)
         try:
             await self._reply(openid, msg_id, channel, recipient, text, images)
         except Exception as e:
