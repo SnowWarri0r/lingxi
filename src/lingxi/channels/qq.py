@@ -142,8 +142,13 @@ class QQBot(OutboundChannel):
 
     async def send_message(self, recipient_id: str, text: str,
                            turn_id: str | None = None) -> None:
-        for bubble in split_into_bubbles(text):
-            await self._send_text(recipient_id, bubble)
+        # One active message, its bubbles on separate lines. Each QQ message
+        # sent unprompted counts against the bot's active-message allowance,
+        # and a failure part-way would deliver half an opener that her memory
+        # never records. On Feishu an opener is one card too.
+        body = "\n".join(split_into_bubbles(text))
+        if body:
+            await self._send_text(recipient_id, body)
 
     async def send_sticker(self, recipient_id: str, file_path: str) -> None:
         await self._send_image(recipient_id, file_path)

@@ -170,7 +170,9 @@ async def test_a_sent_opener_marks_its_story_told(tmp_path):
                                channel_registry=reg, engine=engine)
     told = []
     sched._story_shelf = SimpleNamespace(mark_told=lambda k, sid: told.append((k, sid)))
+    from lingxi.planner.stories import Story
     sched._story_ids = {"feishu:oc_x": {"S1": "abc"}}
+    sched._offered_stories = {"feishu:oc_x": [Story("abc", "一件别的事", "队友")]}
 
     async def _ask_llm(record, silence, now, force=False):
         return {"should_send": True, "message": FRESH, "sticker": "",
@@ -180,3 +182,56 @@ async def test_a_sent_opener_marks_its_story_told(tmp_path):
     result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
     assert result["status"] == "sent"
     assert told == [("feishu:oc_x", "abc")]
+
+
+# --- which story she told is read off the text -------------------------------
+
+class _AxisEmb:
+    """Texts sharing a keyword point the same way."""
+    KEYS = ("练习", "新闻", "吃饭")
+
+    async def embed_batch(self, texts):
+        return [[1.0 if k in t else 0.0 for k in self.KEYS] + [0.1] for t in texts]
+
+
+@pytest.mark.asyncio
+async def test_the_told_story_is_found_without_her_meta():
+    from lingxi.planner.stories import Story
+    from lingxi.temporal.proactive import match_story
+    shelf = [Story("a", "今天练习到很晚", "练习排练"), Story("b", "刷到一条新闻", "圈里新鲜事")]
+    told = await match_story("新闻说今天开票了！", shelf, _AxisEmb())
+    assert told.id == "b"
+    assert await match_story("记得按时吃饭啊", shelf, _AxisEmb()) is None
+
+
+@pytest.mark.asyncio
+async def test_a_story_the_repeat_check_rejects_leaves_the_shelf(tmp_path):
+    """The same rehearsal story was drafted and rejected 11 times."""
+    from lingxi.planner.stories import Story
+    tracker = InteractionTracker(tmp_path)
+    rec = tracker.record_interaction("feishu", "oc_x")
+    rec.last_interaction = datetime.now() - timedelta(days=2)
+    reg = ChannelRegistry()
+    reg.register(_Ch())
+
+    async def _append(*a):
+        pass
+
+    engine = SimpleNamespace(
+        annotation_store=None, _pending_stickers={},
+        memory=SimpleNamespace(embedding_provider=_AxisEmb(),
+                               short_term=SimpleNamespace(append_for_recipient=_append)))
+    sched = ProactiveScheduler(config=ProactiveConfig(), tracker=tracker,
+                               channel_registry=reg, engine=engine)
+    told = []
+    sched._story_shelf = SimpleNamespace(mark_told=lambda k, sid: told.append(sid))
+    sched._offered_stories = {"feishu:oc_x": [Story("a", "今天练习到很晚", "练习排练")]}
+    sched._recent_proactive = {"feishu:oc_x": [{"text": "今天练习到很晚 腿都软了", "ts": None, "aspect": ""}]}
+
+    async def _ask_llm(record, silence, now, force=False):
+        return {"should_send": True, "message": "今天练习到很晚 腿都软了", "sticker": "", "reason": ""}
+
+    sched._ask_llm = _ask_llm
+    result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    assert result["status"] == "validation_rejected"
+    assert told == ["a"]

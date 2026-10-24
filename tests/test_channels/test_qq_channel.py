@@ -216,3 +216,47 @@ async def test_the_code_links_once_and_then_nothing_else(tmp_path):
     ids = IdentityMap(tmp_path / "identities.json")
     assert ids.resolve("qq", "HIM") == ("feishu", "oc_home")
     assert ids.resolve("qq", "SOMEONE") == ("qq", "SOMEONE")
+
+
+@pytest.mark.asyncio
+async def test_any_failure_on_qq_falls_back_instead_of_retrying_there(tmp_path):
+    """Only a refusal used to fall back; an IP-whitelist or quota error left
+    her composing a new opener every five minutes for a channel that kept
+    refusing, and nothing reached Feishu."""
+    class _Broken(_Chan):
+        async def send_message(self, recipient_id, text, turn_id=None):
+            raise RuntimeError("11298 ip not in whitelist")
+
+    sched, rec, _ = _sched(tmp_path, _Broken("qq"))
+
+    result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+
+    assert result["status"] == "route_dropped"
+    assert rec.delivery() == ("feishu", "oc_home")
+
+
+@pytest.mark.asyncio
+async def test_an_opener_on_qq_is_one_message(tmp_path):
+    bot, sent = _bot(tmp_path, _Engine(InteractionTracker(tmp_path)))
+    await bot.send_message("OPENID", "第一句\n\n第二句")
+    bodies = [b for _, path, b in sent if path.endswith("/messages")]
+    assert [b["content"] for b in bodies] == ["第一句\n第二句"]
+    assert "msg_id" not in bodies[0]
+
+
+@pytest.mark.asyncio
+async def test_a_network_blip_on_qq_does_not_move_him(tmp_path):
+    """A timeout is retried on the next tick; only repeated blips fall back."""
+    import httpx
+
+    class _Flaky(_Chan):
+        async def send_message(self, recipient_id, text, turn_id=None):
+            raise httpx.ReadTimeout("timed out")
+
+    sched, rec, _ = _sched(tmp_path, _Flaky("qq"))
+    first = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    assert first["status"] == "send_failed"
+    assert rec.delivery() == ("qq", "OPENID")
+    await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    third = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    assert third["status"] == "route_dropped"

@@ -253,6 +253,48 @@ def rotate_stories(stories, recent: list[dict]):
     return fresh or list(stories)
 
 
+# Transient failures a second channel gets before openers fall back home.
+_ROUTE_TRIES = 3
+
+
+def _transient(e: Exception) -> bool:
+    """A network blip or a server-side 5xx, as opposed to a refusal."""
+    import httpx
+    if isinstance(e, (httpx.TransportError, httpx.TimeoutException)):
+        return True
+    code = getattr(e, "code", None)
+    return isinstance(code, int) and 500 <= code < 600
+
+
+# How close an opener must be to a shelf story to count as telling it.
+# Measured on 26 composes since 10-14: every opener built on a story scored
+# 0.73-0.94 against it, the runner-up at most 0.63, and the one opener built
+# on something else (a reminder about his medicine) 0.34.
+STORY_MATCH = 0.70
+
+
+async def match_story(text: str, stories, embedder):
+    """The offered story this opener tells, or None."""
+    if not stories or embedder is None or not text.strip():
+        return None
+    texts = [text] + [s.text for s in stories]
+    try:
+        batch = getattr(embedder, "embed_batch", None)
+        vecs = await batch(texts) if batch else [await embedder.embed(t) for t in texts]
+    except Exception as e:
+        print(f"[stories] match failed (non-fatal): {e!r}", flush=True)
+        return None
+    import math
+
+    def cos(a, b):
+        na = math.sqrt(sum(x * x for x in a)); nb = math.sqrt(sum(x * x for x in b))
+        return sum(x * y for x, y in zip(a, b)) / (na * nb) if na and nb else 0.0
+
+    sims = [cos(vecs[0], v) for v in vecs[1:]]
+    best = max(range(len(sims)), key=sims.__getitem__)
+    return stories[best] if sims[best] >= STORY_MATCH else None
+
+
 def build_opener_news_block(facts) -> str:
     """Everything she scanned this morning, offered as something to open with.
 
@@ -1003,11 +1045,13 @@ class ProactiveScheduler:
             # 2026-10-13 sent 「副歌进那个拍 你听出来没有嘛」 with nothing to say
             # which song: a follow-up bubble on its own reads as nonsense.
             if lead in repeated:
+                await self._spend_rejected_story(key, "\n\n".join(repeated), decision)
                 return {
                     "key": key, "status": "validation_rejected",
                     "reason": "lead_bubble_repeated", "message": lead,
                 }
             if not message:
+                await self._spend_rejected_story(key, "\n\n".join(repeated), decision)
                 return {
                     "key": key, "status": "validation_rejected",
                     "reason": "repeated_bubbles", "message": repeated[0],
@@ -1023,6 +1067,7 @@ class ProactiveScheduler:
         if dup is not None:
             print(f"[proactive] rejected ({reason}, repeat of {dup[:40]!r}): "
                   f"{message[:60]}")
+            await self._spend_rejected_story(key, message, decision)
             return {
                 "key": key, "status": "validation_rejected",
                 "reason": reason, "message": message,
@@ -1069,8 +1114,25 @@ class ProactiveScheduler:
             return {"key": key, "status": "unreachable", "error": str(e)}
         except Exception as e:
             print(f"[proactive] send failed: {e}")
+            if (via, to) != (record.channel, record.recipient_id):
+                # A failure on a second channel that is not a passing network
+                # hiccup (its IP whitelist, its quota, its token) would
+                # otherwise compose a fresh opener every tick for a channel
+                # that keeps refusing, while his home channel got nothing.
+                # Fall back; he moves it again by writing. A hiccup gets a few
+                # more tries first, so one timeout does not move him.
+                fails = getattr(self, "_route_failures", {})
+                self._route_failures = fails
+                fails[key] = fails.get(key, 0) + 1
+                if _transient(e) and fails[key] < _ROUTE_TRIES:
+                    return {"key": key, "status": "send_failed", "error": str(e)}
+                fails.pop(key, None)
+                record.route_channel = record.route_id = None
+                await self.tracker.save()
+                return {"key": key, "status": "route_dropped", "error": str(e)}
             return {"key": key, "status": "send_failed", "error": str(e)}
         record.unreachable_since = None
+        getattr(self, "_route_failures", {}).pop(key, None)
 
         # The mood she tagged, as an image after the line. The reply path has
         # done this all along; this path parsed the tag off and dropped it, so
@@ -1104,14 +1166,16 @@ class ProactiveScheduler:
         self.tracker.record_proactive_sent(record.channel, record.recipient_id)
         await self.tracker.save()
 
-        sid = getattr(self, "_story_ids", {}).get(key, {}).get(decision.get("story", ""))
-        # The curator's label for the story she told, when she told one: her
-        # own label at compose time filed a practice session under 队友 or
-        # 天气, and the rotation then counted it as a change of subject.
-        shelf_aspect = getattr(self, "_story_aspects", {}).get(key, {}).get(sid or "", "")
-        self._remember_proactive(key, message, shelf_aspect or decision.get("aspect", ""))
-        if sid:
-            self._shelf().mark_told(key, sid)
+        # Which story she told is read off the text, not her META: 15 of 26
+        # composes since 10-14 came without one, told stories stayed on the
+        # shelf and were offered again, and the aspect went unrecorded. The
+        # curator's label is recorded, not hers, which filed practice under
+        # 队友 or 天气.
+        told = await self._told_story(key, message, decision)
+        self._remember_proactive(key, message,
+                                 (told.aspect if told else "") or decision.get("aspect", ""))
+        if told:
+            self._shelf().mark_told(key, told.id)
 
         return {"key": key, "status": "sent", "message": message}
 
@@ -1188,6 +1252,30 @@ class ProactiveScheduler:
                 self.engine.llm, self.engine.persona)
         return self._story_shelf
 
+    async def _told_story(self, key: str, message: str, decision: dict | None = None):
+        """The offered story this text tells: by embedding, else her META id."""
+        offered = getattr(self, "_offered_stories", {}).get(key, [])
+        story = await match_story(message, offered,
+                                  self.engine.memory.embedding_provider)
+        if story is None and decision:
+            sid = getattr(self, "_story_ids", {}).get(key, {}).get(
+                decision.get("story", ""))
+            story = next((s for s in offered if s.id == sid), None)
+        return story
+
+    async def _spend_rejected_story(self, key: str, message: str,
+                                    decision: dict | None = None) -> None:
+        """A story whose retelling the repeat check rejects is off the shelf.
+
+        Left on, it was offered and drafted again every tick: the same
+        rehearsal story was rejected 11 times over 10-21 and 10-22, and both
+        days' openers went out 20 and 36 minutes late.
+        """
+        story = await self._told_story(key, message, decision)
+        if story:
+            print(f"[stories] {story.id} keeps repeating; off the shelf", flush=True)
+            self._shelf().mark_told(key, story.id)
+
     async def _stories_block(self, key: str, events, now: datetime) -> str:
         """Her untold stories for this person, or "" to fall back to the
         raw diary. Any failure falls back."""
@@ -1196,10 +1284,16 @@ class ProactiveScheduler:
             world = await self.engine._todays_world_facts()
             shelf = self._shelf()
             await shelf.refresh(events, world, now)
-            block, ids = format_stories_block(
-                rotate_stories(shelf.untold(key), self._recent_proactive.get(key, [])))
-            self._story_aspects = getattr(self, "_story_aspects", {})
-            self._story_aspects[key] = {s.id: s.aspect for s in shelf.untold(key)}
+            # Rotation by aspect (rotate_stories) is held back. His replies
+            # within 15 minutes since 10-09: news openers 3 of 8, stories of
+            # her own day 0 of 10. Rotating away from news after each news
+            # opener would trade the kind he answers for the kind he doesn't,
+            # so it waits for reply rates by kind, now that told stories and
+            # their aspects are recorded reliably.
+            offered = shelf.untold(key)
+            block, ids = format_stories_block(offered)
+            self._offered_stories = getattr(self, "_offered_stories", {})
+            self._offered_stories[key] = offered
             self._story_ids = getattr(self, "_story_ids", {})
             self._story_ids[key] = ids
             return block
