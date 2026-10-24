@@ -102,6 +102,11 @@ class StoryShelf:
         told = set(self._shelf.told.get(key, []))
         return [Story(**s) for s in self._shelf.stories if s["id"] not in told]
 
+    def made_on(self, day) -> bool:
+        made = self._shelf.generated_at
+        return bool(made and self._shelf.stories
+                    and datetime.fromisoformat(made).date() == day)
+
     def mark_told(self, key: str, story_id: str) -> None:
         told = self._shelf.told.setdefault(key, [])
         if story_id and story_id not in told:

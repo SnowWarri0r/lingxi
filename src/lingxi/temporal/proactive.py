@@ -1320,9 +1320,18 @@ class ProactiveScheduler:
         raw diary. Any failure falls back."""
         from lingxi.planner.stories import format_stories_block
         try:
-            world = await self.engine._todays_world_facts()
             shelf = self._shelf()
-            await shelf.refresh(events, world, now)
+            try:
+                world = await self.engine._todays_world_facts()
+                await shelf.refresh(events, world, now)
+            except Exception as e:
+                # A network blip sent two openers on 10-22 and 10-26 to the
+                # raw diary, unlabelled, so rotation could not see them.
+                # Today's shelf is still true; yesterday's says 「今天」 wrongly.
+                if not shelf.made_on(now.date()):
+                    raise
+                print(f"[stories] refresh failed, keeping today's shelf: {e!r}",
+                      flush=True)
             offered = shelf.untold(key)
             recent = self._recent_proactive.get(key, [])
             said = [e.get("text", "") for e in recent

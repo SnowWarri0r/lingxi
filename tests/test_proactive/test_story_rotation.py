@@ -113,3 +113,27 @@ async def test_an_opener_from_last_week_does_not_hold_a_story_back(tmp_path):
     sched, _ = _sched(tmp_path, recent, SHELF)
     await sched._stories_block("k", [], NOW)
     assert [s.id for s in sched._offered_stories["k"]] == ["a", "b", "c"]
+
+
+# --- a failed refresh keeps today's shelf -----------------------------------
+
+def _failing(sched):
+    async def _boom(events, world, now):
+        raise ConnectionError("nodename nor servname provided")
+    sched._story_shelf.refresh = _boom
+
+
+@pytest.mark.asyncio
+async def test_a_failed_refresh_keeps_this_mornings_stories(tmp_path):
+    sched, _ = _sched(tmp_path, [], SHELF)
+    _failing(sched)
+    block = await sched._stories_block("k", [], NOW)
+    assert "官宣" in block
+
+
+@pytest.mark.asyncio
+async def test_yesterdays_shelf_is_not_used_when_the_refresh_fails(tmp_path):
+    sched, shelf = _sched(tmp_path, [], SHELF)
+    shelf._shelf.generated_at = (NOW - timedelta(days=1)).isoformat()
+    _failing(sched)
+    assert await sched._stories_block("k", [], NOW) == ""
