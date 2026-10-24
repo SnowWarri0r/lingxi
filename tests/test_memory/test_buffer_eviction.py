@@ -47,9 +47,10 @@ class TestTheRule:
         """The one he eventually answers must still be there."""
         turns = [_t("user", "hi", 0)] + [_t("assistant", f"opener {i}", 1 + i) for i in range(6)]
 
-        kept = [t.content for t in trim_to_cap(turns, 3)]
+        kept = [t.content for t in trim_to_cap(turns, 4)]
 
-        assert kept == ["hi", "opener 4", "opener 5"]
+        # "opener 0" follows his "hi", so it is her answer and stays too.
+        assert kept == ["hi", "opener 0", "opener 4", "opener 5"]
 
     def test_an_ordinary_exchange_still_evicts_oldest_first(self):
         """No runs to spend: the old behaviour, exactly."""
@@ -141,3 +142,21 @@ class TestBothWritePathsUseIt:
 
         assert len(small.get_history()) == 4
         assert "周末在家拼乐高" in _his(small.get_history())
+
+
+def test_her_answer_to_him_is_not_spent_as_an_opener():
+    """He asks, she answers, then a week of openers he never replies to.
+
+    The answer used to go first, as the run's oldest member, leaving his
+    question in the buffer with nothing under it.
+    """
+    from datetime import datetime, timedelta
+    from lingxi.memory.short_term import ConversationTurn, trim_to_cap
+    t0 = datetime(2026, 9, 1)
+    turns = [ConversationTurn(role="user", content="这首歌是谁唱的", timestamp=t0),
+             ConversationTurn(role="assistant", content="是阿澪新出的单曲", timestamp=t0)]
+    turns += [ConversationTurn(role="assistant", content=f"开场白{i}",
+                               timestamp=t0 + timedelta(days=i + 1)) for i in range(6)]
+    kept = trim_to_cap(turns, 5)
+    assert [t.content for t in kept][:2] == ["这首歌是谁唱的", "是阿澪新出的单曲"]
+    assert len(kept) == 5

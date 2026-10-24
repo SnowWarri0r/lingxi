@@ -43,7 +43,9 @@ def trim_to_cap(turns: list["ConversationTurn"], cap: int) -> list["Conversation
     dies on restart, and no fact about him had been written since 08-28.
 
     So a run of consecutive assistant turns — messages she sent with no reply
-    in between — gives up its older members before anything else goes. The
+    in between — gives up its older members before anything else goes. Her
+    answer to him, the first turn of a run that follows his, is not one of
+    them. The
     last few of each run stay, so the message he eventually answers is still
     there to be answered. With no such turn left, the oldest turn goes, which
     is the old behaviour. Below the cap nothing is dropped at all.
@@ -61,8 +63,14 @@ def trim_to_cap(turns: list["ConversationTurn"], cap: int) -> list["Conversation
             j = i
             while j < len(turns) and turns[j].role == "assistant":
                 j += 1
-            if j - i > _KEEP_OF_RUN:
-                victim = i
+            # The first of her turns after one of his is her answer to him,
+            # not an unanswered opener. Spent as the run's oldest member, his
+            # question was left in the buffer with no reply under it: on
+            # 10-13 he asked who sang a song, she answered, and five days of
+            # openers later the answer was gone and the question still there.
+            start = i + 1 if i > 0 and turns[i - 1].role == "user" else i
+            if j - start > _KEEP_OF_RUN:
+                victim = start
             i = j
         turns.pop(0 if victim is None else victim)
     return turns
