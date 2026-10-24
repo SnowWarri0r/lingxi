@@ -29,11 +29,14 @@ def save_baseline(path: Path | str, scores: list[CaseScore], git_sha: str) -> No
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().isoformat(timespec="seconds")
-    data = {
+    # Merged into what is there: recording a run of two cases used to wipe
+    # every other case's baseline.
+    data = load_baseline(path)
+    data.update({
         s.id: {"fail_rate": s.fail_rate, "pass_rate": s.pass_rate,
                "samples": s.samples, "recorded_at": stamp, "git_sha": git_sha}
         for s in scores if s.verdict != "BROKEN"
-    }
+    })
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2),
                     encoding="utf-8")
 
@@ -60,6 +63,24 @@ def dump_replies(scores: list[CaseScore], out_dir: Path | str) -> None:
         (out_dir / f"{s.id}.txt").write_text(text, encoding="utf-8")
 
 
+def fisher_p(a: int, n1: int, b: int, n2: int) -> float:
+    """Two-sided Fisher exact p for a/n1 failures against b/n2.
+
+    At 12-20 samples a case moves 10-20 points on noise alone; the Δ column
+    printed as a bare number read as a change every time.
+    """
+    from math import comb
+    k, n = a + b, n1 + n2
+    if n == 0:
+        return 1.0
+    def prob(x):
+        return comb(n1, x) * comb(n2, k - x) / comb(n, k)
+    lo, hi = max(0, k - n2), min(k, n1)
+    p_obs = prob(a)
+    return min(1.0, sum(prob(x) for x in range(lo, hi + 1)
+                        if prob(x) <= p_obs * (1 + 1e-9)))
+
+
 def _fraction(rate: float, samples: int) -> str:
     return f"{round(rate * samples)}/{samples}"
 
@@ -77,6 +98,11 @@ def format_table(scores: list[CaseScore], baseline: dict) -> str:
         else:
             base_col = f"{base['fail_rate']:.0%}"
             delta = f"{(s.fail_rate - base['fail_rate']) * 100:+.0f}pp"
+            bn = int(base.get("samples") or 0)
+            if bn and s.samples:
+                p = fisher_p(round(s.fail_rate * s.samples), s.samples,
+                             round(base["fail_rate"] * bn), bn)
+                delta += f" (p={p:.2f})" if p < 0.2 else " (噪声内)"
         lines.append(
             f"{s.id:<22}{s.verdict:<10}"
             f"{_fraction(s.fail_rate, s.samples):<9}"

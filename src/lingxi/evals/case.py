@@ -115,6 +115,21 @@ class Detect(_Strict):
         return _check_detector_spec(v, "pass")
 
 
+class Controls(_Strict):
+    """Real texts the fail detector must get right before it scores anything.
+
+    A judge that cannot tell its own case's failure from a good reply turns a
+    case into a green light: on 10-22 three of four judged cases marked the
+    very production message they were built from as fine, 0 of 3 votes. Each
+    `fires` text must make the fail detector fire, each `quiet` text must not;
+    a judge votes `votes` times per text and the majority counts.
+    """
+
+    fires: list[str] = Field(default_factory=list)
+    quiet: list[str] = Field(default_factory=list)
+    votes: int = 5
+
+
 class SentProactive(_Strict):
     """One opener she already sent, as the anti-repeat block will render it."""
 
@@ -171,6 +186,7 @@ class Case(_Strict):
     plan: PlanStep | None = None
     # mode: scan — what the search found, handed over instead of searching.
     scan_raw: list[str] = Field(default_factory=list)
+    controls: Controls | None = None
 
     @field_validator("mode")
     @classmethod

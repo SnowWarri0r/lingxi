@@ -337,11 +337,43 @@ async def _judge_all(case: Case, replies: list[str], persona, judge):
     return await asyncio.gather(*[bounded(r) for r in replies])
 
 
+async def check_controls(case: Case, judge=None) -> str:
+    """"" when the fail detector gets every control right, else what it missed."""
+    c = case.controls
+    if c is None or not (c.fires or c.quiet):
+        return ""
+    spec = case.detect.fail
+    votes = c.votes if "judge" in spec else 1
+
+    async def fired(text: str) -> bool:
+        hits = [await evaluate_async(spec, text, None, judge) for _ in range(votes)]
+        return sum(hits) * 2 > votes
+
+    for text in c.fires:
+        if not await fired(text):
+            return f"对照失败：该判失败的没判出来：{text[:30]!r}"
+    for text in c.quiet:
+        if await fired(text):
+            return f"对照失败：不该判失败的被判了：{text[:30]!r}"
+    return ""
+
+
 async def score_case(
     case: Case, *, overrides: dict | None = None, sampler=None, llm=None,
     judge=None,
 ) -> CaseScore:
-    """Replay one case and score it. `sampler` is injectable for offline tests."""
+    """Replay one case and score it. `sampler` is injectable for offline tests.
+
+    A case whose detector fails its own controls is BROKEN before anything is
+    sampled: its number would mean nothing.
+    """
+    if case.controls is not None:
+        if "judge" in case.detect.fail and judge is None:
+            judge = llm or await _main_llm()
+        error = await check_controls(case, judge)
+        if error:
+            return CaseScore(id=case.id, verdict="BROKEN", premise_ok=False,
+                             premise_error=error)
     if case.mode in ("moment", "scan", "memory"):
         persona = _apply_overrides(load_persona(case.persona), overrides)
         main = llm or await _main_llm()
