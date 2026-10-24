@@ -49,6 +49,8 @@ _MOVE_ON = (
 
 _RESTATEMENT_THRESHOLD = 0.80
 
+TICK = timedelta(minutes=30)
+
 _TW_RE = re.compile(r"^(\d{2}):(\d{2})-(\d{2}):(\d{2})$")
 
 
@@ -135,6 +137,19 @@ class PlanExecutor:
 
     def request_replan(self) -> None:
         self._replan_requested = True
+
+    async def first_tick_in(self, now: datetime) -> float:
+        """Seconds until a tick is due, counted from her last moment.
+
+        The loop ticked as soon as the bot started, so every restart wrote
+        a moment of its own: two deploys on 10-27 put three into 27 minutes.
+        """
+        pool = await self._retriever.fetch(FactQuery(
+            subject="aria", type=FactType.EVENT, since=now - TICK, limit=12))
+        last = max((f.ts for f in pool), default=None)
+        if last is None:
+            return 0.0
+        return max(0.0, (last + TICK - now).total_seconds())
 
     async def tick(self) -> None:
         now = datetime.now()

@@ -731,6 +731,11 @@ class FeishuBot(OutboundChannel):
                 facts_store = getattr(fr, "_store", None) or getattr(fr, "store", None)
 
         async def _executor_loop() -> None:
+            try:
+                await asyncio.sleep(await plan_executor.first_tick_in(datetime.now()))
+            except Exception as e:
+                print(f"[executor] first tick timing unknown, ticking now: {e}",
+                      flush=True)
             while True:
                 try:
                     await plan_executor.tick()
