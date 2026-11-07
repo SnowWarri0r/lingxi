@@ -1429,7 +1429,7 @@ class ProactiveScheduler:
         interesting mistakes live.
         """
         rec_key = f"{record.channel}:{record.recipient_id}"
-        from lingxi.conversation.situation import gather
+        from lingxi.conversation.situation import OPENER_FACTS, gather
         sit = await gather(self.engine, rec_key, now)
 
         # Time-bound user state: pull recent USER turns directly. These
@@ -1490,6 +1490,10 @@ class ProactiveScheduler:
                 recent_msgs[-self._max_recent_proactive:] if recent_msgs else None
             ),
             proactive_mode=True,
+            # His stated routine outranks the clock guess here as in replies:
+            # openers had only the guess, which puts him off work from 19:00
+            # whatever he has said about working late.
+            user_schedule=sit.schedule,
         )
 
         # Recipient-scoped read path: do NOT mutate the singleton active
@@ -1540,7 +1544,8 @@ class ProactiveScheduler:
                 # letter twice, the trip twice — three subjects in eight slots,
                 # out of twenty-eight distinct facts she held.
                 known = await select_diverse(
-                    sit.his_facts, 8, self.engine.memory.embedding_provider)
+                    sit.his_facts[:OPENER_FACTS], 8,
+                    self.engine.memory.embedding_provider)
                 known_block = _format_known_block(known)
             except Exception as e:
                 print(f"[proactive] known-facts fetch failed (non-fatal): {e}")

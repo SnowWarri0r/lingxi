@@ -18,10 +18,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, time
 
-# His facts are fetched once at the larger of the two paths' sizes; the chat
-# floor reads the first CHAT_FACTS of the same ranking.
-HIS_FACTS = 24
+# His facts are fetched once, at the largest size any reader takes; each
+# reader takes the first N of the same ranking: the chat floor CHAT_FACTS,
+# the opener's known-facts block OPENER_FACTS, his routine all of them.
+HIS_FACTS = 40
+OPENER_FACTS = 24
 CHAT_FACTS = 18
+
+# Facts about his routine. A reply and an opener both set them above the
+# generic clock guess: without them, at 20:23 she was told he was off work
+# while he had said he works late. Matched on substrings rather than a
+# semantic query because `semantic` is a 0.2-weight FTS boost, not a filter.
+SCHEDULE_MARKERS = (
+    "下班", "上班", "起床", "睡", "加班", "通勤", "作息",
+    "上课", "放学", "午休", "值班", "排班", "工作日", "周末",
+)
 
 
 @dataclass
@@ -32,6 +43,12 @@ class Situation:
     world: list = field(default_factory=list)    # today's scan
     his_facts: list = field(default_factory=list)  # ranked, best first
     agenda: list = field(default_factory=list)   # open agenda items
+
+    @property
+    def schedule(self) -> list[str]:
+        """His stated routine, up to three lines."""
+        return [f.content for f in self.his_facts
+                if any(m in f.content for m in SCHEDULE_MARKERS)][:3]
 
 
 async def gather(engine, key: str | None, now: datetime) -> Situation:
