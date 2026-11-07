@@ -1310,18 +1310,14 @@ class ProactiveScheduler:
                 self.engine.llm, self.engine.persona)
         return self._story_shelf
 
-    def _agenda_block(self, key: str, record, now: datetime) -> str:
+    def _agenda_block(self, key: str, record, now: datetime, items: list) -> str:
         """Today's one item from the agenda, or ""; remembered as offered."""
         from lingxi.memory import agenda as ag
         offered = getattr(self, "_agenda_offered", {})
         self._agenda_offered = offered
         offered.pop(key, None)
-        book = getattr(self.engine, "agenda", None)
-        if book is None:
-            return ""
         try:
-            item = ag.due_today(book.open_items(key, now.date()), now,
-                                _answered_lookup(record, now))
+            item = ag.due_today(items, now, _answered_lookup(record, now))
         except Exception as e:
             print(f"[agenda] due check failed (non-fatal): {e!r}", flush=True)
             return ""
@@ -1430,6 +1426,8 @@ class ProactiveScheduler:
         interesting mistakes live.
         """
         rec_key = f"{record.channel}:{record.recipient_id}"
+        from lingxi.conversation.situation import gather
+        sit = await gather(self.engine, rec_key, now)
 
         # Time-bound user state: pull recent USER turns directly. These
         # carry "what's happening in his life right now" (五一假期 / 在加班 /
@@ -1537,10 +1535,8 @@ class ProactiveScheduler:
                 # 2026-08-31 that was the Chengdu autograph three times, the
                 # letter twice, the trip twice — three subjects in eight slots,
                 # out of twenty-eight distinct facts she held.
-                known = await self.fact_retriever.fetch(FactQuery(
-                    subject=f"user:{rec_key}", type=FactType.PATTERN, limit=24))
                 known = await select_diverse(
-                    known, 8, self.engine.memory.embedding_provider)
+                    sit.his_facts, 8, self.engine.memory.embedding_provider)
                 known_block = _format_known_block(known)
             except Exception as e:
                 print(f"[proactive] known-facts fetch failed (non-fatal): {e}")
@@ -1573,11 +1569,8 @@ class ProactiveScheduler:
         # from up there it lost to her own earlier claims). Every path that
         # speaks has to place it itself now — without this the proactive path
         # would have nothing at all on whether a show has happened.
-        from lingxi.persona.prompt_builder import (
-            build_upcoming_shows_block, build_world_block)
-        agenda_block = self._agenda_block(rec_key, record, now)
-        shows_block = build_upcoming_shows_block(self.engine.persona, now.date())
-        shows_block = f"{shows_block}\n\n" if shows_block else ""
+        agenda_block = self._agenda_block(rec_key, record, now, sit.agenda)
+        shows_block = f"{sit.shows}\n\n" if sit.shows else ""
 
         # One thing from outside the practice room. This path needs it most:
         # measured over her sent openers, the material is almost entirely her
@@ -1585,8 +1578,7 @@ class ProactiveScheduler:
         # written many ways.
         world_block = ""
         try:
-            world_block = build_opener_news_block(
-                await self.engine._todays_world_facts())
+            world_block = build_opener_news_block(sit.world)
         except Exception as e:
             print(f"[proactive] world block failed (non-fatal): {e}", flush=True)
 

@@ -31,7 +31,6 @@ from lingxi.persona.models import PersonaConfig
 from lingxi.persona.prompt_builder import (
     PromptBuilder,
     build_unanswered_block,
-    build_upcoming_shows_block,
     build_world_block,
 )
 from lingxi.providers.base import LLMProvider
@@ -652,11 +651,11 @@ class ConversationEngine:
         # First, and per-turn: this is the only thing in the prompt that knows
         # whether a show has happened yet, and it has to sit next to the turn
         # to outweigh whatever she said about it earlier in the conversation.
-        shows_block = build_upcoming_shows_block(self.persona, now.date() if now
-                                                 else None)
-        if shows_block:
-            state_blocks.append(shows_block)
-        world_block = build_world_block(await self._todays_world_facts())
+        from lingxi.conversation.situation import CHAT_FACTS, gather
+        sit = await gather(self, recipient_key, now)
+        if sit.shows:
+            state_blocks.append(sit.shows)
+        world_block = build_world_block(sit.world)
         if world_block:
             state_blocks.append(world_block)
         # Only on the turn he comes back: the counter is already reset, so this
@@ -670,12 +669,10 @@ class ConversationEngine:
             state_blocks.append(dynamic_block)
         # His plans with a day on them and what she promised him, so 「你答应
         # 我的呢」 has something to land on.
-        book = getattr(self, "agenda", None)
-        if book is not None and recipient_key and now is not None:
-            from lingxi.memory.agenda import chat_block
-            ahead = chat_block(book.open_items(recipient_key, now.date()), now.date())
-            if ahead:
-                state_blocks.append(ahead)
+        from lingxi.memory.agenda import chat_block
+        ahead = chat_block(sit.agenda, now.date())
+        if ahead:
+            state_blocks.append(ahead)
         # Her own recent messages are the strongest style cue in the prompt;
         # when they have drifted out of the persona's band, say so this turn.
         try:
@@ -696,7 +693,7 @@ class ConversationEngine:
         # actually experiences, and they were the poorer of the two.
         if not any(q.category.startswith("user:")
                    for q in decision.fact_queries):
-            floor = await self._known_facts_floor(recipient_key)
+            floor = await self._known_facts_floor(sit.his_facts[:CHAT_FACTS])
             if floor:
                 state_blocks.append(floor)
 
@@ -842,20 +839,17 @@ class ConversationEngine:
             print(f"[brain] thread summary not saved (kept for this run): {e}",
                   flush=True)
 
-    async def _known_facts_floor(self, recipient_key: str | None) -> str:
+    async def _known_facts_floor(self, pool: list) -> str:
         """A few durable facts about him, spread across subjects.
 
         Deliberately small. This is a floor, not a dump: the orchestrator's
         targeted queries are still the main channel and go deeper when the
         turn calls for it. What this prevents is a reply written with no
-        recollection of him at all.
+        recollection of him at all. `pool` is his facts, best first.
         """
-        if not recipient_key or self.fact_retriever is None:
+        if not pool:
             return ""
         try:
-            pool = await self.fact_retriever.fetch(FactQuery(
-                subject=f"user:{recipient_key}", type=FactType.PATTERN,
-                limit=18))
             picked = await select_diverse(
                 pool, 5, self.memory.embedding_provider)
         except Exception as e:
