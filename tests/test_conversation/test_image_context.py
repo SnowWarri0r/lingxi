@@ -97,5 +97,23 @@ async def test_no_images_costs_no_call():
 
 @pytest.mark.asyncio
 async def test_a_runaway_description_is_capped():
-    p = _Provider("好" * 500)
-    assert len(await describe_images(p, [_img()])) <= 120
+    p = _Provider("好" * 5000)
+    assert len(await describe_images(p, [_img()])) <= 800
+
+
+@pytest.mark.asyncio
+async def test_the_text_on_a_schedule_reaches_her_whole():
+    """A schedule summarised to one line lost every date and city on it."""
+    rows = ["一张活动日程表", "3月2日 预售开启", "3月14日 见面会 杭州",
+            "4月4日 见面会 南京", "4月18日 演唱会 厦门", "4月19日 见面会 厦门",
+            "5月1日 快闪店 杭州"]
+    out = await describe_images(_Provider("\n".join(rows)), [_img()])
+    assert all(r in out for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_she_is_asked_to_copy_the_text_out():
+    p = _Provider()
+    await describe_images(p, [_img()])
+    instruction = p.calls[0]["messages"][0]["content"][-1]["text"]
+    assert "照原样抄" in instruction and "日期" in instruction

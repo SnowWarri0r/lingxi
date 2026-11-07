@@ -18,13 +18,21 @@ Failure is never fatal: no description means the turn proceeds with a plain
 
 from __future__ import annotations
 
+# The description is all the responder ever sees of a picture, so text on it
+# is copied out whole. Capped at one line of 30 characters, an event
+# schedule he sent reached her as 「含未来三个月的几场活动安排」:
+# every date and city on it was gone, and she asked him which days and where.
 _PROMPT = (
-    "用一句话说清这张图里是什么，≤30字。"
-    "图上有字就把字念出来（表情包里的字往往就是全部意思）。"
-    "只输出这句描述。多张图按顺序分行，一行一张。"
+    "先用一句话说清这张图是什么，≤30字。"
+    "图上有字就照原样抄下来，接在这句后面："
+    "表情包上的一两句直接接上（往往就是全部意思）；"
+    "日程表、截图、公告、聊天记录这类以字为主的图，把字全部抄出，"
+    "日期、时间、地点、人名、价格逐条照抄，一条一行。"
+    "只输出描述和抄下的字。多张图按顺序，每张以「图1：」「图2：」开头。"
 )
 
-_MAX_CHARS = 120
+# A whole schedule fits; a runaway answer still cannot fill the prompt.
+_MAX_CHARS = 800
 
 
 async def describe_images(provider, images: list[dict]) -> str:
@@ -50,7 +58,7 @@ async def describe_images(provider, images: list[dict]) -> str:
     try:
         result = await provider.complete(
             messages=[{"role": "user", "content": blocks}],
-            max_tokens=256,
+            max_tokens=1024,
             temperature=0.3,
             _debug_purpose="image_describe",
         )
