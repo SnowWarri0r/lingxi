@@ -433,6 +433,36 @@ def review_prompt(facts: list[HeldFact], *, agent: str, today: datetime) -> tupl
     return _REVIEW_PROMPT.format(today=day, agent=agent, facts=held), ids
 
 
+_MONTH_DAY = re.compile(r"(?:(\d{4})年)?(\d{1,2})月(?:(\d{1,2})[日号])?")
+
+
+def still_ahead(text: str, today: datetime) -> bool:
+    """True when `text` names a day (or a month) that has not come yet.
+
+    The review rewrote a plan eleven days out as 「后来是否
+    成行还不知道」, as if the day had passed. A date without a year is read
+    as the nearest one: 「1月10日」 written in December is next January.
+    """
+    for y, m, d in _MONTH_DAY.findall(text):
+        month = int(m)
+        if not 1 <= month <= 12:
+            continue
+        year = int(y) if y else today.year
+        try:
+            if d:
+                when = datetime(year, month, int(d)).date()
+            else:      # a month alone is ahead until it is over
+                nxt = datetime(year + month // 12, month % 12 + 1, 1)
+                when = (nxt - timedelta(days=1)).date()
+        except ValueError:
+            continue
+        if not y and (today.date() - when).days > 180:
+            when = when.replace(year=when.year + 1)
+        if when >= today.date():
+            return True
+    return False
+
+
 def adds_only_time(old: str, new: str) -> bool:
     """True when every character the rewrite adds is a date or a word for not
     knowing how it went."""
@@ -441,7 +471,7 @@ def adds_only_time(old: str, new: str) -> bool:
 
 
 def parse_review(text: str, ids: dict[str, str],
-                 held: dict[str, str]) -> list[Op]:
+                 held: dict[str, str], today: datetime | None = None) -> list[Op]:
     try:
         data = lenient_json.loads(text)
     except Exception:
@@ -463,6 +493,11 @@ def parse_review(text: str, ids: dict[str, str],
             if (not content or content == held[target]
                     or not adds_only_time(held[target], content)):
                 continue
+            # A plan whose day is still ahead has no outcome to be unsure of.
+            if (today is not None and "不知道" in content
+                    and "不知道" not in held[target]
+                    and still_ahead(held[target], today)):
+                continue
             out.append(Op("update", content, target))
         else:
             continue
@@ -481,4 +516,5 @@ async def review(llm, facts: list[HeldFact], *, agent: str, today: datetime,
         system="你负责复盘长期记忆，输出严格 JSON。",
         max_tokens=3000, temperature=0.2,
         _debug_purpose="memory_review", **kwargs)
-    return parse_review(resp.content, ids, {f.id: f.content for f in facts})
+    return parse_review(resp.content, ids, {f.id: f.content for f in facts},
+                        today=today)

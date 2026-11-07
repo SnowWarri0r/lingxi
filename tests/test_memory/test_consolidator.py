@@ -392,6 +392,25 @@ async def test_a_review_rewrite_keeps_the_day_he_said_it(tmp_path):
     assert now.supersedes == plan.id and now.ts == T0
 
 
+def test_a_plan_whose_day_is_still_ahead_is_not_made_past():
+    """A plan eleven days out came back as 「后来是否成行还不知道」."""
+    held = {"id-1": "对方计划11月14日前后去漫展见阿澪"}
+    text = ('{"ops": [{"op": "update", "id": "F1", '
+            '"content": "对方之前计划11月14日前后去漫展见阿澪，后来是否成行还不知道"}]}')
+    assert parse_review(text, {"F1": "id-1"}, held, today=datetime(2026, 11, 3, 4)) == []
+    assert [o.op for o in parse_review(text, {"F1": "id-1"}, held,
+                                       today=datetime(2026, 11, 20, 4))] == ["update"]
+
+
+def test_still_ahead_reads_dates_the_way_people_write_them():
+    from lingxi.memory.consolidator import still_ahead
+    d = datetime(2026, 12, 20, 4)
+    assert still_ahead("对方说1月10日要去上海", d)          # next January
+    assert still_ahead("对方这个月12月底要搬家", d)          # month not over
+    assert not still_ahead("对方说12月12日去了北京", d)
+    assert not still_ahead("对方国庆会去漫展", d)            # no date to read
+
+
 def test_an_unchanged_review_rewrite_is_not_written():
     """Rewriting a fact word for word only re-dates it; four nights running the
     same holiday plan came back unchanged and stayed pinned near the top."""
