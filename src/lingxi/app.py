@@ -306,12 +306,15 @@ async def create_engine(
     engine.daily_planner = daily_planner
     # Facts about the user are written once a conversation goes quiet, by
     # reading all of it — see lingxi.memory.consolidator.
+    from lingxi.memory.agenda import AgendaBook
     from lingxi.memory.consolidator import ConsolidationScheduler
+    engine.agenda = AgendaBook(Path(data_dir) / "agenda.json")
     engine.memory_consolidator = (
         ConsolidationScheduler(
             llm=llm_provider, tracker=interaction_tracker,
             short_term=memory_manager.short_term, store=facts_store,
-            writer=user_statement_writer, persona=persona)
+            writer=user_statement_writer, persona=persona,
+            agenda=engine.agenda)
         if interaction_tracker is not None else None)
 
     # Load persisted state

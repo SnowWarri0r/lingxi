@@ -151,6 +151,13 @@ class Acquaintance(_Strict):
     relationship_level: int = 1
 
 
+class CaseAgendaItem(_Strict):
+    """An open agenda item; its day is counted from the case clock."""
+    kind: str = "his"
+    text: str
+    days_ahead: int = 0
+
+
 class PlanStep(_Strict):
     """The plan step a life-sim moment is written under (mode: moment)."""
     content: str
@@ -187,6 +194,8 @@ class Case(_Strict):
     # mode: scan — what the search found, handed over instead of searching.
     scan_raw: list[str] = Field(default_factory=list)
     controls: Controls | None = None
+    # His plans and her promises, as the agenda holds them at the clock.
+    agenda: list[CaseAgendaItem] = Field(default_factory=list)
     # Cases that measure one thing across several turns (her voice over a
     # conversation) share a group; the table adds a pooled row for it. A
     # single turn is nearly all-or-nothing on a voice marker — the three

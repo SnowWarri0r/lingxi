@@ -668,6 +668,14 @@ class ConversationEngine:
             state_blocks.append(unanswered_block)
         if dynamic_block:
             state_blocks.append(dynamic_block)
+        # His plans with a day on them and what she promised him, so 「你答应
+        # 我的呢」 has something to land on.
+        book = getattr(self, "agenda", None)
+        if book is not None and recipient_key and now is not None:
+            from lingxi.memory.agenda import chat_block
+            ahead = chat_block(book.open_items(recipient_key, now.date()), now.date())
+            if ahead:
+                state_blocks.append(ahead)
         # Her own recent messages are the strongest style cue in the prompt;
         # when they have drifted out of the persona's band, say so this turn.
         try:

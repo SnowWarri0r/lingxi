@@ -302,8 +302,11 @@ class ConsolidationScheduler:
     gone quiet."""
 
     def __init__(self, *, llm, tracker, short_term, store, writer, persona,
-                 interval_minutes: int = 5, model: str | None = None):
+                 interval_minutes: int = 5, model: str | None = None,
+                 agenda=None):
         self._llm = llm
+        self._agenda = agenda
+        self._persona = persona
         self._tracker = tracker
         self._short_term = short_term
         self._store = store
@@ -387,6 +390,19 @@ class ConsolidationScheduler:
         counts = {k: sum(o.op == k for o in ops) for k in ("add", "update", "retire")}
         print(f"[memory] consolidated {key[-6:]}: {len(fresh)} turns → {counts}",
               flush=True)
+        if self._agenda is not None:
+            # Its own call, so the facts prompt stays as measured. A failure
+            # here costs the agenda this conversation, never the facts.
+            from lingxi.memory import agenda as ag
+            from lingxi.persona.prompt_builder import build_stage_block
+            try:
+                stage = build_stage_block(self._persona, fresh[0].timestamp.date()) or ""
+                await ag.update(self._llm, self._agenda, key,
+                                [Turn(t.role, t.content, t.timestamp) for t in fresh],
+                                agent=self._agent, now=now, model=self._model,
+                                stage=stage)
+            except Exception as e:
+                print(f"[agenda] update failed (non-fatal): {e!r}", flush=True)
         return ops
 
 

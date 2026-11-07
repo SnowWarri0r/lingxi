@@ -260,6 +260,21 @@ def rotate_stories(stories, recent: list[dict]):
     return fresh or list(stories)
 
 
+def _answered_lookup(record, now: datetime):
+    """answered(at): True / False for an opener of this record sent at `at`,
+    None while its reply window is still open or it is not on record."""
+    from lingxi.temporal.tracker import ANSWER_WINDOW
+
+    def answered(at: datetime):
+        for o in getattr(record, "proactive_outcomes", None) or []:
+            if abs((o.sent_at - at).total_seconds()) < 60:
+                if o.answered:
+                    return True
+                return False if now - o.sent_at > ANSWER_WINDOW else None
+        return None
+    return answered
+
+
 # Transient failures a second channel gets before openers fall back home.
 _ROUTE_TRIES = 3
 
@@ -436,7 +451,8 @@ def parse_proactive_output(raw: str) -> dict:
     return {"should_send": should_send, "message": message,
             "sticker": sticker, "reason": meta.get("inner", ""),
             "aspect": aspect if aspect in OPENER_ASPECTS else "",
-            "story": str(meta.get("story") or "").strip().upper()}
+            "story": str(meta.get("story") or "").strip().upper(),
+            "agenda": str(meta.get("agenda") or "").strip().upper()}
 
 
 def _too_similar(candidate: str, previous: list[str], threshold: float = 0.75) -> str | None:
@@ -1210,6 +1226,9 @@ class ProactiveScheduler:
         # shelf and were offered again, and the aspect went unrecorded. The
         # curator's label is recorded, not hers, which filed practice under
         # 队友 or 天气.
+        outcomes = getattr(record, "proactive_outcomes", None) or []
+        await self._mark_agenda(key, message, decision,
+                                outcomes[-1].sent_at if outcomes else datetime.now())
         told = await self._told_story(key, message, decision)
         self._remember_proactive(key, message,
                                  (told.aspect if told else "") or decision.get("aspect", ""))
@@ -1290,6 +1309,41 @@ class ProactiveScheduler:
                 base.with_name("stories.json") if base else None,
                 self.engine.llm, self.engine.persona)
         return self._story_shelf
+
+    def _agenda_block(self, key: str, record, now: datetime) -> str:
+        """Today's one item from the agenda, or ""; remembered as offered."""
+        from lingxi.memory import agenda as ag
+        offered = getattr(self, "_agenda_offered", {})
+        self._agenda_offered = offered
+        offered.pop(key, None)
+        book = getattr(self.engine, "agenda", None)
+        if book is None:
+            return ""
+        try:
+            item = ag.due_today(book.open_items(key, now.date()), now,
+                                _answered_lookup(record, now))
+        except Exception as e:
+            print(f"[agenda] due check failed (non-fatal): {e!r}", flush=True)
+            return ""
+        block, _ = ag.opener_block(item, now)
+        if item is not None:
+            offered[key] = (item, ag.stage(item, now.date()))
+            print(f"[agenda] offering {item.id}: {item.text[:30]}", flush=True)
+        return block
+
+    async def _mark_agenda(self, key: str, message: str, decision: dict,
+                           at: datetime) -> None:
+        """The offered item counts as followed up if she says so in META or
+        the opener reads as being about it."""
+        item, st = getattr(self, "_agenda_offered", {}).get(key, (None, None))
+        book = getattr(self.engine, "agenda", None)
+        if item is None or book is None:
+            return
+        used = decision.get("agenda") == "A1" or await match_story(
+            message, [item], self.engine.memory.embedding_provider) is not None
+        if used:
+            book.mark_asked(key, item.id, st, at)
+            print(f"[agenda] {item.id} followed up ({st})", flush=True)
 
     async def _told_story(self, key: str, message: str, decision: dict | None = None):
         """The offered story this text tells: by embedding, else her META id."""
@@ -1521,7 +1575,8 @@ class ProactiveScheduler:
         # would have nothing at all on whether a show has happened.
         from lingxi.persona.prompt_builder import (
             build_upcoming_shows_block, build_world_block)
-        shows_block = build_upcoming_shows_block(self.engine.persona)
+        agenda_block = self._agenda_block(rec_key, record, now)
+        shows_block = build_upcoming_shows_block(self.engine.persona, now.date())
         shows_block = f"{shows_block}\n\n" if shows_block else ""
 
         # One thing from outside the practice room. This path needs it most:
@@ -1553,6 +1608,7 @@ class ProactiveScheduler:
                 f"## 你最近发过的主动消息（这次换个套路/比喻/切入点）\n{recent_proactive}\n\n"
                 f"{own_life_block}"
                 f"{world_block}"
+                f"{agenda_block}"
                 f"{shows_block}"
                 f"{voice}"
                 f"{opener_shape}\n"
@@ -1573,6 +1629,7 @@ class ProactiveScheduler:
                 f"{aspect_line}\n"
                 f"{own_life_block}"
                 f"{world_block}"
+                f"{agenda_block}"
                 f"{shows_block}"
                 f"{voice}"
                 # No assigned tone here. The six tones and their sample lines
@@ -1585,9 +1642,10 @@ class ProactiveScheduler:
                 f"为了发而发不如不发。\n\n"
                 f"按 system prompt 的 `===META===` 格式输出，meta 里加 `should_send`：\n```\n"
                 f"<对外那一句，IM 短句>\n===META===\n"
-                f'{{"should_send": true, "inner": "为什么发", "aspect": "这条说的方面", "story": "S几"}}\n```\n'
+                f'{{"should_send": true, "inner": "为什么发", "aspect": "这条说的方面", "story": "S几", "agenda": "A1 或留空"}}\n```\n'
                 f"aspect 填这条说的是哪方面，从这几个里挑一个：{aspects}\n"
-                f"story 填你讲的是上面「可以跟他讲的事」里的哪一件（S1、S2……）；讲的不是那里面的就留空。\n\n"
+                f"story 填你讲的是上面「可以跟他讲的事」里的哪一件（S1、S2……）；讲的不是那里面的就留空。\n"
+                f"agenda 填 A1，当这条接的是「今天可以跟他接上的一件事」；接的是别的就留空。\n\n"
                 f"不该发就：\n```\n\n===META===\n"
                 f'{{"should_send": false, "inner": "为什么不发"}}\n```'
             )

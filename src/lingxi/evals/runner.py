@@ -94,6 +94,14 @@ async def build_turn(
         # deterministic, and worth exercising end to end.
         engine.prompt_builder._weather_line = lambda _now: None
 
+        from datetime import timedelta as _td
+        from lingxi.memory.agenda import AgendaBook
+        engine.agenda = AgendaBook(tmp_path / "agenda.json")
+        for a in case.agenda:
+            day = (case.clock.date() + _td(days=a.days_ahead)).isoformat()
+            engine.agenda.add(case.recipient, a.kind, a.text, day, "",
+                              case.clock - _td(days=10))
+
         if case.mode == "proactive":
             system, messages = await _proactive_turn(case, engine, tmp_path)
         else:
