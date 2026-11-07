@@ -700,9 +700,15 @@ class ConversationEngine:
         if grounding:
             # Injected as verified knowledge the persona can speak from — she
             # weaves it into her own voice, not "I just googled it".
+            #
+            # A lookup that comes back empty is not knowledge that the thing
+            # doesn't exist. Read as 「可靠信息」, 「没查到确切的」 became her
+            # telling him he had misremembered an event whose
+            # schedule was only posted as an image: 6 of 12 replays.
             state_blocks.append(
                 "## 你查证到的（当成你知道的可靠信息，用你自己的话讲，"
-                "别照抄、别提'我搜到'）\n" + grounding
+                "别照抄、别提'我搜到'；写着没查到的，只说明你这边还没看到，"
+                "他可能看到了你没看到的消息——就照实说你还没翻到）\n" + grounding
             )
 
         # Voice anchors: retrieve real-corpus speech samples whose context

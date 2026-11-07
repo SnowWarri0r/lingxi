@@ -194,6 +194,9 @@ class Case(_Strict):
     # mode: scan — what the search found, handed over instead of searching.
     scan_raw: list[str] = Field(default_factory=list)
     controls: Controls | None = None
+    # What the pre-turn web lookup returned, frozen: a live search replays a
+    # different day's web. Used whenever the orchestrator asks to look up.
+    lookup: str = ""
     # His plans and her promises, as the agenda holds them at the clock.
     agenda: list[CaseAgendaItem] = Field(default_factory=list)
     # Cases that measure one thing across several turns (her voice over a

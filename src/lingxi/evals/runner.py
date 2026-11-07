@@ -102,12 +102,22 @@ async def build_turn(
             engine.agenda.add(case.recipient, a.kind, a.text, day, "",
                               case.clock - _td(days=10))
 
-        if case.mode == "proactive":
-            system, messages = await _proactive_turn(case, engine, tmp_path)
-        else:
-            system, messages = await engine._prepare_turn_v2(
-                case.input, None, channel, recipient_id, now=case.clock,
-            )
+        import lingxi.brain.retrieval as _retrieval
+        live_lookup = _retrieval.web_lookup
+        if case.lookup:
+            async def _frozen(_llm, _query, **_kw):
+                return case.lookup
+            _retrieval.web_lookup = _frozen
+            engine._web_lookup_enabled = True
+        try:
+            if case.mode == "proactive":
+                system, messages = await _proactive_turn(case, engine, tmp_path)
+            else:
+                system, messages = await engine._prepare_turn_v2(
+                    case.input, None, channel, recipient_id, now=case.clock,
+                )
+        finally:
+            _retrieval.web_lookup = live_lookup
         # Assembled and returned INSIDE the TemporaryDirectory block: the
         # store file (and the fact_retriever reading from it) must still
         # exist while assembly runs its facts/renderer path.
