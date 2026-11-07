@@ -33,6 +33,9 @@ _PROMPT = """{self_context}
 下面是你这两天给自己记的经历，和今天扫到的消息。从里面挑出 3-5 件你想讲给朋友听的事。
 你这边的日子他不在场，所以每件写成一句**他一读就懂**的话：说清是哪件事、你在做什么、你怎么想。
 
+【你身边的人】
+{people}
+
 【你这两天记下的】
 {events}
 
@@ -46,6 +49,7 @@ _PROMPT = """{self_context}
 - 一件事写一条；同一件事散在好几条日记里的，合成一条。
 - 各方面都挑一点：练习排练、演出、圈里新鲜事、队友、家人、吃喝、天气……别全是同一类。
 - 每条一两句，第一人称，用你平时说话的语气；日记里只有你自己懂的说法换成大白话。
+- 他认识你的队友，不熟你们私下的叫法和圈里的简称。提到一个人，像说话一样顺带交代她是你的谁，照【你身边的人】里写的来（比如「学妹小林」「我姐」）；提到作品、活动，第一次写它的完整名字。
 - aspect 填这件事主要在讲什么：排练时顺带提到的天气、吃喝、队友，算练习排练。
 
 输出 JSON（直接 {{ 开头）：
@@ -130,11 +134,13 @@ class StoryShelf:
         if not events or not self._stale(events, now):
             return [Story(**s) for s in self._shelf.stories]
         from lingxi.persona.prompt_builder import build_stage_block
+        from lingxi.planner.daily_planner import _format_people
         from lingxi.persona.self_context import build_self_context
         from lingxi.temporal.proactive import OPENER_ASPECTS
         stage = build_stage_block(self._persona, now.date()) or ""
         prompt = _PROMPT.format(
             self_context=build_self_context(self._persona),
+            people=_format_people(self._persona),
             events="\n".join(f"- [{f.ts:%m-%d %H:%M}] {f.content}"
                              for f in sorted(events, key=lambda f: f.ts)),
             world="\n".join(f"- {w.content}" for w in world) or "（今天没扫到什么）",

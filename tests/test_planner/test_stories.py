@@ -111,3 +111,19 @@ def test_the_opener_names_the_story_it_told():
     out = parse_proactive_output('今天跟香音对词了！\n===META===\n'
                                  '{"should_send": true, "story": "s2"}')
     assert out["story"] == "S2"
+
+
+@pytest.mark.asyncio
+async def test_the_curator_knows_who_the_people_in_her_diary_are(tmp_path):
+    """With only her one-line self-description it retold a nickname as-is, and
+    asked to say who people were it guessed: her sister became a friend from
+    home and a teammate someone she met online."""
+    persona = SimpleNamespace(
+        name="可可", upcoming_shows=[], lexicon=[],
+        biography=SimpleNamespace(recurring_people=[
+            SimpleNamespace(name="小林", relation="学妹，我叫她「林林」"),
+            SimpleNamespace(name="阿澪", relation="我姐")]))
+    llm = _LLM(STORIES)
+    shelf = StoryShelf(tmp_path / "stories.json", llm, persona)
+    await shelf.refresh([_ev("跟林林接歌接到半夜", 30)], [], NOW)
+    assert "学妹，我叫她「林林」" in llm.calls[0] and "阿澪：我姐" in llm.calls[0]
