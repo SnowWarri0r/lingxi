@@ -182,6 +182,8 @@ async def test_a_sent_opener_marks_its_story_told(tmp_path):
     result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
     assert result["status"] == "sent"
     assert told == [("feishu:oc_x", "abc")]
+    # The kind is kept with the outcome, so reply rates by kind can be read.
+    assert rec.proactive_outcomes[-1].aspect == "队友"
 
 
 # --- which story she told is read off the text -------------------------------

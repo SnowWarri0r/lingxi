@@ -13,14 +13,18 @@ from pydantic import BaseModel, Field
 # A proactive message counts as answered when he writes within this long of
 # it. Past it, whatever he says next is about something else.
 ANSWER_WINDOW = timedelta(hours=4)
-# How many recent openers to remember the outcome of. Old outcomes falling off
-# the end is what lets a slot that was given up on get tried again.
-_OUTCOMES_KEPT = 60
+# How many recent openers to remember the outcome of. Kept long enough to
+# say which kinds of opener he answers: on 11-06 the 30 labelled since 10-13
+# split 1-10 per kind, all within noise of each other. Slot learning reads
+# only the last SLOT_WINDOW, so a slot given up on still gets tried again.
+_OUTCOMES_KEPT = 300
+SLOT_WINDOW = 60
 
 
 class ProactiveOutcome(BaseModel):
     sent_at: datetime
     answered: bool = False
+    aspect: str = ""   # which side of her life it was about
 
 
 class InteractionRecord(BaseModel):

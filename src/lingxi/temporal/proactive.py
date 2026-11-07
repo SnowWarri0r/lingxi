@@ -832,9 +832,9 @@ def dead_slot(outcomes, now: datetime, cfg: ProactiveConfig) -> bool:
     Only resolved openers count: one sent inside the answer window may still
     be answered.
     """
-    from lingxi.temporal.tracker import ANSWER_WINDOW
+    from lingxi.temporal.tracker import ANSWER_WINDOW, SLOT_WINDOW
     tally = {s: [0, 0] for s in _SLOTS}  # slot -> [answered, sent]
-    for o in outcomes:
+    for o in list(outcomes)[-SLOT_WINDOW:]:
         if not o.answered and now - o.sent_at < ANSWER_WINDOW:
             continue
         t = tally[_slot(o.sent_at.hour)]
@@ -1230,8 +1230,11 @@ class ProactiveScheduler:
         await self._mark_agenda(key, message, decision,
                                 outcomes[-1].sent_at if outcomes else datetime.now())
         told = await self._told_story(key, message, decision)
-        self._remember_proactive(key, message,
-                                 (told.aspect if told else "") or decision.get("aspect", ""))
+        aspect = (told.aspect if told else "") or decision.get("aspect", "")
+        self._remember_proactive(key, message, aspect)
+        if outcomes and aspect:
+            outcomes[-1].aspect = aspect
+            await self.tracker.save()
         if told:
             self._shelf().mark_told(key, told.id)
 

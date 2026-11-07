@@ -95,15 +95,6 @@ def test_a_reply_after_the_window_does_not(tmp_path):
     assert not rec.proactive_outcomes[-1].answered
 
 
-def test_old_outcomes_age_out(tmp_path):
-    """Which is what lets a dropped slot be tried again."""
-    t = InteractionTracker(tmp_path)
-    t.record_interaction("feishu", "oc_x")
-    for _ in range(80):
-        t.record_proactive_sent("feishu", "oc_x")
-    assert len(t._records["feishu:oc_x"].proactive_outcomes) == 60
-
-
 @pytest.mark.asyncio
 async def test_outcomes_survive_a_restart(tmp_path):
     t = InteractionTracker(tmp_path)
@@ -187,3 +178,29 @@ async def test_below_the_cap_a_second_opener_the_same_day_still_goes(tmp_path):
     await sched._maybe_reach_out(rec, _at(21))
 
     assert len(composed) == 1
+
+
+def test_slot_learning_reads_only_the_recent_window():
+    """Outcomes are kept longer now (for per-kind rates); a morning he
+    stopped ignoring long ago must still get tried again."""
+    old = [ProactiveOutcome(sent_at=DAY0 + timedelta(days=i, hours=8))
+           for i in range(14)]
+    recent = []
+    for i in range(20):
+        for hour in (8, 14, 20):
+            recent.append(ProactiveOutcome(
+                sent_at=DAY0 + timedelta(days=30 + i, hours=hour), answered=i % 3 == 0))
+    later = DAY0 + timedelta(days=60)
+    assert not dead_slot(old + recent, later.replace(hour=8), CFG)
+
+
+def test_a_sent_opener_keeps_which_kind_it_was(tmp_path):
+    tracker = InteractionTracker(tmp_path)
+    tracker.record_interaction("feishu", "oc_x")
+    for _ in range(320):
+        tracker.record_proactive_sent("feishu", "oc_x")
+    rec = tracker.get_record("feishu", "oc_x")
+    assert len(rec.proactive_outcomes) == 300
+    rec.proactive_outcomes[-1].aspect = "队友"
+    assert ProactiveOutcome.model_validate(
+        rec.proactive_outcomes[-1].model_dump()).aspect == "队友"
