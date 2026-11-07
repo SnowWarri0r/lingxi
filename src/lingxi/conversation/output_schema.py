@@ -76,6 +76,14 @@ class TurnOutput(BaseModel):
     raw: str = ""
 
 
+def settled_bubble(paragraph: str) -> str:
+    """A finished paragraph of a reply still streaming, as it will read in
+    the cleaned whole: sticker tag gone, narration gone; "" if nothing is
+    left to send."""
+    from lingxi.conversation.response_cleaner import clean_speech
+    return clean_speech(_STICKER_TAG.sub("", paragraph).strip(), fallback=False)
+
+
 def parse_turn_output(raw: str) -> TurnOutput:
     """Split raw output on META_DELIMITER; parse trailing JSON.
 

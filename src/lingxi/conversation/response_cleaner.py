@@ -150,8 +150,14 @@ def _clean_inline_trailing(text: str) -> str:
     return "\n".join(result_lines)
 
 
-def clean_speech(text: str) -> str:
-    """Remove narration and meta-commentary from already-extracted speech."""
+def clean_speech(text: str, *, fallback: bool = True) -> str:
+    """Remove narration and meta-commentary from already-extracted speech.
+
+    With `fallback`, text that cleans to nothing is returned as it came, so a
+    whole reply is never lost. A single bubble sent ahead of the rest passes
+    False: a paragraph that is all narration is dropped, as it would be
+    inside the whole reply.
+    """
     if not text:
         return text
 
@@ -198,7 +204,7 @@ def clean_speech(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()
 
-    if not text:
+    if not text and fallback:
         text = original.strip()
 
     # 7. HARD FILTERS — applied last and bypass the fallback. If the entire

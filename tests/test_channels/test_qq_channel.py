@@ -260,3 +260,69 @@ async def test_a_network_blip_on_qq_does_not_move_him(tmp_path):
     await sched._maybe_reach_out(rec, datetime.now(), force=True)
     third = await sched._maybe_reach_out(rec, datetime.now(), force=True)
     assert third["status"] == "route_dropped"
+
+
+# --- bubbles go out as they are written ------------------------------------
+
+class _Streaming(_Engine):
+    """Streams the reply in pieces and notes what had been sent by the end."""
+
+    def __init__(self, tracker, pieces, done, sent):
+        super().__init__(tracker, done)
+        self.pieces, self.sent, self.sent_before_done = pieces, sent, None
+
+    async def chat_stream_events(self, text, images=None, channel=None,
+                                 recipient_id=None):
+        for p in self.pieces:
+            yield SimpleNamespace(type="chunk", content=p)
+        self.sent_before_done = [b["content"] for _, path, b in self.sent
+                                 if path.endswith("/messages")]
+        yield SimpleNamespace(type="done", content=self.speech)
+
+
+def _streaming_bot(tmp_path, pieces, done):
+    tracker = InteractionTracker(tmp_path)
+    sent = []
+    engine = _Streaming(tracker, pieces, done, sent)
+    bot = QQBot(engine, "app", "secret",
+                identities=IdentityMap(tmp_path / "identities.json"))
+
+    async def _api(method, path, body=None):
+        sent.append((method, path, body))
+        return {"id": "m", "file_info": "fi"}
+
+    bot._api = _api
+    return bot, engine, sent
+
+
+def _texts(sent):
+    return [(b["content"], b["msg_seq"]) for _, path, b in sent
+            if path.endswith("/messages")]
+
+
+@pytest.mark.asyncio
+async def test_the_first_bubble_goes_out_before_the_reply_is_finished(tmp_path):
+    bot, engine, sent = _streaming_bot(
+        tmp_path, ["诶 你来", "啦！\n\n可可刚", "练完"], "诶 你来啦！\n\n可可刚练完")
+    await bot._on_message(_event())
+    assert engine.sent_before_done == ["诶 你来啦！"]
+    assert _texts(sent) == [("诶 你来啦！", 1), ("可可刚练完", 2)]
+
+
+@pytest.mark.asyncio
+async def test_a_paragraph_that_cleans_to_nothing_is_not_sent(tmp_path):
+    """A sticker tag on its own line, or pure narration, never reaches him."""
+    bot, engine, sent = _streaming_bot(
+        tmp_path, ["#表情 得意\n\n好耶\n\n", "明天见"], "好耶\n\n明天见")
+    await bot._on_message(_event())
+    assert engine.sent_before_done == ["好耶"]
+    assert _texts(sent) == [("好耶", 1), ("明天见", 2)]
+
+
+@pytest.mark.asyncio
+async def test_the_last_bubble_waits_since_it_may_absorb_an_overflow(tmp_path):
+    raw = "一\n\n二\n\n三\n\n四"
+    bot, engine, sent = _streaming_bot(tmp_path, [raw], raw)
+    await bot._on_message(_event())
+    assert engine.sent_before_done == ["一", "二"]
+    assert _texts(sent) == [("一", 1), ("二", 2), ("三 四", 3)]

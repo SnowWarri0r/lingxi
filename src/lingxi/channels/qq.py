@@ -43,6 +43,10 @@ _REFUSED = {40054013}
 # A message from him can be answered this many times.
 _PASSIVE_REPLIES = 4
 
+# Bubbles that may go out while the reply is still being written. The last
+# of split_into_bubbles' three can absorb an overflow, so it waits.
+_EARLY_BUBBLES = 2
+
 
 class QQApiError(RuntimeError):
     def __init__(self, code: int, message: str):
@@ -281,16 +285,47 @@ class QQBot(OutboundChannel):
 
     async def _reply(self, openid: str, msg_id: str, channel: str,
                      recipient: str, text: str, images: list[dict]) -> None:
+        """Answer his message, each finished bubble sent as it is written.
+
+        Bubbles used to wait for the whole reply and then go out one request
+        at a time: the first reached him two to three seconds after the
+        model had written it. A paragraph followed by a blank line is
+        settled and goes out at once; the last bubble, which may absorb an
+        overflow, waits for the end. What went out early is checked against
+        the cleaned reply, and only what is left is sent after it.
+        """
+        from lingxi.conversation.output_schema import settled_bubble
         speech, sticker = "", None
+        streamed, sent = "", []        # raw prose so far; bubbles sent early
+        early_ok = True
         async for ev in self.engine.chat_stream_events(
                 text, images=images or None, channel=channel,
                 recipient_id=recipient):
-            if ev.type == "done":
+            if ev.type == "chunk":
+                streamed += ev.content
+                while early_ok and len(sent) < _EARLY_BUBBLES and "\n\n" in streamed:
+                    para, streamed = streamed.split("\n\n", 1)
+                    bubble = settled_bubble(para)
+                    if not bubble:
+                        continue
+                    try:
+                        await self._send_text(openid, bubble, msg_id=msg_id,
+                                              seq=len(sent) + 1)
+                        sent.append(bubble)
+                    except Exception as e:
+                        print(f"[qq] early bubble failed, sending at the end: {e!r}",
+                              flush=True)
+                        early_ok = False
+            elif ev.type == "done":
                 speech = ev.content
             elif ev.type == "sticker":
                 sticker = ev.content
-        seq = 0
-        for bubble in split_into_bubbles(speech)[:_PASSIVE_REPLIES]:
+        bubbles = split_into_bubbles(speech)[:_PASSIVE_REPLIES]
+        if bubbles[:len(sent)] != sent:
+            print(f"[qq] early bubbles differ from the cleaned reply: "
+                  f"{sent!r} vs {bubbles[:len(sent)]!r}", flush=True)
+        seq = len(sent)
+        for bubble in bubbles[len(sent):]:
             seq += 1
             await self._send_text(openid, bubble, msg_id=msg_id, seq=seq)
         if sticker and seq < _PASSIVE_REPLIES:
@@ -298,4 +333,5 @@ class QQBot(OutboundChannel):
                 await self._send_image(openid, sticker, msg_id=msg_id, seq=seq + 1)
             except Exception as e:
                 print(f"[qq] sticker failed (non-fatal): {e!r}", flush=True)
-        print(f"[qq] replied {seq} bubble(s) to {openid[:8]}…", flush=True)
+        print(f"[qq] replied {seq} bubble(s) to {openid[:8]}… "
+              f"({len(sent)} early)", flush=True)
