@@ -625,7 +625,7 @@ class ConversationEngine:
             self._remember_thread_summary(recipient_key, decision.thread_summary)
 
         # 4. Render
-        persona_block = build_persona_block(self.persona)
+        persona_block = build_persona_block(self.persona, now.date())
         # Migration writes user facts with subject=user:<full_channel:id>
         # (e.g. "user:feishu:oc_xxx"), so renderer needs the full
         # "feishu:oc_xxx" to build the matching subject. Don't strip the

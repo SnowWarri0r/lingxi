@@ -1453,7 +1453,7 @@ class ProactiveScheduler:
         # Recent proactive messages for this recipient (avoid repetition)
         recent_msgs = self._recent_proactive.get(rec_key, [])
         recent_proactive = "\n".join(
-            f"- [{_ago_label(e.get('ts'))}"
+            f"- [{_ago_label(e.get('ts'), now)}"
             f"{'｜' + e['aspect'] if e.get('aspect') else ''}] {e.get('text', '')}"
             for e in recent_msgs[-self._max_recent_proactive:]
         ) or "（这是第一条主动消息）"
@@ -1471,6 +1471,7 @@ class ProactiveScheduler:
         # through identically.
         system_prompt = self.engine.prompt_builder.build_system_prompt(
             relationship_level=record.relationship_level,
+            current_time=now,
             mode="single",
         )
 

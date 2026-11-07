@@ -313,7 +313,8 @@ class PromptBuilder:
         # gives that material proper attention weight.
         sections = [
             preamble,
-            self._build_identity_section(),
+            self._build_identity_section(
+                current_time.date() if current_time else None),
             self._build_personality_section(),
             self._build_speaking_style_section(),
         ]
@@ -804,7 +805,7 @@ class PromptBuilder:
 - 对方分享一段感慨 → `懂` / `对` / `啊…` 都可以——不一定每句都接得很满，也不必每次都"嗯"
 """
 
-    def _build_identity_section(self) -> str:
+    def _build_identity_section(self, today=None) -> str:
         p = self.persona
         lines = [
             f"# 你是 {p.identity.full_name}",
@@ -818,7 +819,7 @@ class PromptBuilder:
         # had the age but no date, and filled the gap with today's — "今天17号
         # 刚过完生日" on the 13th. Distance is computed here too, so she never
         # has to work it out from a date she doesn't otherwise carry.
-        bday = _birthday_line(getattr(p.identity, "birthdate", None))
+        bday = _birthday_line(getattr(p.identity, "birthdate", None), today)
         if bday:
             lines.append(bday)
         if p.identity.occupation:
@@ -1025,7 +1026,7 @@ class PromptBuilder:
             )
         return f"## 你和这个人的熟悉度\n{r.initial_stance}"
 
-def build_persona_block(persona: PersonaConfig) -> str:
+def build_persona_block(persona: PersonaConfig, today=None) -> str:
     """Standalone persona section: identity + personality + style + habits.
 
     This is the static, cache-friendly portion of the system prompt. Used
@@ -1035,7 +1036,7 @@ def build_persona_block(persona: PersonaConfig) -> str:
     pb = PromptBuilder(persona)
     sections = [
         pb._build_format_preamble(),
-        pb._build_identity_section(),
+        pb._build_identity_section(today),
         pb._build_personality_section(),
         pb._build_speaking_style_section(),
     ]
