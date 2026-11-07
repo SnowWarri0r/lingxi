@@ -454,10 +454,10 @@ def still_ahead(text: str, today: datetime) -> bool:
             else:      # a month alone is ahead until it is over
                 nxt = datetime(year + month // 12, month % 12 + 1, 1)
                 when = (nxt - timedelta(days=1)).date()
+            if not y and (today.date() - when).days > 180:
+                when = when.replace(year=when.year + 1)   # 2月29日 can fail here
         except ValueError:
             continue
-        if not y and (today.date() - when).days > 180:
-            when = when.replace(year=when.year + 1)
         if when >= today.date():
             return True
     return False

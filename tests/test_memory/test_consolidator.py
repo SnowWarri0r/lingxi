@@ -409,6 +409,8 @@ def test_still_ahead_reads_dates_the_way_people_write_them():
     assert still_ahead("对方这个月12月底要搬家", d)          # month not over
     assert not still_ahead("对方说12月12日去了北京", d)
     assert not still_ahead("对方国庆会去漫展", d)            # no date to read
+    # Feb 29 rolled over into a year without one must not take the review down.
+    assert not still_ahead("对方2月29日生日", datetime(2028, 10, 1))
 
 
 def test_an_unchanged_review_rewrite_is_not_written():
