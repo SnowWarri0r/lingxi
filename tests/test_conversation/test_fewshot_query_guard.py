@@ -103,3 +103,48 @@ async def test_a_turn_with_words_still_retrieves(tmp_path, stub_brain):
     await eng._prepare_turn_v2("今天好累啊", None, "feishu", "oc_test")
 
     assert rec.queries == ["今天好累啊"]
+
+
+# --- fetched while the orchestrator thinks --------------------------------
+
+@pytest.mark.asyncio
+async def test_anchors_are_fetched_while_the_orchestrator_runs(tmp_path, monkeypatch):
+    """They used to wait for it: about a second added to every reply."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from lingxi.brain import orchestrator as orch_mod
+    from lingxi.brain import renderer as rend_mod
+    from lingxi.brain.models import OrchestrationDecision
+
+    class _Anchors:
+        def __init__(self):
+            self.queries = []
+
+        async def retrieve(self, query_text, recipient_key=None, k=4, threshold=0.5):
+            self.queries.append(query_text)
+            return [SimpleNamespace(corrected_speech="嗯 累死 先躺会")]
+
+    rec = _Anchors()
+    seen_during_decide = []
+
+    async def _decide(*a, **k):
+        await asyncio.sleep(0.05)
+        seen_during_decide.append(list(rec.queries))
+        return OrchestrationDecision(register="light", engage_level=0.5,
+                                     fact_queries=[], topic_anchor="anchor")
+
+    async def _render(*a, **k):
+        return ""
+
+    monkeypatch.setattr(orch_mod, "decide", _decide)
+    monkeypatch.setattr(rend_mod, "render_dynamic_blocks", _render)
+    eng = await _engine(tmp_path, rec)
+
+    _system, messages = await eng._prepare_turn_v2("今天好累啊", None, "feishu", "oc_test")
+
+    assert seen_during_decide == [["今天好累啊"]]
+    last = messages[-1]["content"]
+    text = last if isinstance(last, str) else " ".join(
+        b.get("text", "") for b in last if isinstance(b, dict))
+    assert "嗯 累死 先躺会" in text

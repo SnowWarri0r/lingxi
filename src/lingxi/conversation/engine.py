@@ -591,6 +591,12 @@ class ConversationEngine:
         self.memory.add_turn("user", memory_text)
         prev_summary = self._thread_summary_for(recipient_key)
 
+        # Voice anchors depend on nothing the orchestrator decides, so they
+        # are fetched while it thinks: one embedding call, about a second,
+        # used to run after it.
+        anchors_task = asyncio.create_task(
+            self._voice_anchors_block(recipient_key, user_input))
+
         # 3. Orchestrator decides
         decision = await decide(
             self.llm, user_input, digest, catalog,
@@ -711,28 +717,9 @@ class ConversationEngine:
                 "他可能看到了你没看到的消息——就照实说你还没翻到）\n" + grounding
             )
 
-        # Voice anchors: retrieve real-corpus speech samples whose context
-        # matches this turn, append as a "here's how you talk" block. This is
-        # the anti-翻译腔 lever — the pure-GA refactor had cut it, leaving the
-        # fewshot store loaded but never queried. Threshold-gated so off-topic
-        # turns get nothing (e.g. an emo-only corpus won't surface on a happy
-        # turn). corrected_speech is real human text; we anchor cadence only.
-        query_text = self._last_inner_thought_for(recipient_key) or user_input
-        # An image-only message used to reach here as an empty string, and the
-        # embedding API rejects those (400 MissingParameter) — voice anchors
-        # were silently off for exactly the turns already going wrong.
-        if self.fewshot_retriever is not None and query_text.strip():
-            try:
-                anchors = await self.fewshot_retriever.retrieve(
-                    query_text=query_text, recipient_key=recipient_key,
-                    k=4, threshold=0.5)
-                block = self._render_fewshots_as_text(anchors)
-                if block:
-                    state_blocks.append(block)
-                    print(f"[fewshot] {len(anchors)} voice anchors injected "
-                          f"(q={query_text[:20]!r})", flush=True)
-            except Exception as e:
-                print(f"[fewshot] retrieve failed (non-fatal): {e}")
+        anchors = await anchors_task
+        if anchors:
+            state_blocks.append(anchors)
 
         # Append the current user turn, prepending the per-turn focus reminder
         # (current real time + the utterance Aria just made). The pure-GA
@@ -896,6 +883,36 @@ class ConversationEngine:
             user_schedule=user_schedule,
             user_state=user_state,
         )
+
+    async def _voice_anchors_block(self, recipient_key: str | None,
+                                   user_input: str) -> str:
+        """Voice anchors: real-corpus speech samples whose context matches
+        this turn, as a "here's how you talk" block, or "".
+
+        This is the anti-翻译腔 lever — the pure-GA refactor had cut it,
+        leaving the fewshot store loaded but never queried. Threshold-gated
+        so off-topic turns get nothing (e.g. an emo-only corpus won't surface
+        on a happy turn). corrected_speech is real human text; we anchor
+        cadence only.
+        """
+        query_text = self._last_inner_thought_for(recipient_key) or user_input
+        # An image-only message used to reach here as an empty string, and the
+        # embedding API rejects those (400 MissingParameter) — voice anchors
+        # were silently off for exactly the turns already going wrong.
+        if self.fewshot_retriever is None or not query_text.strip():
+            return ""
+        try:
+            anchors = await self.fewshot_retriever.retrieve(
+                query_text=query_text, recipient_key=recipient_key,
+                k=4, threshold=0.5)
+            block = self._render_fewshots_as_text(anchors)
+            if block:
+                print(f"[fewshot] {len(anchors)} voice anchors injected "
+                      f"(q={query_text[:20]!r})", flush=True)
+            return block or ""
+        except Exception as e:
+            print(f"[fewshot] retrieve failed (non-fatal): {e}")
+            return ""
 
     def _last_inner_thought_for(self, recipient_key: str | None) -> str | None:
         """Cheapest signal for the retriever: the previous turn's inner_thought.
