@@ -112,6 +112,8 @@ async def create_engine(
         persona_path = os.environ.get(
             "PERSONA_PATH", "config/personas/example_persona.yaml")
     persona = load_persona(persona_path)
+    from lingxi.conversation.response_cleaner import set_self_name
+    set_self_name(str((persona.voice_baseline or {}).get("self_name") or ""))
 
     # Set up auth and LLM provider
     ProviderRegistry.register_defaults()

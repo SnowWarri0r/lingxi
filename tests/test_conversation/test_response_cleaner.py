@@ -127,3 +127,28 @@ class TestSplitIntoBubbles:
     def test_strips_per_bubble(self):
         result = split_into_bubbles("  hello  \n\n  world  ")
         assert result == ["hello", "world"]
+
+
+class TestOwnSibling:
+    """Her name glued to 姐 reads as someone addressing her, not her sister."""
+
+    def setup_method(self):
+        from lingxi.conversation import response_cleaner as rc
+        rc.set_self_name("阿澪")
+
+    def teardown_method(self):
+        from lingxi.conversation import response_cleaner as rc
+        rc.set_self_name("")
+
+    def test_name_then_sister_becomes_possessive(self):
+        assert clean_speech("昨晚跟阿澪姐打了个电话") == "昨晚跟阿澪的姐姐打了个电话"
+        assert clean_speech("早上跟阿澪姐姐打电话") == "早上跟阿澪的姐姐打电话"
+
+    def test_already_clear_forms_are_left(self):
+        for s in ("阿澪的姐姐说她要来", "我姐说她要来", "学妹喊我「阿澪姐」", "她们都叫阿澪姐"):
+            assert clean_speech(s) == s
+
+    def test_off_without_a_name(self):
+        from lingxi.conversation import response_cleaner as rc
+        rc.set_self_name("")
+        assert clean_speech("跟阿澪姐打电话") == "跟阿澪姐打电话"

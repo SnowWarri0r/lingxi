@@ -12,6 +12,31 @@ from __future__ import annotations
 
 import re
 
+# The name she calls herself by in place of 「我」, set once at startup from
+# the persona's voice_baseline. Empty switches the sibling fix below off.
+_SELF_NAME = ""
+
+
+def set_self_name(name: str) -> None:
+    global _SELF_NAME
+    _SELF_NAME = name or ""
+
+
+def _own_sibling(text: str) -> str:
+    """Her name glued to 姐 is how other people address her.
+
+    She refers to herself by name, so 「我姐」 comes out as 「可可姐」 — which
+    a reader takes as someone calling her, not her sister — it went out in an
+    opener. Told in the persona file to say 「可可的姐姐」, the model got it
+    wrong more often (4/90 vs 0/90), so the fix is here. Quoted or after 叫/喊
+    it is someone addressing her and stays.
+    """
+    if not _SELF_NAME:
+        return text
+    name = re.escape(_SELF_NAME)
+    return re.sub(rf"(?<![「“『\"叫喊]){name}姐姐?(?!妹)",
+                  f"{_SELF_NAME}的姐姐", text)
+
 
 # Words/phrases that strongly signal a line is stage-direction, not dialogue.
 # If a line consists (mostly) of these, we drop the whole line.
@@ -222,7 +247,7 @@ def clean_speech(text: str, *, fallback: bool = True) -> str:
         text = "\n".join(kept_lines)
 
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return _own_sibling(text.strip())
 
 
 def split_into_bubbles(speech: str, max_bubbles: int = 3) -> list[str]:
