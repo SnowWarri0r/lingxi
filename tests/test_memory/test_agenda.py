@@ -191,3 +191,48 @@ async def test_an_opener_that_takes_up_the_item_marks_it(tmp_path):
     asked = AgendaBook(tmp_path / "agenda.json").items(KEY)[0].asked
     assert [a["stage"] for a in asked] == ["before"]
     assert datetime.fromisoformat(asked[0]["at"]) == rec.proactive_outcomes[-1].sent_at
+
+
+@pytest.mark.asyncio
+async def test_an_opener_sent_while_the_item_is_offered_marks_it_without_meta(tmp_path):
+    """The responder leaves META out of most openers and her follow-ups do not
+    read like the item's summary, so neither signal can be what records that
+    the stage was used; otherwise the item is offered, and asked, all day."""
+    from lingxi.channels.outbound import ChannelRegistry, OutboundChannel
+    from lingxi.temporal.proactive import ProactiveConfig, ProactiveScheduler
+    from lingxi.temporal.tracker import InteractionTracker
+
+    class _Ch(OutboundChannel):
+        channel_name = "feishu"
+
+        async def send_message(self, recipient_id, text, turn_id=None):
+            pass
+
+    book = _book(tmp_path, (HIS, "对方去漫展见阿澪", SHOW))
+    tracker = InteractionTracker(tmp_path)
+    rec = tracker.record_interaction("feishu", "oc_x")
+    rec.last_interaction = datetime.now() - timedelta(days=2)
+    reg = ChannelRegistry()
+    reg.register(_Ch())
+
+    async def _append(*a):
+        pass
+
+    engine = SimpleNamespace(
+        annotation_store=None, _pending_stickers={}, agenda=book,
+        memory=SimpleNamespace(embedding_provider=None,
+                               short_term=SimpleNamespace(append_for_recipient=_append)))
+    sched = ProactiveScheduler(config=ProactiveConfig(), tracker=tracker,
+                               channel_registry=reg, engine=engine)
+    [item] = book.open_items(KEY, date(2026, 3, 13))
+    sched._agenda_offered = {KEY: (item, "day")}
+
+    async def _ask(record, silence, now, force=False):
+        return {"should_send": True, "message": "你到了没 人多不多呀",
+                "sticker": "", "reason": ""}
+
+    sched._ask_llm = _ask
+    result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+    assert result["status"] == "sent"
+    asked = AgendaBook(tmp_path / "agenda.json").items(KEY)[0].asked
+    assert [a["stage"] for a in asked] == ["day"]

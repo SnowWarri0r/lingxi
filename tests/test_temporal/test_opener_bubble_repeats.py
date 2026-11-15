@@ -237,3 +237,45 @@ async def test_a_story_the_repeat_check_rejects_leaves_the_shelf(tmp_path):
     result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
     assert result["status"] == "validation_rejected"
     assert told == ["a"]
+
+
+@pytest.mark.asyncio
+async def test_an_opener_with_no_story_and_no_meta_still_gets_an_aspect(tmp_path):
+    """Rotation reads the aspects of the last openers; with META missing and
+    no shelf story told, the kind is asked for once, from the fixed list."""
+    tracker = InteractionTracker(tmp_path)
+    rec = tracker.record_interaction("feishu", "oc_x")
+    rec.last_interaction = datetime.now() - timedelta(days=2)
+    reg = ChannelRegistry()
+    reg.register(_Ch())
+
+    async def _append(*a):
+        pass
+
+    asked = []
+
+    class _LLM:
+        def __init__(self, answer):
+            self.answer = answer
+
+        async def complete(self, **kw):
+            asked.append(kw)
+            return SimpleNamespace(content=self.answer)
+
+    for answer, want in (("吃喝", "吃喝"), ("说不好", "")):
+        engine = SimpleNamespace(
+            annotation_store=None, _pending_stickers={}, llm=_LLM(answer),
+            memory=SimpleNamespace(embedding_provider=None,
+                                   short_term=SimpleNamespace(append_for_recipient=_append)))
+        sched = ProactiveScheduler(config=ProactiveConfig(), tracker=tracker,
+                                   channel_registry=reg, engine=engine)
+
+        async def _ask_llm(record, silence, now, force=False):
+            return {"should_send": True, "message": FRESH, "sticker": "", "reason": ""}
+
+        sched._ask_llm = _ask_llm
+        result = await sched._maybe_reach_out(rec, datetime.now(), force=True)
+        assert result["status"] == "sent"
+        assert rec.proactive_outcomes[-1].aspect == want
+        assert sched._recent_proactive["feishu:oc_x"][-1].get("aspect", "") == want
+    assert FRESH in asked[0]["messages"][0]["content"]

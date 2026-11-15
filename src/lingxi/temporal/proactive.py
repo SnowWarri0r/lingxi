@@ -1230,7 +1230,8 @@ class ProactiveScheduler:
         await self._mark_agenda(key, message, decision,
                                 outcomes[-1].sent_at if outcomes else datetime.now())
         told = await self._told_story(key, message, decision)
-        aspect = (told.aspect if told else "") or decision.get("aspect", "")
+        aspect = ((told.aspect if told else "") or decision.get("aspect", "")
+                  or await self._classify_aspect(message))
         self._remember_proactive(key, message, aspect)
         if outcomes and aspect:
             outcomes[-1].aspect = aspect
@@ -1332,17 +1333,51 @@ class ProactiveScheduler:
 
     async def _mark_agenda(self, key: str, message: str, decision: dict,
                            at: datetime) -> None:
-        """The offered item counts as followed up if she says so in META or
-        the opener reads as being about it."""
+        """An opener sent while an item was offered uses that item's stage.
+
+        It used to count only when her META said A1 or the text matched the
+        item by embedding. The responder leaves META out of most openers (one
+        in five from mid-November), and a follow-up in her words does not read
+        like the item's third-person summary: on one trip, seven follow-ups
+        over three days scored 0.22-0.52 against a 0.70 bar. Nothing was ever
+        recorded, the item stayed due, and she asked about the trip three
+        times a day, the third time after he had answered. Counting the offer
+        can at worst spend a stage she let pass; that costs one question.
+        """
         item, st = getattr(self, "_agenda_offered", {}).get(key, (None, None))
         book = getattr(self.engine, "agenda", None)
         if item is None or book is None:
             return
-        used = decision.get("agenda") == "A1" or await match_story(
-            message, [item], self.engine.memory.embedding_provider) is not None
-        if used:
-            book.mark_asked(key, item.id, st, at)
-            print(f"[agenda] {item.id} followed up ({st})", flush=True)
+        book.mark_asked(key, item.id, st, at)
+        print(f"[agenda] {item.id} followed up ({st})", flush=True)
+
+    async def _classify_aspect(self, message: str) -> str:
+        """Which of OPENER_ASPECTS an opener is about, or "".
+
+        Asked only when neither a shelf story nor her META says: since
+        mid-November that was 13 of 16 openers, and rotation, which withholds
+        the aspects of the last two, had nothing to read. On 24 openers that
+        did carry a label it agreed 18 times, the misses mostly a weather
+        greeting taken for the subject; a wrong label holds back one aspect
+        for two openers. Spelling out greetings and 「他的事」 in the question
+        dropped it to 9 of 24.
+        """
+        llm = getattr(self.engine, "llm", None)
+        if llm is None or not message:
+            return ""
+        prompt = ("下面是一条发给朋友的消息。它主要说的是哪方面？"
+                  f"只回答其中一个词：{'、'.join(OPENER_ASPECTS)}\n\n{message}")
+        try:
+            result = await llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=10, temperature=0.0,
+                _debug_purpose="opener_aspect")
+        except Exception as e:
+            print(f"[proactive] aspect classify failed (non-fatal): {e!r}",
+                  flush=True)
+            return ""
+        answer = (getattr(result, "content", "") or "").strip()
+        return next((a for a in OPENER_ASPECTS if a in answer), "")
 
     async def _told_story(self, key: str, message: str, decision: dict | None = None):
         """The offered story this text tells: by embedding, else her META id."""
