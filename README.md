@@ -94,7 +94,7 @@ lingxi                    # 在命令行中对话
 | `message_habits` | 打字习惯：断句、标点、单次发送条数 |
 | `voice_baseline` | 语气监测的目标区间（感叹号比例、自称方式等），留空则不监测 |
 | `location` | 决定日出日落时间与天气 |
-| `responder` | 发言模型（`deepseek` / `doubao` / `main`）。模型 ID 从 `.env` 读取，不写入仓库 |
+| `responder` | 发言模型（`deepseek` / `doubao` / `demonroute` / `main`）。模型 ID 从 `.env` 读取，不写入仓库 |
 
 编写 prompt 类字段时，建议使用正面示例，避免列举「不要做什么」。大量否定句会使模型的注意力集中到希望避免的内容上，反而提高其出现概率。
 

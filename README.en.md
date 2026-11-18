@@ -94,7 +94,7 @@ Main fields:
 | `message_habits` | Typing habits: sentence breaks, punctuation, how many messages are sent at once |
 | `voice_baseline` | Target ranges for the voice monitor (exclamation rate, self-reference, etc.). Leave empty to disable monitoring |
 | `location` | Determines sunrise, sunset and weather |
-| `responder` | Responder model (`deepseek` / `doubao` / `main`). Model IDs are read from `.env` and never stored in the repository |
+| `responder` | Responder model (`deepseek` / `doubao` / `demonroute` / `main`). Model IDs are read from `.env` and never stored in the repository |
 
 When writing prompt-like fields, prefer positive examples over lists of things to avoid. Many negative instructions concentrate the model's attention on exactly what they forbid, which makes it more likely to appear.
 

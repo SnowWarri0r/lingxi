@@ -84,6 +84,20 @@ RESPONDER_PRESETS: dict[str, dict] = {
         # described by the main model first (see conversation/image_context).
         "supports_images": False,
     },
+    "demonroute": {
+        "key_env": "DEMONROUTE_API_KEY",
+        "model_env": "DEMONROUTE_RESPONDER_MODEL",
+        # Abliterated DeepSeek V4.1 Flash build, the closest match to the
+        # deepseek preset's default. Any id from https://demonroute.com/models
+        # works via DEMONROUTE_RESPONDER_MODEL or the persona yaml.
+        "default_model": "deepseek-v4.1-flash-1017-abliterated",
+        "base_url": "https://api.demonroute.com/v1",
+        # No vendor params: plain OpenAI chat.completions. Usage reporting
+        # stays off until stream_options is verified against this endpoint.
+        "report_usage": False,
+        # Text only by default; image turns are described upstream first.
+        "supports_images": False,
+    },
 }
 
 

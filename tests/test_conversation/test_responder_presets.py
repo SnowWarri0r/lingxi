@@ -73,3 +73,18 @@ def test_doubao_preset_keeps_thinking_disabled():
     # Regression: losing this makes doubao sit ~15s before the first token.
     assert RESPONDER_PRESETS["doubao"]["extra_body"] == {
         "thinking": {"type": "disabled"}}
+
+
+def test_demonroute_builds_openai_provider_from_env(
+        sample_persona, mock_llm, tmp_path, monkeypatch):
+    monkeypatch.setenv("DEMONROUTE_API_KEY", "sk-test")
+    monkeypatch.delenv("DEMONROUTE_RESPONDER_MODEL", raising=False)
+    sample_persona.responder.provider = "demonroute"
+    sample_persona.responder.model = ""
+    eng = _engine(sample_persona, mock_llm, tmp_path)
+
+    llm = eng._get_responder_llm()
+    assert isinstance(llm, OpenAIProvider)
+    assert llm.model == "deepseek-v4.1-flash-1017-abliterated"
+    assert llm._base_url == "https://api.demonroute.com/v1"
+    assert eng._responder_is_external() is True
