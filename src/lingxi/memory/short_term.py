@@ -10,6 +10,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
+from lingxi.memory.transcript import TranscriptLog
+
 
 class ConversationTurn(BaseModel):
     """A single turn in the conversation.
@@ -95,6 +97,11 @@ class ShortTermMemory:
         self._data_dir = Path(data_dir) if data_dir else None
         self._current_recipient: str | None = None
         self._lock = asyncio.Lock()
+        self.transcript = TranscriptLog(self._data_dir) if self._data_dir else None
+
+    def _record(self, recipient_key: str | None, turn, held) -> None:
+        if self.transcript is not None and recipient_key is not None:
+            self.transcript.append(recipient_key, turn, seed=held)
 
     def _enforce_cap(self) -> None:
         if self.max_turns and len(self._buffer) > self.max_turns:
@@ -187,6 +194,7 @@ class ShortTermMemory:
     def add_turn(self, role: str, content: str, **metadata: object) -> ConversationTurn:
         """Add a conversation turn to the buffer."""
         turn = ConversationTurn(role=role, content=content, metadata=metadata)
+        self._record(self._current_recipient, turn, list(self._buffer))
         self._buffer.append(turn)
         self._enforce_cap()
         return turn
@@ -265,6 +273,7 @@ class ShortTermMemory:
             )
             # If this IS the active recipient, mutate the buffer and save
             if self._current_recipient == recipient_key:
+                self._record(recipient_key, new_turn, list(self._buffer))
                 self._buffer.append(new_turn)
                 self._enforce_cap()
                 await self._save_to_disk(recipient_key)
@@ -287,6 +296,7 @@ class ShortTermMemory:
                             continue
                 except (json.JSONDecodeError, OSError):
                     pass
+            self._record(recipient_key, new_turn, existing)
             existing.append(new_turn)
             if self.max_turns:
                 existing = trim_to_cap(existing, self.max_turns)
