@@ -484,3 +484,26 @@ async def test_held_back_retires_get_a_second_reading(tmp_path):
     held = [f.content for f in await store.query(subject=SUBJ, type=FactType.PATTERN)]
     assert held == ["对方最近在练吉他"]
     assert llm.calls == 2
+
+
+def test_a_rewrite_that_only_moves_punctuation_is_dropped():
+    held = {"a": "对方说以后要多陪阿澪说说话"}
+    same = '{"ops": [{"op": "update", "id": "F1", "content": "对方说以后要多陪阿澪说说话。"}]}'
+    assert parse_review(same, {"F1": "a"}, held) == []
+    dated = ('{"ops": [{"op": "update", "id": "F1", '
+             '"content": "对方10月18日说以后要多陪阿澪说说话"}]}')
+    assert [o.op for o in parse_review(dated, {"F1": "a"}, held)] == ["update"]
+
+
+def test_a_trip_keeps_its_place_when_the_soreness_is_dropped():
+    held = {"a": "对方11月14日去邻市看了阿澪的演出，散场后累得腰酸"}
+    text = ('{"ops": [{"op": "update", "id": "F1", '
+            '"content": "对方11月14日去邻市看了阿澪的演出"}]}')
+    assert [(o.op, o.content) for o in parse_review(text, {"F1": "a"}, held)] == [
+        ("update", "对方11月14日去邻市看了阿澪的演出")]
+
+
+def test_the_review_is_told_an_event_outlasts_how_he_felt_after_it():
+    prompt, _ = review_prompt([HeldFact("a", "x", None)], agent="可可",
+                              today=datetime(2026, 11, 17, 4))
+    assert "经历过的大事（出行、看演出、搬家这类）里" in prompt

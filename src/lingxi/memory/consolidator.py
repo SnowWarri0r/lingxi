@@ -413,6 +413,15 @@ class ConsolidationScheduler:
 # trip as ahead of him a week after the holiday, a cold from August, and a
 # haircut 「昨天」. Once a night, with no conversation in front of it, the
 # review reads everything held against today's date.
+#
+# On 11-17 it retired the trip he had made three days before, a concert two
+# cities away, because the fact ended with how sore he was afterwards. Told
+# to keep such an event and drop the soreness, replayed over the forty logged
+# nights it kept the trip 4/4 (was retired 1/3 on the old text) and the other
+# nights came back as they had, except one note of being busy after a trip,
+# now kept with its dates where it had been retired. A sentence naming the
+# kind of state to drop retired a promise of his 4/4, so the rule sits inside
+# the line about what stays.
 
 _REVIEW_PROMPT = """今天是 {today}。你在替{agent}复盘她记住的关于对方的事，这次没有新对话，只看时间过去之后哪些已经不成立。
 
@@ -423,7 +432,7 @@ _REVIEW_PROMPT = """今天是 {today}。你在替{agent}复盘她记住的关于
 - 一时的状态（哪几天生病、某段时间很忙、某天很累、睡眠欠账、某天的心情）过了这么久已经不算数：retire。
 - 写着要做、但日子已经过去的计划：改写成「之前说过要……，后来怎么样还不知道」这类说法——**结果他没说过，就写不知道**。
 - 用了「昨天」「这几天」「最近」这种相对说法的：按记下的日期换成具体几月几号，或者在日子过了很久时 retire。
-- 过一阵还成立的事（住哪、作息、喜好、身边的人、经历过的大事）原样留着，不动。
+- 过一阵还成立的事（住哪、作息、喜好、身边的人、经历过的大事）原样留着，不动。经历过的大事（出行、看演出、搬家这类）里顺带写着当时身上的酸痛疲惫的，改写成只留那件事本身。
 - 改写只动时间相关的说法，原句里没有的事一件也不添。
 
 输出严格 JSON（直接 {{ 开头）；没有要改的就输出 {{"ops": []}}：
@@ -486,6 +495,12 @@ def adds_only_time(old: str, new: str) -> bool:
     return all(c in have or c in _TIME_CHARS for c in new)
 
 
+def _bare(t: str) -> str:
+    """The words without spacing or punctuation: a rewrite that only moves
+    those is no rewrite (seven of forty replayed nights came back so)."""
+    return re.sub(r"[\s，。、；：！？,.;:!?（）()「」]", "", t)
+
+
 def parse_review(text: str, ids: dict[str, str],
                  held: dict[str, str], today: datetime | None = None) -> list[Op]:
     try:
@@ -506,7 +521,7 @@ def parse_review(text: str, ids: dict[str, str],
             # An unchanged rewrite would only re-date the fact, which keeps
             # an old line near the top of every prompt: four nights running
             # the same holiday plan came back word for word.
-            if (not content or content == held[target]
+            if (not content or _bare(content) == _bare(held[target])
                     or not adds_only_time(held[target], content)):
                 continue
             # A plan whose day is still ahead has no outcome to be unsure of.
