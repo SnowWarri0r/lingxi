@@ -4,8 +4,9 @@ first-person, in the morning.
 
 from __future__ import annotations
 
+import asyncio
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from lingxi.facts.models import Fact, FactType, Source
 from lingxi.facts.retriever import FactQuery, FactRetriever
@@ -149,6 +150,28 @@ class DailyPlanner:
         items = await self._call_planner(
             prompt, _SYSTEM_TMPL.format(self=self._self_ctx))
         return await self._write_plan_facts("aria", items)
+
+    async def plan_aria_until_written(self, *, every: timedelta = timedelta(minutes=30),
+                                      last_hour: int = 21, clock=datetime.now,
+                                      sleep=asyncio.sleep) -> list[Fact]:
+        """Plan the day, and if nothing came of it, try again later.
+
+        The plan is written once at 07:00. On 11-22 that one call was refused
+        and nothing asked again: her day had four moments in it where the
+        days around it had over forty. A later attempt plans the hours still
+        ahead (see plan_aria). Past `last_hour` there is too little day left
+        to plan.
+        """
+        while True:
+            written = await self.plan_aria()
+            if written:
+                return written
+            if (clock() + every).hour >= last_hour or (clock() + every).date() != clock().date():
+                print("[planner] no plan today; too late to try again", flush=True)
+                return []
+            print(f"[planner] no plan yet; trying again in {int(every.total_seconds() // 60)} min",
+                  flush=True)
+            await sleep(every.total_seconds())
 
     def _stage_block(self, now: datetime) -> str:
         from lingxi.persona.prompt_builder import build_stage_block

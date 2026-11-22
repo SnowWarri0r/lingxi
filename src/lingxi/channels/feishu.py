@@ -714,7 +714,7 @@ class FeishuBot(OutboundChannel):
         Called once from start() inside the dedicated asyncio loop.
         Runs two concurrent tasks:
           - _executor_loop:  PlanExecutor.tick() every 30 min
-          - _morning_planner_loop: DailyPlanner.plan_aria() at 7am each day,
+          - _morning_planner_loop: DailyPlanner.plan_aria_until_written() at 7am,
             plus an immediate run on startup if today has no plan yet.
         """
         import asyncio
@@ -752,7 +752,7 @@ class FeishuBot(OutboundChannel):
                 await asyncio.sleep((next_7am - now).total_seconds())
                 try:
                     if daily_planner is not None:
-                        await daily_planner.plan_aria()
+                        await daily_planner.plan_aria_until_written()
                 except Exception as e:
                     print(f"[planner] morning tick failed: {e}", flush=True)
 
@@ -765,7 +765,7 @@ class FeishuBot(OutboundChannel):
                     subject="aria", type=FactType.PLAN, since=today_start, limit=1
                 )
                 if not todays:
-                    await daily_planner.plan_aria()
+                    await daily_planner.plan_aria_until_written()
             except Exception as e:
                 print(f"[planner] startup plan failed: {e}", flush=True)
 
