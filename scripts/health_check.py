@@ -8,7 +8,15 @@ down, and it was noticed only because someone happened to read the log.
 
 Down means any of: launchd has no process for it; its log has not been
 written for STALE (the opener scheduler logs every five minutes, so silence
-means a hang); or the log ends in a traceback. Alerts go to the Mac's
+means a hang); or the log ends in a traceback.
+
+A bot that runs can still be broken behind its replies. From 11-14 to 11-16
+the main model's credential was revoked: every memory tick failed for two
+and a half days, her days went unplanned, and the check said ok. On 11-22 a
+single refused call at 07:00 left her a day with four moments in it instead
+of forty. So a refused credential in the last AUTH_WINDOW counts as down,
+and so do memory ticks failing for longer than TICK_STREAK with none
+succeeding in between. Alerts go to the Mac's
 notification centre, not through the bot itself, which is the thing that
 may be broken. State is kept so a long outage notifies once.
 """
@@ -17,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +38,11 @@ STATE = Path(os.environ.get("LINGXI_HEALTH_STATE",
                             Path.home() / "Library" / "Logs" / "lingxi-health.json"))
 STALE = 20 * 60          # seconds without a log line
 TAIL = 4000              # bytes of log read for a traceback
+SCAN = 200_000           # bytes of log read for failing calls
+AUTH_WINDOW = 60 * 60    # a refused credential this recent is down
+TICK_STREAK = 60 * 60    # memory ticks failing this long are down
+_AUTH = ("authentication_error", "API error 401")
+_STAMP = re.compile(r"^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) (.*)$")
 
 
 def running(label: str) -> bool:
@@ -41,6 +55,47 @@ def tail(path: Path, n: int = TAIL) -> str:
         f.seek(0, 2)
         f.seek(max(0, f.tell() - n))
         return f.read().decode("utf-8", "replace")
+
+
+def _lines(text: str, now: float):
+    """(epoch, rest) for each stamped line; the year is the one that puts it
+    in the past."""
+    year = time.localtime(now).tm_year
+    for line in text.splitlines():
+        m = _STAMP.match(line)
+        if not m:
+            continue
+        mo, d, h, mi, se = (int(x) for x in m.groups()[:5])
+        for y in (year, year - 1):
+            try:
+                t = time.mktime((y, mo, d, h, mi, se, 0, 0, -1))
+            except (OverflowError, ValueError):
+                break
+            if t <= now + 60:
+                yield t, m.group(6)
+                break
+
+
+def failing_calls(text: str, now: float) -> str:
+    """Why the model calls behind her replies are failing, or ""."""
+    rows = list(_lines(text, now))
+    for t, rest in reversed(rows):
+        if now - t > AUTH_WINDOW:
+            break
+        if any(a in rest for a in _AUTH):
+            where = rest.split("]", 1)[0].lstrip("[") if rest.startswith("[") else ""
+            return f"主模型鉴权被拒（{where}）" if where else "主模型鉴权被拒"
+    streak = None
+    for t, rest in rows:
+        if rest.startswith("[memory] consolidation tick failed"):
+            streak = streak or (t, rest)
+            last = (t, rest)
+        elif rest.startswith(("[memory] consolidated", "[memory] nightly review")):
+            streak = None
+    if streak and last[0] - streak[0] >= TICK_STREAK and now - last[0] < STALE:
+        err = last[1].split("failed:", 1)[-1].strip()[:60]
+        return f"记忆整理连续失败 {int((last[0] - streak[0]) // 60)} 分钟：{err}"
+    return ""
 
 
 def problem(*, alive: bool, log: Path, now: float) -> str:
@@ -57,7 +112,7 @@ def problem(*, alive: bool, log: Path, now: float) -> str:
     if last_tb > last_ok:
         lines = [l for l in text[last_tb:].splitlines() if l.strip()]
         return f"启动报错：{lines[-1][:80]}" if lines else "启动报错"
-    return ""
+    return failing_calls(tail(log, SCAN), now)
 
 
 def notify(title: str, body: str) -> None:
