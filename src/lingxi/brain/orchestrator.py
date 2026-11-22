@@ -33,6 +33,14 @@ class StateDigest:
     last_lived: list[str]
 
 
+# The output order is load-bearing. thread_summary comes before user_state
+# because writing it is where the model reads back over the conversation:
+# replayed over 30 logged turns, moving the summary to the end (to start the
+# reply while it streamed, ~1.9s a turn) filled user_state on 16-17 of 30
+# against 8-11, with guesses he never stated — at work, just up, at home.
+# Asking for a quoted basis first did not hold it back; the quote was found
+# and the state embroidered past it. Every model tried writes at ~90 chars/s
+# here, so a smaller one is no faster either.
 _PROMPT = """你在替 {agent} 做对话调度决策。看完所有 context，决定：
 
 1. engage_level（0-1）：这一轮想投入多少
