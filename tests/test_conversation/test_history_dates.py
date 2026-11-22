@@ -50,10 +50,13 @@ def test_divider_inserted_once_per_day_in_order():
 
 
 def test_same_day_turns_share_one_divider():
+    # Noon, so three hours back is still the same day whenever this runs.
+    noon = NOW.replace(hour=12, minute=0, second=0, microsecond=0)
     turns = [
-        _turn("user", "早", NOW - timedelta(hours=3)),
-        _turn("assistant", "早呀", NOW - timedelta(hours=2)),
-        _turn("user", "在忙吗", NOW),
+        _turn("user", "早", noon - timedelta(hours=3)),
+        _turn("assistant", "早呀", noon - timedelta(hours=2)),
+        _turn("user", "在忙吗", noon),
     ]
-    msgs = ContextAssembler().assemble_messages(MemoryContext(short_term_turns=turns))
+    msgs = ContextAssembler().assemble_messages(MemoryContext(short_term_turns=turns),
+                                                now=noon)
     assert sum(1 for m in msgs if m["content"].startswith("[——")) == 1

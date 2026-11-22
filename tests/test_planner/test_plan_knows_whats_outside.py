@@ -36,9 +36,14 @@ class FakeLLM:
 
 
 def _world(content, hours_ago=1.0):
+    """A briefing item from `hours_ago`; a "this morning" one run just after
+    midnight is kept on today, where an hour back would be yesterday."""
+    now = datetime.now()
+    ts = now - timedelta(hours=hours_ago)
+    if hours_ago < 24 and ts.date() != now.date():
+        ts = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return Fact(subject="world", content=content, source=Source.LLM_INFERRED,
-                type=FactType.EVENT, ts=datetime.now() - timedelta(hours=hours_ago),
-                importance=5)
+                type=FactType.EVENT, ts=ts, importance=5)
 
 
 async def _prompt_over(facts, tmp_path, weather=""):
