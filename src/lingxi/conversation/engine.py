@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from lingxi.persona.biography_retriever import BiographyRetriever
 
 from lingxi.conversation.context import ContextAssembler
-from lingxi.conversation.image_context import describe_images
+from lingxi.conversation.image_context import Likeness, describe_images
 from lingxi.conversation.output_schema import TurnOutput, parse_turn_output
 from lingxi.facts.diversify import select_diverse
 from lingxi.facts.models import FactType
@@ -529,7 +529,7 @@ class ConversationEngine:
         # image blocks ride along too is a separate question: a responder that
         # can't read them answers 400 and costs the whole turn.
         if images:
-            desc = await describe_images(self.llm, images)
+            desc = await describe_images(self.llm, images, self._likeness())
             if desc:
                 print(f"[image] described: {desc}", flush=True)
             marker = (f"[发送了{len(images)}张图片：{desc}]" if desc
@@ -990,6 +990,12 @@ class ConversationEngine:
             self._last_response_text = output.speech
             self.memory.add_turn("assistant", output.speech)
         self._persist_state(channel, recipient_id)
+
+    def _likeness(self) -> Likeness | None:
+        if not hasattr(self, "_likeness_cache"):
+            self._likeness_cache = Likeness.load(
+                getattr(self.memory, "data_dir", None), self.persona.name)
+        return self._likeness_cache
 
     def _responder_sees_images(self) -> bool:
         """True when the model that writes the reply can read image blocks.

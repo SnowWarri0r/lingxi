@@ -18,6 +18,7 @@ import base64
 import hmac
 import json
 import os
+import re
 import time
 
 import httpx
@@ -47,6 +48,24 @@ _PASSIVE_REPLIES = 4
 # of split_into_bubbles' three can absorb an overflow, so it waits.
 _EARLY_BUBBLES = 2
 
+
+
+# A QQ emoji or mall sticker arrives in `content` as a tag like
+# <faceType=6,faceId="0",ext="eyJ0ZXh0IjoiIn0=">, with the picture itself in
+# the attachments. The tag reached her prompt and memory verbatim. Its ext is
+# base64 JSON whose "text" is the sticker's name when it has one.
+_FACE = re.compile(r'<faceType=\d+[^>]*>')
+
+
+def _strip_faces(text: str) -> str:
+    def name(m: re.Match) -> str:
+        ext = re.search(r'ext="([^"]*)"', m.group(0))
+        try:
+            label = json.loads(base64.b64decode(ext.group(1))).get("text", "") if ext else ""
+        except Exception:
+            label = ""
+        return f"[{label.strip('[]')}]" if label else ""
+    return _FACE.sub(name, text).strip()
 
 class QQApiError(RuntimeError):
     def __init__(self, code: int, message: str):
@@ -245,7 +264,7 @@ class QQBot(OutboundChannel):
         openid = (d.get("author") or {}).get("user_openid", "")
         if not openid:
             return
-        text = (d.get("content") or "").strip()
+        text = _strip_faces(d.get("content") or "")
         images = await self._images(d.get("attachments") or [])
         if not text and not images:
             text = "（对方发来一个表情包）"

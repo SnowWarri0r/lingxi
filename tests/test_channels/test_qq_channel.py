@@ -326,3 +326,18 @@ async def test_the_last_bubble_waits_since_it_may_absorb_an_overflow(tmp_path):
     await bot._on_message(_event())
     assert engine.sent_before_done == ["一", "二"]
     assert _texts(sent) == [("一", 1), ("二", 2), ("三 四", 3)]
+
+
+def test_a_sticker_tag_does_not_reach_her_as_text():
+    """The picture comes as an attachment; the tag beside it is markup."""
+    import base64
+    import json
+
+    from lingxi.channels.qq import _strip_faces
+
+    empty = base64.b64encode(json.dumps({"text": ""}).encode()).decode()
+    named = base64.b64encode(json.dumps({"text": "[比心]"}, ensure_ascii=False).encode()).decode()
+    assert _strip_faces(f'<faceType=6,faceId="0",ext="{empty}">') == ""
+    assert _strip_faces(f'周末去漫展 <faceType=6,faceId="0",ext="{empty}">') == "周末去漫展"
+    assert _strip_faces(f'好呀<faceType=1,faceId="319",ext="{named}">') == "好呀[比心]"
+    assert _strip_faces('<faceType=6,ext="!!notbase64">') == ""
