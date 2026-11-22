@@ -108,14 +108,14 @@ responder:
   provider: "deepseek"
   model: ""
 
-# 她住哪——决定当天真实日出日落 + 天气。唐可可是上海女孩，落在上海，时区跟
-# 服务器（国内 +8）对齐，时间/光线/天气三者一致。想改成东京求"留学日本"的味道
-# 也行，但 utc_offset 要一并改 9，且注意它会和服务器时钟差 1 小时。
+# 她住哪——决定当天真实日出日落 + 天气。她从上海来日本追梦，人在东京生活。
+# 她的时钟是进程的本地时间，所以跑她的进程要把 TZ 设成 Asia/Tokyo，
+# 跟这里的 utc_offset 一致，时间/光线/天气三者才对得上。
 location:
-  name: "上海"
-  latitude: 31.2304
-  longitude: 121.4737
-  utc_offset: 8
+  name: "东京"
+  latitude: 35.6762
+  longitude: 139.6503
+  utc_offset: 9
 
 # 有日期的里程碑——年数在 prompt 里按当天算出来，不写死（写"已经五年"明年就错）。
 anchors:
