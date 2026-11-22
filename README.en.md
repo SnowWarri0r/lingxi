@@ -16,7 +16,8 @@ Three design choices set it apart from typical role-play bots:
 
 ### Conversation
 
-- **Long-term memory.** Once a conversation has been quiet for 30 minutes, a consolidator reads the whole conversation together with existing memories and adds, updates or retires facts about the user. Every change must quote the conversation as evidence. A nightly review additionally retires facts that are no longer true, such as plans whose date has passed.
+- **Long-term memory.** Once a conversation has been quiet for 30 minutes, a consolidator reads the whole conversation together with existing memories and adds, updates or retires facts about the user. Every change must quote the conversation as evidence. A nightly review additionally retires facts that are no longer true, such as plans whose date has passed; an event that happened is kept, and only the passing physical state written alongside it is dropped.
+- **Full transcript.** Every turn is appended verbatim to `transcripts/<recipient>/<year-month>.jsonl`, so nothing is lost when the 30-turn short-term buffer evicts it. Facts are what a model concluded from a conversation; the transcript is what was actually said, and is where a wrong fact can be checked against its source. A failed write is logged and never blocks a reply.
 - **Plans and promises.** Dated plans the user mentions, and promises the character makes, are recorded as separate items in an agenda. The character follows up the day before, on the day and over the following few days, at most one item per day. An item is dropped after a follow-up goes unanswered.
 - **Time and place.** The character uses the real clock, computes sunrise and sunset from their location, and receives live weather. Chat history is separated by date, so events from several days ago are not mistaken for yesterday. Dates in the persona (birthdays, anniversaries, performances) are converted into ages, intervals or countdowns at generation time.
 - **Web lookup.** When the orchestrator decides a turn needs an external fact, a web search runs first and its result is passed to the responder as background. An empty result means only that the character has not seen the news yet; it is never used to contradict the user.
@@ -130,12 +131,14 @@ flowchart TB
     RESP --> OUT(["Reply"])
     RESP -. "===META===" .-> META["sticker / plan changes"]
 
+    OUT -. "every turn, verbatim" .-> TR[("<b>transcripts/</b><br/>full transcript")]
     OUT -. "after 30 quiet minutes" .-> CONS["<b>Consolidator</b><br/>update facts · update agenda"]
     CONS --> DB
     CONS --> AG
 
     style DB fill:#fff4e6,stroke:#e8a33d
     style AG fill:#fff4e6,stroke:#e8a33d
+    style TR fill:#fff4e6,stroke:#e8a33d
     style RESP fill:#e8f5e9,stroke:#4caf50
     style ORCH fill:#e3f2fd,stroke:#42a5f5
 ```
@@ -149,7 +152,7 @@ Proactive messages draw on the life simulation and the news search running in th
 ```mermaid
 flowchart LR
     subgraph LIFE ["Life simulation"]
-        PLAN["DailyPlanner<br/>each morning<br/>plans the day"]
+        PLAN["DailyPlanner<br/>each morning<br/>plans the day<br/>retries every 30 min on failure"]
         EXEC["PlanExecutor<br/>every 30 minutes<br/>advances the current activity"]
         REFL["Reflector<br/>periodic review"]
         PLAN --> EXEC --> REFL
@@ -179,7 +182,8 @@ The scripts in `scripts/` are read-only or idempotent and suitable for launchd, 
 | Script | Description |
 |---|---|
 | `backup_data.py` | Snapshots every persona's data: databases are copied online through the SQLite backup API, other files as hard-linked incremental snapshots |
-| `health_check.py` | Checks that the process is alive and its log is still being written; sends one system notification on failure and one on recovery |
+| `health_check.py` | Checks that the process is alive and its log is still being written, that the main model's credential is not being refused, and that memory consolidation is not failing repeatedly; sends one system notification on failure and one on recovery |
+| `backfill_transcript.py` | Fills the full transcript with what was said before it existed: the user's side from the Feishu chat history, merged with the turns still held in short-term memory. Safe to rerun; nothing is written twice |
 | `weekly_report.py` | Weekly reply rate and topic mix of proactive messages, plus voice metrics |
 | `qq_probe.py` | Checks QQ bot credentials, gateway connectivity, and whether proactive messages are allowed |
 
@@ -197,7 +201,7 @@ ruff check src
 src/lingxi/
 ├── persona/       # persona YAML, data models, prompt building, voice monitor
 ├── facts/         # single fact store: store (SQLite/FTS5/vectors), retriever, scorer, reflector
-├── memory/        # short-term memory, post-conversation consolidator, agenda
+├── memory/        # short-term memory, full transcript, post-conversation consolidator, agenda
 ├── brain/         # orchestrator, fact rendering, pre-turn web lookup
 ├── conversation/  # conversation engine, shared situation, output parsing and cleanup, images
 ├── planner/       # life simulation (DailyPlanner, PlanExecutor), story curator
@@ -214,7 +218,7 @@ src/lingxi/
 
 ### Conventions
 
-1. **New state goes into facts.db first.** facts.db is the single source of truth. Before adding any new memory or state store, check whether it can be expressed as a typed fact with an expiry. Only items with a date whose progress must be tracked (such as the agenda) are modeled separately.
+1. **New state goes into facts.db first.** facts.db is the single source of truth. Before adding any new memory or state store, check whether it can be expressed as a typed fact with an expiry. Only items with a date whose progress must be tracked (such as the agenda) are modeled separately. The full transcript is an append-only archive of what was said, not state; current state is never read from it.
 2. **Real conversation data never enters the repository.** `data/`, `evals/cases/*.yaml` and `evals/baseline.json` are in `.gitignore` because they contain real users' conversations. Tools must not export them as artifacts either. Tests and examples use invented content only.
 3. **Run the behavioral regression after changing prompt assembly.** See below.
 4. **Persona differences belong in YAML, not code.** A specific persona's name appearing in code usually means a configuration field is missing.
